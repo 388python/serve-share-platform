@@ -1,9 +1,10 @@
 use axum::{
     extract::{Form, Path, Query, State},
-    response::{Html, IntoResponse, Redirect},
+    response::{Html, IntoResponse, Json, Redirect},
 };
 use chrono::Utc;
 use serde::Deserialize;
+use serde_json::json;
 use std::collections::HashMap;
 use tera::Context;
 use tower_cookies::{cookie::time::Duration, Cookie, Cookies};
@@ -44,7 +45,24 @@ fn get_session_user(cookies: &Cookies) -> Option<(i64, String, bool)> {
 }
 
 fn require_auth(cookies: &Cookies) -> Result<(i64, String, bool), Redirect> {
-    get_session_user(cookies).ok_or_else(|| Redirect::to("/login"))
+    let (user_id, username, is_admin) = get_session_user(cookies).ok_or_else(|| Redirect::to("/login"))?;
+
+    // Check if user is banned
+    let pool = db::get_db();
+    let banned: Option<bool> = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            sqlx::query_scalar("SELECT is_banned FROM users WHERE id = ?")
+                .bind(user_id)
+                .fetch_optional(pool),
+        )
+    })
+    .unwrap_or(None)
+    .unwrap_or(false);
+    if banned {
+        return Err(Redirect::to("/"));
+    }
+
+    Ok((user_id, username, is_admin))
 }
 
 fn require_admin(cookies: &Cookies) -> Result<(i64, String), Redirect> {
@@ -107,8 +125,12 @@ fn set_session_cookie(
 
 // ---- Health Check ----
 
-pub async fn health_check() -> &'static str {
-    "OK"
+pub async fn health_check() -> impl IntoResponse {
+    let message = db::get_config("health_check_message")
+        .await
+        .unwrap_or_else(|| "欢迎使用茶的服务器公益站".to_string());
+    let site_name = db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
+    Json(json!({ "status": "ok", "message": message, "site_name": site_name }))
 }
 
 // ---- Auth Handlers ----
@@ -190,14 +212,14 @@ pub async fn user_dashboard(
     let pool = db::get_db();
 
     // Get user info
-    let user: (f64, f64) = sqlx::query_as(
-        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
+    let user: (f64, f64, Option<String>) = sqlx::query_as(
+        "SELECT core_hours, ldc_balance, api_key FROM users WHERE id = ?",
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None)
-    .unwrap_or((0.0, 0.0));
+    .unwrap_or((0.0, 0.0, None));
 
     // Get user's machines
     let machines: Vec<Machine> = sqlx::query_as(
@@ -221,6 +243,7 @@ pub async fn user_dashboard(
     build_base_context(&cookies, &mut ctx);
     ctx.insert("core_hours", &user.0);
     ctx.insert("ldc_balance", &user.1);
+    ctx.insert("api_key", &user.2);
     ctx.insert("machines", &machines);
     ctx.insert("packages", &packages);
 
@@ -229,6 +252,22 @@ pub async fn user_dashboard(
         .render("user/dashboard.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
+}
+
+pub async fn regenerate_api_key(
+    cookies: Cookies,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let new_key = format!("usr_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let pool = db::get_db();
+    let _ = sqlx::query("UPDATE users SET api_key = ? WHERE id = ?")
+        .bind(&new_key)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+
+    Ok(Redirect::to("/dashboard"))
 }
 
 pub async fn contribute_server_page(
@@ -421,7 +460,7 @@ pub async fn machine_market(
 
     let pool = db::get_db();
     let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY created_at DESC",
+        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY (cpu_cores - COALESCE((SELECT SUM(cpu_cores) FROM machines WHERE server_id = servers.id AND status = 'running'), 0)) DESC, created_at DESC",
     )
     .bind(Utc::now())
     .fetch_all(pool)
@@ -1574,6 +1613,14 @@ pub async fn admin_user_edit(
             .bind(path.id)
             .execute(pool)
             .await;
+        if banned {
+            let _ = sqlx::query(
+                "UPDATE machines SET status = 'stopped' WHERE user_id = ? AND status = 'running'",
+            )
+            .bind(path.id)
+            .execute(pool)
+            .await;
+        }
     }
     if let Some(ch) = form.core_hours {
         let _ = sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
@@ -1846,6 +1893,8 @@ pub async fn admin_invites(
 #[derive(Deserialize)]
 pub struct GenerateInvitesForm {
     pub count: i32,
+    pub private_note: Option<String>,
+    pub public_note: Option<String>,
 }
 
 pub async fn admin_generate_invites(
@@ -1857,13 +1906,17 @@ pub async fn admin_generate_invites(
 
     let pool = db::get_db();
     let count = form.count.min(1000).max(1);
+    let private_note = form.private_note.unwrap_or_default();
+    let public_note = form.public_note.unwrap_or_default();
 
     for _ in 0..count {
         let code = Uuid::new_v4().to_string().replace('-', "");
         let _ = sqlx::query(
-            "INSERT INTO invites (code, is_used) VALUES (?, 0)",
+            "INSERT INTO invites (code, is_used, private_note, public_note) VALUES (?, 0, ?, ?)",
         )
         .bind(&code)
+        .bind(&private_note)
+        .bind(&public_note)
         .execute(pool)
         .await;
     }
@@ -1890,6 +1943,31 @@ pub async fn admin_orders(
     let rendered = state
         .templates
         .render("admin/orders.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn admin_violations(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let violations: Vec<Violation> = sqlx::query_as(
+        "SELECT * FROM violations ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("violations", &violations);
+
+    let rendered = state
+        .templates
+        .render("admin/violations.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }

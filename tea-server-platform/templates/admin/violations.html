@@ -1,0 +1,64 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 违规记录管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>违规记录管理</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if violations %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>服务器ID</th>
+                                <th>机器ID</th>
+                                <th>违规类型</th>
+                                <th>详情</th>
+                                <th>时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for v in violations %}
+                            <tr>
+                                <td>{{ v.id }}</td>
+                                <td>{{ v.server_id }}</td>
+                                <td>{{ v.machine_id }}</td>
+                                <td>
+                                    {% if v.violation_type == "vpn_proxy" %}
+                                    <span class="badge bg-danger">VPN/代理</span>
+                                    {% elif v.violation_type == "bandwidth_abuse" %}
+                                    <span class="badge bg-warning text-dark">带宽滥用</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">{{ v.violation_type }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ v.detail }}</td>
+                                <td>{{ v.created_at }}</td>
+                                <td>
+                                    {% if v.machine_id > 0 %}
+                                    <a href="/admin/users?ban_user={{ v.machine_id }}" class="btn btn-sm btn-danger">封禁用户</a>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无违规记录</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

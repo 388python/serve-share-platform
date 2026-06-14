@@ -113,6 +113,8 @@ pub struct Invite {
     pub used_by: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub used_at: Option<DateTime<Utc>>,
+    pub private_note: Option<String>,
+    pub public_note: Option<String>,
 }
 
 // Table: checkins
@@ -141,6 +143,17 @@ pub struct UserPackage {
     pub core_hours: f64,
     pub expires_at: Option<DateTime<Utc>>,
     pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+// Table: violations
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Violation {
+    pub id: i64,
+    pub server_id: Option<i64>,
+    pub machine_id: Option<i64>,
+    pub violation_type: String,
+    pub detail: String,
     pub created_at: DateTime<Utc>,
 }
 
