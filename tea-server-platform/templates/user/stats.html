@@ -1,0 +1,92 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 数据看板{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>平台数据看板</h2>
+        <p class="text-muted">平台运行统计数据</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body text-center">
+                <h5 class="card-title">注册用户</h5>
+                <p class="card-text display-6">{{ user_count | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body text-center">
+                <h5 class="card-title">贡献服务器</h5>
+                <p class="card-text display-6">{{ server_count | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body text-center">
+                <h5 class="card-title">运行中机器</h5>
+                <p class="card-text display-6">{{ running_machines | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body text-center">
+                <h5 class="card-title">总核时消耗</h5>
+                <p class="card-text display-6">{{ total_core_hours | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">最近注册用户</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_users %}
+                <div class="list-group">
+                    {% for u in recent_users %}
+                    <div class="list-group-item d-flex justify-content-between">
+                        <span>{{ u.username }}</span>
+                        <small class="text-muted">{{ u.created_at }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无数据</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">最近贡献服务器</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_servers %}
+                <div class="list-group">
+                    {% for s in recent_servers %}
+                    <div class="list-group-item d-flex justify-content-between">
+                        <span>{{ s.name }}</span>
+                        <small class="text-muted">{{ s.created_at }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无数据</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

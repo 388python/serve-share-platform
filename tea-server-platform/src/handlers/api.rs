@@ -7,11 +7,20 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::OnceLock;
+
 use uuid::Uuid;
 
 use crate::db;
 use crate::models::*;
+use crate::services;
 use crate::AppState;
+
+static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
+
+pub fn set_startup_time(t: chrono::DateTime<chrono::Utc>) {
+    let _ = STARTUP_TIME.set(t);
+}
 
 // ---- Helpers: Token extraction & auth ----
 
@@ -123,6 +132,487 @@ pub struct ApiSuccess<T> {
 
 fn ok_response<T: Serialize>(data: T) -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "success": true, "data": data })))
+}
+
+// ==============================
+// Health Handler
+// ==============================
+
+// GET /api/v1/health
+async fn api_health() -> impl IntoResponse {
+    let platform = db::get_config("site_name")
+        .await
+        .unwrap_or_else(|| "茶的服务器公益站".to_string());
+    let started_at = STARTUP_TIME
+        .get()
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default();
+    (StatusCode::OK, Json(json!({
+        "platform": platform,
+        "version": "0.1.0",
+        "started_at": started_at,
+    })))
+        .into_response()
+}
+
+// ==============================
+// Server Contribute API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct ContributeServerRequest {
+    pub name: String,
+    pub ip: String,
+    pub ssh_port: Option<i32>,
+    pub ssh_key: String,
+    pub cpu_cores: i32,
+    pub memory_gb: f64,
+    pub bandwidth_mbps: Option<f64>,
+    pub disk_gb: f64,
+    pub cpu_multiplier: Option<f64>,
+    pub memory_multiplier: Option<f64>,
+    pub bandwidth_multiplier: Option<f64>,
+    pub disk_multiplier: Option<f64>,
+    pub use_bonus: Option<bool>,
+    pub virt_type: Option<String>,
+    pub expires_days: Option<i32>,
+}
+
+// POST /api/v1/servers/contribute
+async fn api_servers_contribute(
+    headers: HeaderMap,
+    Json(form): Json<ContributeServerRequest>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+    let expires_days = form.expires_days.unwrap_or(30);
+    let expires_at = now + chrono::Duration::days(expires_days as i64);
+
+    let ssh_port = form.ssh_port.unwrap_or(22);
+    let bandwidth_mbps = form.bandwidth_mbps.unwrap_or(0.0);
+    let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
+    let mem_mult = form.memory_multiplier.unwrap_or(1.0);
+    let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
+    let disk_mult = form.disk_multiplier.unwrap_or(1.0);
+    let use_bonus = form.use_bonus.unwrap_or(false);
+    let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
+
+    let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
+
+    let result = sqlx::query(
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)",
+    )
+    .bind(user_id)
+    .bind(&form.name)
+    .bind(&form.ip)
+    .bind(ssh_port)
+    .bind(&form.ssh_key)
+    .bind(form.cpu_cores)
+    .bind(form.memory_gb)
+    .bind(bandwidth_mbps)
+    .bind(form.disk_gb)
+    .bind(cpu_mult)
+    .bind(mem_mult)
+    .bind(bw_mult)
+    .bind(disk_mult)
+    .bind(use_bonus)
+    .bind(&virt_type)
+    .bind(expires_at)
+    .bind(proxy_port)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(res) => {
+            let server_id = res.last_insert_rowid();
+            services::ssh_proxy::release_port(0);
+            services::ssh_proxy::allocate_port(server_id);
+
+            let _ = sqlx::query("UPDATE servers SET proxy_port = ? WHERE id = ?")
+                .bind(proxy_port)
+                .bind(server_id)
+                .execute(pool)
+                .await;
+
+            let ip = form.ip.clone();
+            let ssh_port_copy = ssh_port;
+            let ssh_key = form.ssh_key.clone();
+            tokio::spawn(async move {
+                install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key).await;
+            });
+
+            let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+            ok_response(server).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "insert_failed", "message": format!("{}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+    let _ = tokio::task::spawn_blocking({
+        let ip = _ip.to_string();
+        let ssh_key = _ssh_key.to_string();
+        let server_id = _server_id;
+        move || {
+            let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
+                Ok(tcp) => tcp,
+                Err(_) => return,
+            };
+            let mut session = match ssh2::Session::new() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            session.set_tcp_stream(tcp);
+            if session.handshake().is_err() {
+                return;
+            }
+            if session
+                .userauth_pubkey_memory("root", None, &ssh_key, None)
+                .is_err()
+            {
+                return;
+            }
+            if let Ok(mut channel) = session.channel_session() {
+                if channel
+                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
+                    .is_ok()
+                {
+                    let _ = channel.wait_close();
+                    if channel.exit_status().unwrap_or(1) == 0 {
+                        let pool = db::get_db();
+                        let _ = sqlx::query(
+                            "UPDATE servers SET agent_installed = 1 WHERE id = ?",
+                        )
+                        .bind(server_id)
+                        .execute(pool);
+                    }
+                }
+            }
+        }
+    })
+    .await;
+}
+
+// ==============================
+// Machine Create API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct CreateMachineRequest {
+    pub server_id: i64,
+    pub cpu_cores: i32,
+    pub memory_gb: f64,
+    pub disk_gb: f64,
+    pub hours: Option<i32>,
+}
+
+// POST /api/v1/machines/create
+async fn api_machines_create(
+    headers: HeaderMap,
+    Json(form): Json<CreateMachineRequest>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+
+    let user: Option<(f64,)> =
+        sqlx::query_as("SELECT core_hours FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+    let core_hours = user.unwrap_or((0.0,)).0;
+
+    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
+        .bind(form.server_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let server = match server {
+        Some(s) if s.is_active && s.expires_at > now => s,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "server_unavailable", "message": "Server not found or not active" })),
+            )
+                .into_response()
+        }
+    };
+
+    let mut hours = form.hours.unwrap_or(24) as i64;
+    let mut expires_at = now + chrono::Duration::hours(hours);
+
+    if expires_at > server.expires_at {
+        let remaining_hours = (server.expires_at - now).num_hours().max(0);
+        if remaining_hours == 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "server_expired", "message": "Server has expired" })),
+            )
+                .into_response();
+        }
+        hours = remaining_hours.min(hours);
+        expires_at = now + chrono::Duration::hours(hours);
+    }
+
+    let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
+        form.cpu_cores,
+        form.memory_gb,
+        0.0,
+        form.disk_gb,
+        server.cpu_multiplier,
+        server.memory_multiplier,
+        1.0,
+        server.disk_multiplier,
+    )
+    .await;
+
+    let total_cost = ch_per_hour * hours as f64;
+
+    if core_hours < total_cost {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({ "error": "insufficient_balance", "message": "Not enough core hours" })),
+        )
+            .into_response();
+    }
+
+    let new_core_hours = core_hours - total_cost;
+    sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
+        .bind(new_core_hours)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let proxy_port = server.proxy_port;
+
+    let result = sqlx::query(
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(form.server_id)
+    .bind(form.cpu_cores)
+    .bind(form.memory_gb)
+    .bind(form.disk_gb)
+    .bind(&server.virt_type)
+    .bind(ch_per_hour)
+    .bind(expires_at)
+    .bind(proxy_port)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let machine_id = result.last_insert_rowid();
+
+    let _ = sqlx::query(
+        "UPDATE users SET total_usage_hours = total_usage_hours + ? WHERE id = ?",
+    )
+    .bind(hours as f64)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+
+    // Trigger agent to create VM
+    let server_ip = server.ip.clone();
+    let machine_name = format!("machine-{}", machine_id);
+    let virt_type = server.virt_type.clone();
+    let cpu = form.cpu_cores;
+    let memory = form.memory_gb;
+    let disk = form.disk_gb;
+
+    tokio::spawn(async move {
+        let agent_url = format!("http://{}:19527", server_ip);
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(&format!("{}/create", agent_url))
+            .header("X-API-Key", "tea-platform-agent-key")
+            .json(&json!({
+                "name": machine_name,
+                "cpu": cpu,
+                "memory": (memory * 1024.0) as i64,
+                "disk": disk,
+                "virt_type": virt_type,
+            }))
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await;
+    });
+
+    let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ?")
+        .bind(machine_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    ok_response(machine).into_response()
+}
+
+// ==============================
+// Redeem API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct RedeemRequest {
+    pub code: String,
+}
+
+// POST /api/v1/redeem
+async fn api_redeem(
+    headers: HeaderMap,
+    Json(form): Json<RedeemRequest>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let code: Option<RedeemCode> = sqlx::query_as(
+        "SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0",
+    )
+    .bind(&form.code)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let code = match code {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid_code", "message": "Invalid or already used redeem code" })),
+            )
+                .into_response()
+        }
+    };
+
+    let now = chrono::Utc::now();
+    let mut reward_info = json!({});
+
+    match code.code_type.as_str() {
+        "core_hours" => {
+            let reward = code.core_hours.unwrap_or(0.0);
+            let _ = sqlx::query(
+                "UPDATE users SET core_hours = core_hours + ? WHERE id = ?",
+            )
+            .bind(reward)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+            reward_info = json!({ "type": "core_hours", "core_hours": reward });
+        }
+        "subscription" => {
+            let pkg_id = code.package_id;
+            let _ = sqlx::query(
+                "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, 0, 1)",
+            )
+            .bind(user_id)
+            .bind(pkg_id)
+            .execute(pool)
+            .await;
+            reward_info = json!({ "type": "subscription", "package_id": pkg_id });
+        }
+        _ => {}
+    }
+
+    let _ = sqlx::query(
+        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ?",
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(code.id)
+    .execute(pool)
+    .await;
+
+    ok_response(json!({
+        "redeemed": true,
+        "reward": reward_info,
+    }))
+    .into_response()
+}
+
+// ==============================
+// Packages Buy API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct BuyPackageRequest {
+    pub package_id: i64,
+}
+
+// POST /api/v1/packages/buy
+async fn api_packages_buy(
+    headers: HeaderMap,
+    Json(form): Json<BuyPackageRequest>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let pkg: Option<RechargePackage> = sqlx::query_as(
+        "SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1",
+    )
+    .bind(form.package_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let pkg = match pkg {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "package_not_found", "message": "Package not found or inactive" })),
+            )
+                .into_response()
+        }
+    };
+
+    let cfg = crate::config::AppConfig::get();
+    let out_trade_no = Uuid::new_v4().to_string().replace('-', "");
+
+    let _ = sqlx::query(
+        "INSERT INTO orders (user_id, out_trade_no, money, ldc_amount, order_name, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+    )
+    .bind(user_id)
+    .bind(&out_trade_no)
+    .bind(pkg.price_ldc)
+    .bind(pkg.core_hours)
+    .bind(&pkg.name)
+    .execute(pool)
+    .await;
+
+    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await {
+        Ok(url) => ok_response(json!({ "payment_url": url, "order_id": out_trade_no })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "payment_failed", "message": format!("{}", e) })),
+        )
+            .into_response(),
+    }
 }
 
 // ==============================
@@ -537,13 +1027,18 @@ async fn api_admin_packages(headers: HeaderMap) -> impl IntoResponse {
 
 pub fn router(_state: AppState) -> Router<AppState> {
     Router::new()
+        .route("/v1/health", get(api_health))
         .route("/v1/me", get(api_me).post(api_me_regenerate_key))
         .route("/v1/me/api-key", post(api_me_regenerate_key))
         .route("/v1/servers", get(api_my_servers))
+        .route("/v1/servers/contribute", post(api_servers_contribute))
         .route("/v1/machines", get(api_my_machines))
+        .route("/v1/machines/create", post(api_machines_create))
         .route("/v1/market", get(api_market))
         .route("/v1/orders", get(api_my_orders))
         .route("/v1/packages", get(api_packages))
+        .route("/v1/packages/buy", post(api_packages_buy))
+        .route("/v1/redeem", post(api_redeem))
         .route("/v1/admin/users", get(api_admin_users))
         .route(
             "/v1/admin/users/:id",

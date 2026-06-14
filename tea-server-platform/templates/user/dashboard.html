@@ -155,6 +155,35 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">我的 API Key</h5>
+                <form method="post" action="/dashboard/api-key" style="display:inline">
+                    <button type="submit" class="btn btn-warning btn-sm">重新生成</button>
+                </form>
+            </div>
+            <div class="card-body">
+                {% if api_key %}
+                <div class="input-group">
+                    <input type="text" class="form-control" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
+                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">显示</button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">复制</button>
+                </div>
+                <small class="text-muted">请妥善保管此 Key，用于 API 请求认证。点击「显示」查看完整 Key</small>
+                {% else %}
+                <div class="input-group">
+                    <input type="text" class="form-control" value="尚未生成 API Key" readonly disabled>
+                    <button class="btn btn-primary" type="submit" form="genApiKeyForm">生成 API Key</button>
+                </div>
+                <form id="genApiKeyForm" method="post" action="/dashboard/api-key" style="display:none"></form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">每日签到</h5>
                 <form method="post" action="/checkin">
                     <button type="submit" class="btn btn-success">立即签到</button>

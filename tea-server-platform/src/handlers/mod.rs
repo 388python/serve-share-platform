@@ -199,6 +199,13 @@ pub async fn user_dashboard(
     .unwrap_or(None)
     .unwrap_or((0.0, 0.0));
 
+    let api_key: Option<String> = sqlx::query_scalar("SELECT api_key FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .flatten();
+
     // Get user's machines
     let machines: Vec<Machine> = sqlx::query_as(
         "SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC",
@@ -221,6 +228,7 @@ pub async fn user_dashboard(
     build_base_context(&cookies, &mut ctx);
     ctx.insert("core_hours", &user.0);
     ctx.insert("ldc_balance", &user.1);
+    ctx.insert("api_key", &api_key);
     ctx.insert("machines", &machines);
     ctx.insert("packages", &packages);
 
@@ -229,6 +237,28 @@ pub async fn user_dashboard(
         .render("user/dashboard.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
+}
+
+pub async fn regenerate_api_key(
+    cookies: Cookies,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, username, is_admin) = require_auth(&cookies)?;
+    let new_key = format!("usr_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let pool = db::get_db();
+    let _ = sqlx::query("UPDATE users SET api_key = ? WHERE id = ?")
+        .bind(&new_key)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+    // Refresh session
+    let user: (f64, f64) = sqlx::query_as("SELECT core_hours, ldc_balance FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .unwrap_or((0.0, 0.0));
+    set_session_cookie(&cookies, user_id, &username, is_admin, user.0, user.1);
+    Ok(Redirect::to("/dashboard"))
 }
 
 pub async fn contribute_server_page(
@@ -421,16 +451,43 @@ pub async fn machine_market(
 
     let pool = db::get_db();
     let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY created_at DESC",
+        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ?",
     )
     .bind(Utc::now())
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
+    // Get used capacity for each server
+    let mut server_capacities: Vec<(Server, bool)> = Vec::new();
+    for s in servers {
+        let used: Option<(f64, f64, f64)> = sqlx::query_as(
+            "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0), COALESCE(SUM(disk_gb), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+        )
+        .bind(s.id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        
+        let has_capacity = if let Some((used_cpu, used_mem, used_disk)) = used {
+            (s.cpu_cores as f64) > used_cpu && s.memory_gb > used_mem && s.disk_gb > used_disk
+        } else {
+            true
+        };
+        server_capacities.push((s, has_capacity));
+    }
+
+    // Sort: has capacity first, then by created_at DESC
+    server_capacities.sort_by(|a, b| {
+        b.1.cmp(&a.1)  // true (has capacity) comes first
+            .then_with(|| b.0.created_at.cmp(&a.0.created_at))
+    });
+
+    let sorted_servers: Vec<Server> = server_capacities.into_iter().map(|(s, _)| s).collect();
+
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
-    ctx.insert("servers", &servers);
+    ctx.insert("servers", &sorted_servers);
 
     let rendered = state
         .templates
@@ -1846,6 +1903,8 @@ pub async fn admin_invites(
 #[derive(Deserialize)]
 pub struct GenerateInvitesForm {
     pub count: i32,
+    pub private_note: Option<String>,
+    pub public_note: Option<String>,
 }
 
 pub async fn admin_generate_invites(
@@ -1861,9 +1920,11 @@ pub async fn admin_generate_invites(
     for _ in 0..count {
         let code = Uuid::new_v4().to_string().replace('-', "");
         let _ = sqlx::query(
-            "INSERT INTO invites (code, is_used) VALUES (?, 0)",
+            "INSERT INTO invites (code, is_used, private_note, public_note) VALUES (?, 0, ?, ?)",
         )
         .bind(&code)
+        .bind(form.private_note.as_deref().unwrap_or(""))
+        .bind(form.public_note.as_deref().unwrap_or(""))
         .execute(pool)
         .await;
     }
@@ -1890,6 +1951,65 @@ pub async fn admin_orders(
     let rendered = state
         .templates
         .render("admin/orders.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn stats_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Html<String> {
+    let pool = db::get_db();
+    
+    let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(pool).await.unwrap_or((0,));
+    let server_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM servers")
+        .fetch_one(pool).await.unwrap_or((0,));
+    let running_machines: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM machines WHERE status = 'running'")
+        .fetch_one(pool).await.unwrap_or((0,));
+    let total_core_hours: (Option<f64>,) = sqlx::query_as("SELECT SUM(total_usage_hours) FROM users")
+        .fetch_one(pool).await.unwrap_or((Some(0.0),));
+    
+    let recent_users: Vec<User> = sqlx::query_as("SELECT * FROM users ORDER BY created_at DESC LIMIT 10")
+        .fetch_all(pool).await.unwrap_or_default();
+    let recent_servers: Vec<Server> = sqlx::query_as("SELECT * FROM servers WHERE is_active = 1 ORDER BY created_at DESC LIMIT 10")
+        .fetch_all(pool).await.unwrap_or_default();
+    
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("user_count", &user_count.0);
+    ctx.insert("server_count", &server_count.0);
+    ctx.insert("running_machines", &running_machines.0);
+    ctx.insert("total_core_hours", &total_core_hours.0.unwrap_or(0.0));
+    ctx.insert("recent_users", &recent_users);
+    ctx.insert("recent_servers", &recent_servers);
+    
+    let rendered = state.templates.render("user/stats.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Html(rendered)
+}
+
+pub async fn admin_traffic_alerts(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let alerts: Vec<TrafficAlert> = sqlx::query_as(
+        "SELECT * FROM traffic_alerts ORDER BY created_at DESC LIMIT 200",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("alerts", &alerts);
+
+    let rendered = state
+        .templates
+        .render("admin/traffic_alerts.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }

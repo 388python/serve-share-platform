@@ -152,6 +152,31 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool)
         .await;
 
+    // Create traffic_alerts table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS traffic_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER,
+            server_id INTEGER,
+            alert_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Add columns to invites
+    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN public_note TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
         ("checkin_enabled", "true"),
@@ -176,6 +201,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
         ("admin_api_key", ""),
+        ("traffic_monitor_enabled", "true"),
+        ("traffic_bandwidth_threshold_mbps", "100"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

@@ -29,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
     config::AppConfig::from_env()?;
     let cfg = config::AppConfig::get();
 
+    // Record startup time for health endpoint
+    handlers::api::set_startup_time(chrono::Utc::now());
+
     // Init database
     db::init_db(&cfg.database_url).await?;
 
@@ -130,17 +133,57 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Background task: Traffic monitoring
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            let enabled = db::get_config("traffic_monitor_enabled").await
+                .unwrap_or_else(|| "true".to_string());
+            if enabled != "true" {
+                continue;
+            }
+            let pool = db::get_db();
+            let machines: Vec<(i64, String)> = sqlx::query_as(
+                "SELECT m.id, s.ip FROM machines m JOIN servers s ON m.server_id = s.id WHERE m.status = 'running'"
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+            
+            for (machine_id, server_ip) in &machines {
+                let alerts = services::traffic_monitor::scan_machine_traffic(*machine_id, server_ip).await;
+                for alert_msg in &alerts {
+                    tracing::warn!("Traffic alert for machine {}: {}", machine_id, alert_msg);
+                    let _ = sqlx::query(
+                        "INSERT INTO traffic_alerts (machine_id, alert_type, message) VALUES (?, 'traffic_violation', ?)"
+                    )
+                    .bind(machine_id)
+                    .bind(alert_msg)
+                    .execute(pool)
+                    .await;
+                    // Stop the machine
+                    let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
+                        .bind(machine_id)
+                        .execute(pool)
+                        .await;
+                }
+            }
+        }
+    });
+
     // Build router
     let app = Router::new()
         // Public routes
         .route("/", get(index_page))
         .route("/health", get(handlers::health_check))
+        .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
         .route("/admin-login", get(handlers::admin_login))
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
+        .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
@@ -187,8 +230,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites", get(handlers::admin_invites))
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
-        // API routes (RESTful JSON)
-        .merge(handlers::api::router(app_state.clone()))
+        .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
+        // API routes (RESTful JSON) - mounted under /api prefix
+        .nest("/api", handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())
@@ -341,6 +385,19 @@ async fn auth_callback(
                         .ok();
                 }
                 None => {
+                    let public_note: Option<String> = sqlx::query_scalar(
+                        "SELECT public_note FROM invites WHERE code = ?"
+                    )
+                    .bind(&invite_code)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None)
+                    .flatten();
+                    if let Some(note) = public_note {
+                        if !note.is_empty() {
+                            return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
+                        }
+                    }
                     return Redirect::to("/?error=invalid_invite").into_response();
                 }
             }

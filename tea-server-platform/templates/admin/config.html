@@ -171,6 +171,21 @@
                         <textarea class="form-control" id="ldc_ed25519_public_key" name="ldc_ed25519_public_key" rows="4">{% for c in configs %}{% if c.key == 'ldc_ed25519_public_key' %}{{ c.value }}{% endif %}{% endfor %}</textarea>
                     </div>
 
+                    <h5 class="mb-3 mt-4">流量监控设置</h5>
+                    <div class="mb-3">
+                        <label for="traffic_monitor_enabled" class="form-label">流量监控开关</label>
+                        <select class="form-select" id="traffic_monitor_enabled" name="traffic_monitor_enabled">
+                            {% set tme = "" %}
+                            {% for c in configs %}{% if c.key == 'traffic_monitor_enabled' %}{% set tme = c.value %}{% endif %}{% endfor %}
+                            <option value="true" {% if tme == "true" %}selected{% endif %}>开启</option>
+                            <option value="false" {% if tme == "false" %}selected{% endif %}>关闭</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="traffic_bandwidth_threshold_mbps" class="form-label">带宽告警阈值 (Mbps)</label>
+                        <input type="number" class="form-control" id="traffic_bandwidth_threshold_mbps" name="traffic_bandwidth_threshold_mbps" value="{% for c in configs %}{% if c.key == 'traffic_bandwidth_threshold_mbps' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
+                    </div>
+
                     <button type="submit" class="btn btn-primary w-100">保存配置</button>
                 </form>
             </div>
