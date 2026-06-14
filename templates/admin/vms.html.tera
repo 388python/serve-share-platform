@@ -1,0 +1,86 @@
+{% extends "admin/layout.html.tera" %}
+
+{% block title %}虚拟机管理 - 管理后台 - {{ site_name }}{% endblock title %}
+
+{% block vms_active %}active{% endblock vms_active %}
+
+{% block content %}
+<h1>虚拟机管理</h1>
+
+{% if msg %}
+<div style="background: #d4edda; color: #155724; padding: 10px 15px; border-radius: 4px; margin-bottom: 16px; font-size: 14px;">{{ msg }}</div>
+{% endif %}
+
+<div style="background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">用户ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">服务器ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">CPU</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">内存</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">磁盘</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">端口</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">VM ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">状态</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">过期时间</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">创建时间</th>
+                <th style="padding: 10px 14px; text-align: center; font-size: 13px; color: #555;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for v in vms %}
+            <tr style="border-bottom: 1px solid #f0f0f0;">
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.user_id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.server_id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.cpu_cores }}核</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.memory_gb }}GB</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.disk_gb }}GB</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{% if v.forwarded_port %}{{ v.forwarded_port }}{% else %}-{% endif %}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{% if v.vm_id %}{{ v.vm_id }}{% else %}-{% endif %}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">
+                    {% if v.status == "running" %}
+                    <span style="color: #27ae60;">运行中</span>
+                    {% elif v.status == "stopped" %}
+                    <span style="color: #e74c3c;">已停止</span>
+                    {% elif v.status == "pending" %}
+                    <span style="color: #e67e22;">创建中</span>
+                    {% else %}
+                    {{ v.status }}
+                    {% endif %}
+                </td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.expires_at }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ v.created_at }}</td>
+                <td style="padding: 10px 14px; text-align: center;">
+                    {% if v.status == "running" or v.status == "pending" %}
+                    <form method="post" action="/admin/vms/stop/{{ v.id }}" style="display: inline;" onsubmit="return confirm('确认强制停止此虚拟机？');">
+                        <button type="submit" style="padding: 4px 10px; background: #e74c3c; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer;">停止</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if vms|length == 0 %}
+            <tr>
+                <td colspan="12" style="padding: 30px; text-align: center; color: #999; font-size: 13px;">暂无虚拟机</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if total_pages > 1 %}
+<div style="margin-top: 16px; display: flex; justify-content: center; gap: 8px;">
+    {% for p in range(end=total_pages + 1) %}
+        {% if p == 0 %}{% continue %}{% endif %}
+        {% if p == page %}
+        <span style="padding: 6px 12px; background: #3498db; color: #fff; border-radius: 4px; font-size: 13px;">{{ p }}</span>
+        {% else %}
+        <a href="?page={{ p }}&per_page={{ per_page }}" style="padding: 6px 12px; background: #eee; color: #333; border-radius: 4px; font-size: 13px; text-decoration: none;">{{ p }}</a>
+        {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock content %}

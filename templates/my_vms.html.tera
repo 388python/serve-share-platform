@@ -1,0 +1,66 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 我的虚拟机{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>我的虚拟机</h2>
+    <p class="page-subtitle">管理您创建的所有虚拟机实例</p>
+</div>
+
+{% if not vms %}
+<div class="empty-state">
+    <div class="empty-icon">🖥️</div>
+    <h3>暂无虚拟机</h3>
+    <p>您还没有创建任何虚拟机实例。</p>
+    <a href="/marketplace" class="btn btn-primary">前往机器广场</a>
+</div>
+{% else %}
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>VM ID</th>
+                <th>服务器</th>
+                <th>配置</th>
+                <th>SSH 连接</th>
+                <th>状态</th>
+                <th>过期时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vm in vms %}
+            <tr>
+                <td><span class="badge">#{{ vm.id }}</span></td>
+                <td>
+                    <span class="text-muted">
+                        {{ vm.server_ip }}{% if vm.server_ssh_port != 22 %}:{{ vm.server_ssh_port }}{% endif %}
+                    </span>
+                </td>
+                <td>
+                    <span class="spec-tag">{{ vm.cpu_cores }}核</span>
+                    <span class="spec-tag">{{ "%.1f" | format(prefix="", value=vm.memory_gb) }}G</span>
+                    <span class="spec-tag">{{ "%.0f" | format(prefix="", value=vm.disk_gb) }}G</span>
+                </td>
+                <td>
+                    {% if vm.forwarded_port %}
+                    <code class="ssh-addr">{{ vm.server_ip }}:{{ vm.forwarded_port }}</code>
+                    {% else %}
+                    <span class="text-muted">待分配</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span class="status-badge status-{{ vm.status }}">{{ vm.status }}</span>
+                </td>
+                <td><span class="text-muted">{{ vm.expires_at }}</span></td>
+                <td>
+                    <button class="btn btn-sm btn-danger" onclick="if(confirm('确定要删除此虚拟机吗？')){/* TODO: delete */ alert('删除功能即将上线'); }">删除</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock content %}

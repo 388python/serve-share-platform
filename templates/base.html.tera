@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site_name }}{% endblock title %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% block head %}{% endblock head %}
+</head>
+<body>
+    <header class="site-header">
+        <div class="container">
+            <h1 class="site-title">
+                <a href="/">{{ site_name }}</a>
+            </h1>
+            <nav class="site-nav">
+                <a href="/">首页</a>
+                <a href="/servers">服务器</a>
+                <a href="/pricing">价格</a>
+                <a href="/about">关于</a>
+                {% if user %}
+                    <span class="nav-user-info">
+                        <span class="nav-username">{{ user.username }}</span>
+                        <span class="nav-core-hours">{{ "%.1f" | format(prefix="", value=user.core_hours) }} 核时</span>
+                        {% if user.is_admin %}
+                            <a href="/admin/dashboard" class="nav-admin-link">管理</a>
+                        {% endif %}
+                        <a href="/auth/logout" class="nav-logout-link">退出</a>
+                    </span>
+                {% else %}
+                    <a href="/login">登录</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+
+    <main class="site-main">
+        <div class="container">
+            {% block content %}{% endblock content %}
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <p>&copy; 2024 {{ site_name }}. All rights reserved.</p>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock scripts %}
+</body>
+</html>

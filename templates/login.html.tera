@@ -1,0 +1,30 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 登录{% endblock title %}
+
+{% block content %}
+<div class="login-page">
+    <div class="login-card">
+        <div class="login-header">
+            <h2>{{ site_name }}</h2>
+            <p class="login-subtitle">使用 LinuxDo 账号登录</p>
+        </div>
+
+        <div class="login-body">
+            <a href="/auth/login" class="btn-linuxdo">
+                <span class="btn-linuxdo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
+                        <path d="M8 12L11 15L16 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </span>
+                <span>通过 LinuxDo Connect 登录</span>
+            </a>
+        </div>
+
+        <div class="login-footer">
+            <p>首次登录将自动注册账号</p>
+        </div>
+    </div>
+</div>
+{% endblock content %}

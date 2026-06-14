@@ -1,0 +1,69 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 核时套餐{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>核时套餐</h2>
+    <p class="page-subtitle">购买核时套餐，获得更多算力</p>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if not packages %}
+<div class="empty-state">
+    <div class="empty-icon">📦</div>
+    <h3>暂无可用套餐</h3>
+    <p>目前没有可购买的核时套餐。</p>
+</div>
+{% else %}
+<div class="package-grid">
+    {% for pkg in packages %}
+    <div class="package-card {% if pkg.package_type == 'duration' %}package-featured{% endif %}">
+        {% if pkg.package_type == "duration" %}
+        <div class="package-badge">推荐</div>
+        {% endif %}
+        <div class="package-header">
+            <h3 class="package-name">{{ pkg.name }}</h3>
+            <span class="package-type">
+                {% if pkg.package_type == "duration" %}
+                时长套餐
+                {% elif pkg.package_type == "accumulated" %}
+                累计套餐
+                {% else %}
+                核时包
+                {% endif %}
+            </span>
+        </div>
+        <div class="package-body">
+            <div class="package-core-hours">
+                <span class="package-amount">{{ "%.0f" | format(prefix="", value=pkg.core_hours) }}</span>
+                <span class="package-unit">核时</span>
+            </div>
+            {% if pkg.duration_days %}
+            <div class="package-duration">有效期 {{ pkg.duration_days }} 天</div>
+            {% endif %}
+            {% if pkg.accumulated_hours %}
+            <div class="package-duration">累计 {{ "%.0f" | format(prefix="", value=pkg.accumulated_hours) }} 小时</div>
+            {% endif %}
+            <div class="package-price">
+                <span class="price-amount">{{ "%.1f" | format(prefix="", value=pkg.price_ldc) }}</span>
+                <span class="price-unit">核时购买</span>
+            </div>
+        </div>
+        <div class="package-footer">
+            {% if user %}
+            <form method="POST" action="/packages/buy/{{ pkg.id }}" onsubmit="return confirm('确认使用 {{ "%.1f" | format(prefix="", value=pkg.price_ldc) }} 核时购买此套餐吗？')">
+                <button type="submit" class="btn btn-primary btn-block">立即购买</button>
+            </form>
+            {% else %}
+            <a href="/login" class="btn btn-secondary btn-block">登录后购买</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock content %}

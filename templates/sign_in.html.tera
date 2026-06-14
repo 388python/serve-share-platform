@@ -1,0 +1,38 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 每日签到{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>每日签到</h2>
+    <p class="page-subtitle">每天签到领取核时奖励</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="sign-in-container">
+    <div class="card sign-in-card">
+        <div class="card-body text-center">
+            <div class="sign-in-icon">✅</div>
+
+            {% if signed_in_today %}
+            <h3 class="sign-in-status sign-in-done">今日已签到</h3>
+            <p class="sign-in-info">您今天已经签到过了，明天再来吧！</p>
+            <p class="sign-in-reward">每日签到奖励: <strong>{{ "%.1f" | format(prefix="", value=sign_in_hours) }} 核时</strong></p>
+            <button class="btn btn-disabled btn-lg btn-block" disabled>今日已签到</button>
+            {% else %}
+            <h3 class="sign-in-status sign-in-ready">签到领取奖励</h3>
+            <p class="sign-in-info">每日签到可获得 <strong>{{ "%.1f" | format(prefix="", value=sign_in_hours) }} 核时</strong></p>
+            <form method="POST" action="/sign-in">
+                <button type="submit" class="btn btn-primary btn-lg btn-block">立即签到</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock content %}

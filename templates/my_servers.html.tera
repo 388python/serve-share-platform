@@ -1,0 +1,58 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 我的服务器{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>我贡献的服务器</h2>
+    <p class="page-subtitle">查看您贡献的服务器及其状态</p>
+</div>
+
+{% if not servers %}
+<div class="empty-state">
+    <div class="empty-icon">📡</div>
+    <h3>暂无贡献的服务器</h3>
+    <p>您还没有贡献任何服务器资源。</p>
+    <a href="/servers/contribute" class="btn btn-primary">去贡献服务器</a>
+</div>
+{% else %}
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>IP 地址</th>
+                <th>配置</th>
+                <th>状态</th>
+                <th>核时收益</th>
+                <th>过期时间</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for server in servers %}
+            <tr>
+                <td><span class="badge">#{{ server.id }}</span></td>
+                <td>
+                    <span class="text-muted" title="{{ server.ip }}">
+                        {{ server.ip | truncate(length=15) }}
+                    </span>
+                </td>
+                <td>
+                    <span class="spec-tag">{{ server.cpu_cores }}核</span>
+                    <span class="spec-tag">{{ "%.1f" | format(prefix="", value=server.memory_gb) }}G</span>
+                    <span class="spec-tag">{{ "%.0f" | format(prefix="", value=server.disk_gb) }}G</span>
+                </td>
+                <td>
+                    <span class="status-badge status-{{ server.status }}">{{ server.status }}</span>
+                </td>
+                <td>
+                    <span class="highlight">{{ "%.1f" | format(prefix="", value=server.core_hours_per_hour) }} 核时/时</span>
+                </td>
+                <td><span class="text-muted">{{ server.expires_at }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock content %}

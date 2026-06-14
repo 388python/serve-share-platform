@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}管理后台 - {{ site_name }}{% endblock title %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f6fa; color: #333; }
+        .admin-layout { display: flex; min-height: 100vh; }
+        .admin-sidebar { width: 220px; background: #2c3e50; color: #ecf0f1; display: flex; flex-direction: column; flex-shrink: 0; }
+        .admin-sidebar-header { padding: 20px; border-bottom: 1px solid #3d5166; }
+        .admin-sidebar-header h2 { font-size: 18px; font-weight: 600; }
+        .admin-sidebar-header p { font-size: 12px; color: #95a5a6; margin-top: 4px; }
+        .admin-nav { flex: 1; padding: 10px 0; overflow-y: auto; }
+        .admin-nav a { display: block; padding: 10px 20px; color: #bdc3c7; text-decoration: none; font-size: 14px; transition: all 0.2s; border-left: 3px solid transparent; }
+        .admin-nav a:hover, .admin-nav a.active { color: #fff; background: #34495e; border-left-color: #3498db; }
+        .admin-main { flex: 1; padding: 30px; overflow-y: auto; }
+        .admin-main h1 { font-size: 24px; margin-bottom: 20px; color: #2c3e50; }
+    </style>
+    {% block head %}{% endblock head %}
+</head>
+<body>
+    <div class="admin-layout">
+        <aside class="admin-sidebar">
+            <div class="admin-sidebar-header">
+                <h2>管理后台</h2>
+                <p>{{ site_name }}</p>
+            </div>
+            <nav class="admin-nav">
+                <a href="/admin/dashboard" class="{% block dashboard_active %}{% endblock %}">📊 仪表盘</a>
+                <a href="/admin/settings" class="{% block settings_active %}{% endblock %}">⚙️ 站点设置</a>
+                <a href="/admin/invite-codes" class="{% block invite_codes_active %}{% endblock %}">✉️ 邀请码管理</a>
+                <a href="/admin/codes" class="{% block codes_active %}{% endblock %}">🎫 核时码管理</a>
+                <a href="/admin/packages" class="{% block packages_active %}{% endblock %}">📦 核时套餐管理</a>
+                <a href="/admin/users" class="{% block users_active %}{% endblock %}">👥 用户管理</a>
+                <a href="/admin/servers" class="{% block servers_active %}{% endblock %}">🖧 服务器管理</a>
+                <a href="/admin/vms" class="{% block vms_active %}{% endblock %}">💻 虚拟机管理</a>
+            </nav>
+        </aside>
+        <main class="admin-main">
+            {% block content %}{% endblock content %}
+        </main>
+    </div>
+    {% block scripts %}{% endblock scripts %}
+</body>
+</html>

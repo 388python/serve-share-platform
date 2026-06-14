@@ -1,0 +1,124 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 创建虚拟机{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>创建虚拟机</h2>
+    <p class="page-subtitle">选择配置并创建您的虚拟机实例</p>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% if server %}
+<div class="card server-info-card">
+    <h3>服务器信息</h3>
+    <div class="info-grid">
+        <div class="info-item">
+            <span class="info-label">虚拟化类型</span>
+            <span class="info-value">{{ server.virtualization_type | upper }}</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">最大 CPU</span>
+            <span class="info-value">{{ server.cpu_cores }} 核</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">最大内存</span>
+            <span class="info-value">{{ server.memory_gb }} GB</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">最大磁盘</span>
+            <span class="info-value">{{ server.disk_gb }} GB</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">带宽</span>
+            <span class="info-value">{{ server.bandwidth_mbps }} Mbps</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">CPU 倍率</span>
+            <span class="info-value">{{ "%.1f" | format(prefix="", value=server.cpu_multiplier) }}x</span>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <form method="POST" action="/vms/create" class="form">
+        <input type="hidden" name="server_id" value="{{ server.id }}">
+
+        <div class="form-section">
+            <h3>虚拟机配置</h3>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="cpu_cores">CPU 核心数 (最大 {{ server.cpu_cores }})</label>
+                    <input type="number" id="cpu_cores" name="cpu_cores" value="2" min="1" max="{{ server.cpu_cores }}" required>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="memory_gb">内存 GB (最大 {{ server.memory_gb }})</label>
+                    <input type="number" id="memory_gb" name="memory_gb" value="2.0" min="0.1" max="{{ server.memory_gb }}" step="0.1" required>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="disk_gb">磁盘 GB (最大 {{ server.disk_gb }})</label>
+                    <input type="number" id="disk_gb" name="disk_gb" value="10.0" min="1" max="{{ server.disk_gb }}" step="0.1" required>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="duration_hours">时长 (小时)</label>
+                    <input type="number" id="duration_hours" name="duration_hours" value="1" min="1" required>
+                </div>
+            </div>
+            <div class="cost-estimate" id="cost-display">
+                <span class="cost-label">预估核时消耗:</span>
+                <span class="cost-value" id="estimated-cost">计算中...</span>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-lg">创建虚拟机</button>
+            <a href="/marketplace" class="btn btn-ghost">返回市场</a>
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-icon">⚠️</div>
+    <h3>未选择服务器</h3>
+    <p>请从机器广场选择一个服务器。</p>
+    <a href="/marketplace" class="btn btn-primary">前往机器广场</a>
+</div>
+{% endif %}
+{% endblock content %}
+
+{% block scripts %}
+{% if server %}
+<script>
+(function() {
+    var cpuInput = document.getElementById('cpu_cores');
+    var memInput = document.getElementById('memory_gb');
+    var diskInput = document.getElementById('disk_gb');
+    var durInput = document.getElementById('duration_hours');
+    var costEl = document.getElementById('estimated-cost');
+
+    var cpuMultiplier = {{ server.cpu_multiplier }};
+    var maxCpu = {{ server.cpu_cores }};
+    var maxMem = {{ server.memory_gb }};
+    var maxDisk = {{ server.disk_gb }};
+
+    function updateCost() {
+        var cpu = parseInt(cpuInput.value) || 0;
+        var dur = parseInt(durInput.value) || 0;
+        var cost = cpu * cpuMultiplier * dur;
+        costEl.textContent = cost.toFixed(1) + ' 核时';
+    }
+
+    if (cpuInput) cpuInput.addEventListener('input', updateCost);
+    if (memInput) memInput.addEventListener('input', updateCost);
+    if (diskInput) diskInput.addEventListener('input', updateCost);
+    if (durInput) durInput.addEventListener('input', updateCost);
+    updateCost();
+})();
+</script>
+{% endif %}
+{% endblock scripts %}

@@ -1,0 +1,30 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 兑换码{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>兑换码</h2>
+    <p class="page-subtitle">输入兑换码获取核时奖励</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card redeem-card">
+    <div class="card-body">
+        <div class="redeem-icon">🎁</div>
+        <h3>输入兑换码</h3>
+        <form method="POST" action="/codes/redeem" class="form">
+            <div class="form-group">
+                <input type="text" name="code" class="input-lg text-center" placeholder="请输入您的兑换码" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg btn-block">兑换</button>
+        </form>
+    </div>
+</div>
+{% endblock content %}

@@ -1,0 +1,116 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 贡献服务器{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>贡献服务器</h2>
+    <p class="page-subtitle">分享您的闲置服务器资源，获取核时奖励</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+    <form method="POST" action="/servers/contribute" class="form">
+        <div class="form-section">
+            <h3>连接信息</h3>
+            <div class="form-row">
+                <div class="form-group flex-2">
+                    <label for="ip">IP 地址 *</label>
+                    <input type="text" id="ip" name="ip" placeholder="例如: 192.168.1.100" required>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="ssh_port">SSH 端口</label>
+                    <input type="number" id="ssh_port" name="ssh_port" value="22" min="1" max="65535">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="ssh_key">SSH 私钥 *</label>
+                <textarea id="ssh_key" name="ssh_key" rows="5" placeholder="粘贴您的 SSH 私钥内容" required></textarea>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>硬件配置</h3>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="cpu_cores">CPU 核心数 *</label>
+                    <input type="number" id="cpu_cores" name="cpu_cores" value="4" min="1" required>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="memory_gb">内存 (GB) *</label>
+                    <input type="number" id="memory_gb" name="memory_gb" value="8.0" min="0.1" step="0.1" required>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="bandwidth_mbps">带宽 (Mbps) *</label>
+                    <input type="number" id="bandwidth_mbps" name="bandwidth_mbps" value="100" min="1" required>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="disk_gb">磁盘 (GB) *</label>
+                    <input type="number" id="disk_gb" name="disk_gb" value="50.0" min="1" step="0.1" required>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>奖励倍率</h3>
+            <p class="form-hint">倍率越高，每小时获得的核时越多</p>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="cpu_multiplier">CPU 倍率</label>
+                    <input type="number" id="cpu_multiplier" name="cpu_multiplier" value="1.0" min="0.1" step="0.1">
+                </div>
+                <div class="form-group flex-1">
+                    <label for="memory_multiplier">内存倍率</label>
+                    <input type="number" id="memory_multiplier" name="memory_multiplier" value="1.0" min="0.1" step="0.1">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="bandwidth_multiplier">带宽倍率</label>
+                    <input type="number" id="bandwidth_multiplier" name="bandwidth_multiplier" value="1.0" min="0.1" step="0.1">
+                </div>
+                <div class="form-group flex-1">
+                    <label for="disk_multiplier">磁盘倍率</label>
+                    <input type="number" id="disk_multiplier" name="disk_multiplier" value="1.0" min="0.1" step="0.1">
+                </div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>其他设置</h3>
+            <div class="form-row">
+                <div class="form-group flex-1">
+                    <label for="virtualization_type">虚拟化类型</label>
+                    <select id="virtualization_type" name="virtualization_type">
+                        <option value="lxd">LXD</option>
+                        <option value="kvm">KVM</option>
+                    </select>
+                </div>
+                <div class="form-group flex-1">
+                    <label for="expires_at">过期时间 *</label>
+                    <input type="datetime-local" id="expires_at" name="expires_at" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="use_bonus" value="1">
+                    <span>使用加成 (Bonus)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-lg">提交贡献</button>
+            <a href="/" class="btn btn-ghost">取消</a>
+        </div>
+    </form>
+</div>
+{% endblock content %}

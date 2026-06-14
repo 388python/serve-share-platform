@@ -1,0 +1,65 @@
+{% extends "base.html.tera" %}
+
+{% block content %}
+<div class="layout">
+    <aside class="sidebar">
+        <nav class="sidebar-nav">
+            <ul class="sidebar-menu">
+                <li class="sidebar-item">
+                    <a href="/marketplace" class="sidebar-link">
+                        <span class="sidebar-icon">🛒</span>
+                        <span>机器广场</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="/my/vms" class="sidebar-link">
+                        <span class="sidebar-icon">🖥️</span>
+                        <span>我的虚拟机</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="/my/servers" class="sidebar-link">
+                        <span class="sidebar-icon">📡</span>
+                        <span>我的服务器</span>
+                    </a>
+                </li>
+                <li class="sidebar-divider"></li>
+                <li class="sidebar-item">
+                    <a href="/servers/contribute" class="sidebar-link">
+                        <span class="sidebar-icon">➕</span>
+                        <span>贡献服务器</span>
+                    </a>
+                </li>
+                <li class="sidebar-divider"></li>
+                <li class="sidebar-item">
+                    <a href="/recharge" class="sidebar-link">
+                        <span class="sidebar-icon">💎</span>
+                        <span>充值</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="/redeem" class="sidebar-link">
+                        <span class="sidebar-icon">🎁</span>
+                        <span>兑换码</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="/packages" class="sidebar-link">
+                        <span class="sidebar-icon">📦</span>
+                        <span>套餐</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="/sign-in" class="sidebar-link">
+                        <span class="sidebar-icon">✅</span>
+                        <span>每日签到</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </aside>
+    <main class="layout-content">
+        {% block user_content %}{% endblock user_content %}
+    </main>
+</div>
+{% endblock content %}

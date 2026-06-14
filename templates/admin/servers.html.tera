@@ -1,0 +1,87 @@
+{% extends "admin/layout.html.tera" %}
+
+{% block title %}服务器管理 - 管理后台 - {{ site_name }}{% endblock title %}
+
+{% block servers_active %}active{% endblock servers_active %}
+
+{% block content %}
+<h1>服务器管理</h1>
+
+{% if msg %}
+<div style="background: #d4edda; color: #155724; padding: 10px 15px; border-radius: 4px; margin-bottom: 16px; font-size: 14px;">{{ msg }}</div>
+{% endif %}
+
+<div style="background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">贡献者</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">IP</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">CPU</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">内存</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">磁盘</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">虚拟化</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">状态</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">创建时间</th>
+                <th style="padding: 10px 14px; text-align: center; font-size: 13px; color: #555;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in servers %}
+            <tr style="border-bottom: 1px solid #f0f0f0;">
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.user_id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px; font-family: monospace;">{{ s.ip }}:{{ s.ssh_port }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.cpu_cores }}核</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.memory_gb }}GB</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.disk_gb }}GB</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.virtualization_type }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">
+                    {% if s.status == "pending" %}
+                    <span style="color: #e67e22;">待审核</span>
+                    {% elif s.status == "active" %}
+                    <span style="color: #27ae60;">在线</span>
+                    {% elif s.status == "offline" %}
+                    <span style="color: #e74c3c;">离线</span>
+                    {% else %}
+                    {{ s.status }}
+                    {% endif %}
+                </td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ s.created_at }}</td>
+                <td style="padding: 10px 14px; text-align: center;">
+                    {% if s.status == "pending" %}
+                    <form method="post" action="/admin/servers/approve/{{ s.id }}" style="display: inline;">
+                        <button type="submit" style="padding: 4px 10px; background: #27ae60; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer;">通过</button>
+                    </form>
+                    {% endif %}
+                    {% if s.status == "active" %}
+                    <form method="post" action="/admin/servers/offline/{{ s.id }}" style="display: inline;" onsubmit="return confirm('确认下线此服务器？');">
+                        <button type="submit" style="padding: 4px 10px; background: #e74c3c; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer;">下线</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if servers|length == 0 %}
+            <tr>
+                <td colspan="10" style="padding: 30px; text-align: center; color: #999; font-size: 13px;">暂无服务器</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if total_pages > 1 %}
+<div style="margin-top: 16px; display: flex; justify-content: center; gap: 8px;">
+    {% for p in range(end=total_pages + 1) %}
+        {% if p == 0 %}{% continue %}{% endif %}
+        {% if p == page %}
+        <span style="padding: 6px 12px; background: #3498db; color: #fff; border-radius: 4px; font-size: 13px;">{{ p }}</span>
+        {% else %}
+        <a href="?page={{ p }}&per_page={{ per_page }}" style="padding: 6px 12px; background: #eee; color: #333; border-radius: 4px; font-size: 13px; text-decoration: none;">{{ p }}</a>
+        {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock content %}

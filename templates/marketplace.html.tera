@@ -1,0 +1,73 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 机器广场{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>机器广场</h2>
+    <p class="page-subtitle">浏览可用的服务器资源，选择并创建您的虚拟机</p>
+</div>
+
+{% if not servers %}
+<div class="empty-state">
+    <div class="empty-icon">📦</div>
+    <h3>暂无可用服务器</h3>
+    <p>目前还没有可用的服务器资源，请稍后再来查看。</p>
+    {% if user %}
+    <a href="/servers/contribute" class="btn btn-primary">贡献服务器</a>
+    {% endif %}
+</div>
+{% else %}
+<div class="server-grid">
+    {% for server in servers %}
+    <div class="server-card">
+        <div class="server-card-header">
+            <span class="server-badge server-badge-{{ server.status }}">{{ server.status }}</span>
+            <span class="server-type">{{ server.virtualization_type | upper }}</span>
+        </div>
+        <div class="server-card-body">
+            <div class="server-specs">
+                <div class="spec-item">
+                    <span class="spec-icon">🖥️</span>
+                    <span class="spec-value">{{ server.cpu_cores }} 核 CPU</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-icon">🧠</span>
+                    <span class="spec-value">{{ server.memory_gb }} GB RAM</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-icon">💾</span>
+                    <span class="spec-value">{{ server.disk_gb }} GB 磁盘</span>
+                </div>
+                <div class="spec-item">
+                    <span class="spec-icon">🌐</span>
+                    <span class="spec-value">{{ server.bandwidth_mbps }} Mbps</span>
+                </div>
+            </div>
+            <div class="server-meta">
+                <div class="meta-item">
+                    <span class="meta-label">虚拟化</span>
+                    <span class="meta-value">{{ server.virtualization_type | upper }}</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">过期时间</span>
+                    <span class="meta-value">{{ server.expires_at }}</span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">核时/时</span>
+                    <span class="meta-value highlight">{{ "%.1f" | format(prefix="", value=server.core_hours_per_hour) }}</span>
+                </div>
+            </div>
+        </div>
+        <div class="server-card-footer">
+            {% if user %}
+            <a href="/vms/create?server_id={{ server.id }}" class="btn btn-primary btn-block">选择此服务器</a>
+            {% else %}
+            <a href="/login" class="btn btn-secondary btn-block">登录后选择</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock content %}

@@ -1,0 +1,124 @@
+{% extends "admin/layout.html.tera" %}
+
+{% block title %}核时套餐管理 - 管理后台 - {{ site_name }}{% endblock title %}
+
+{% block packages_active %}active{% endblock packages_active %}
+
+{% block content %}
+<h1>核时套餐管理</h1>
+
+{% if msg %}
+<div style="background: #d4edda; color: #155724; padding: 10px 15px; border-radius: 4px; margin-bottom: 16px; font-size: 14px;">{{ msg }}</div>
+{% endif %}
+
+<div style="background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px;">
+    <h3 style="font-size: 15px; margin-bottom: 16px; color: #2c3e50;">创建新套餐</h3>
+    <form method="post" action="/admin/packages/create">
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px;">
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">套餐名称</label>
+                <input type="text" name="name" required style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">套餐类型</label>
+                <select name="package_type" style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <option value="duration">时长型</option>
+                    <option value="accumulated">累计型</option>
+                    <option value="fixed">固定核时型</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">有效天数</label>
+                <input type="number" name="duration_days" value="" placeholder="时长型需填写" style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">累计时长</label>
+                <input type="number" step="0.1" name="accumulated_hours" value="" placeholder="累计型需填写" style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">核时数量</label>
+                <input type="number" step="0.1" name="core_hours" value="0" required style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">价格 (LDC)</label>
+                <input type="number" step="0.01" name="price_ldc" value="0" required style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+        </div>
+        <div style="margin-top: 16px;">
+            <button type="submit" style="padding: 10px 24px; background: #3498db; color: #fff; border: none; border-radius: 4px; font-size: 14px; cursor: pointer;">创建套餐</button>
+        </div>
+    </form>
+</div>
+
+<div style="background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">ID</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">名称</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">类型</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">有效天数</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">累计时长</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">核时</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">价格</th>
+                <th style="padding: 10px 14px; text-align: left; font-size: 13px; color: #555;">状态</th>
+                <th style="padding: 10px 14px; text-align: center; font-size: 13px; color: #555;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in packages %}
+            <tr style="border-bottom: 1px solid #f0f0f0;">
+                <td style="padding: 10px 14px; font-size: 13px;">{{ p.id }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ p.name }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">
+                    {% if p.package_type == "duration" %}时长型{% elif p.package_type == "accumulated" %}累计型{% elif p.package_type == "fixed" %}固定核时型{% else %}{{ p.package_type }}{% endif %}
+                </td>
+                <td style="padding: 10px 14px; font-size: 13px;">{% if p.duration_days %}{{ p.duration_days }}天{% else %}-{% endif %}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{% if p.accumulated_hours %}{{ p.accumulated_hours }}{% else %}-{% endif %}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ p.core_hours }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">{{ p.price_ldc }}</td>
+                <td style="padding: 10px 14px; font-size: 13px;">
+                    {% if p.is_active %}
+                    <span style="color: #27ae60;">启用</span>
+                    {% else %}
+                    <span style="color: #e74c3c;">已停用</span>
+                    {% endif %}
+                </td>
+                <td style="padding: 10px 14px; text-align: center;">
+                    <details style="display: inline-block;">
+                        <summary style="padding: 4px 12px; background: #7f8c8d; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer; list-style: none;">编辑</summary>
+                        <form method="post" action="/admin/packages/edit/{{ p.id }}" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+                            <input type="text" name="name" value="{{ p.name }}" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                            <select name="package_type" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                                <option value="duration" {% if p.package_type == "duration" %}selected{% endif %}>时长型</option>
+                                <option value="accumulated" {% if p.package_type == "accumulated" %}selected{% endif %}>累计型</option>
+                                <option value="fixed" {% if p.package_type == "fixed" %}selected{% endif %}>固定核时型</option>
+                            </select>
+                            <input type="number" name="duration_days" value="{% if p.duration_days %}{{ p.duration_days }}{% endif %}" placeholder="有效天数" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                            <input type="number" step="0.1" name="accumulated_hours" value="{% if p.accumulated_hours %}{{ p.accumulated_hours }}{% endif %}" placeholder="累计时长" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                            <input type="number" step="0.1" name="core_hours" value="{{ p.core_hours }}" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                            <input type="number" step="0.01" name="price_ldc" value="{{ p.price_ldc }}" style="padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; width: 160px;">
+                            <label style="font-size: 12px; display: flex; align-items: center; gap: 4px;">
+                                <input type="hidden" name="is_active" value="0">
+                                <input type="checkbox" name="is_active" value="1" {% if p.is_active %}checked{% endif %}> 启用
+                            </label>
+                            <button type="submit" style="padding: 4px 12px; background: #2980b9; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer;">保存</button>
+                        </form>
+                    </details>
+                    {% if p.is_active %}
+                    <form method="post" action="/admin/packages/delete/{{ p.id }}" style="display: inline; margin-left: 4px;" onsubmit="return confirm('确认停用此套餐？');">
+                        <button type="submit" style="padding: 4px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 3px; font-size: 12px; cursor: pointer;">停用</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if packages|length == 0 %}
+            <tr>
+                <td colspan="9" style="padding: 30px; text-align: center; color: #999; font-size: 13px;">暂无套餐</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock content %}

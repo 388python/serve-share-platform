@@ -1,0 +1,91 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 充值{% endblock title %}
+
+{% block content %}
+<div class="page-header">
+    <h2>LDC 充值</h2>
+    <p class="page-subtitle">使用 LDC 积分兑换核时</p>
+</div>
+
+{% if success %}
+<div class="alert alert-success">{{ success }}</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card-grid">
+    <div class="card">
+        <div class="card-body">
+            <h3>充值说明</h3>
+            <div class="info-list">
+                <div class="info-row">
+                    <span class="info-label">充值倍率</span>
+                    <span class="info-value highlight">{{ "%.2f" | format(prefix="", value=recharge_multiplier) }}x</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">手续费</span>
+                    <span class="info-value">{{ "%.1f" | format(prefix="", value=recharge_fee_percent) }}%</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">当前余额</span>
+                    <span class="info-value highlight">
+                        {% if user %}
+                        {{ "%.1f" | format(prefix="", value=user.core_hours) }} 核时
+                        {% else %}
+                        --
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="recharge-tip">
+                <h4>计算公式</h4>
+                <p>获得核时 = LDC金额 × (1 - 手续费%) × 充值倍率</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <h3>创建充值订单</h3>
+            <form method="POST" action="/recharge/create" class="form">
+                <div class="form-group">
+                    <label for="amount_ldc">LDC 金额</label>
+                    <div class="input-with-suffix">
+                        <input type="number" id="amount_ldc" name="amount_ldc" value="10" min="0.01" step="0.01" required>
+                        <span class="input-suffix">LDC</span>
+                    </div>
+                </div>
+                <div class="cost-preview" id="recharge-preview">
+                    <span>预计获得: <strong id="preview-hours">--</strong> 核时</span>
+                </div>
+                <button type="submit" class="btn btn-primary btn-lg btn-block">创建订单</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script>
+(function() {
+    var input = document.getElementById('amount_ldc');
+    var preview = document.getElementById('preview-hours');
+    var multiplier = {{ recharge_multiplier }};
+    var feePercent = {{ recharge_fee_percent }};
+
+    function updatePreview() {
+        var amt = parseFloat(input.value) || 0;
+        var afterFee = amt * (1 - feePercent / 100);
+        var hours = afterFee * multiplier;
+        preview.textContent = hours.toFixed(1);
+    }
+
+    if (input) {
+        input.addEventListener('input', updatePreview);
+        updatePreview();
+    }
+})();
+</script>
+{% endblock scripts %}

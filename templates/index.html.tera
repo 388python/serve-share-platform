@@ -1,0 +1,111 @@
+{% extends "base.html.tera" %}
+
+{% block title %}{{ site_name }} - 公益服务器平台{% endblock title %}
+
+{% block content %}
+<section class="hero">
+    <h2>欢迎来到 {{ site_name }}</h2>
+    <p class="hero-subtitle">提供免费/低成本的公益服务器资源，支持开源社区发展</p>
+
+    {% if user %}
+    <div class="hero-balance">
+        <span class="balance-label">我的核时余额</span>
+        <span class="balance-value">{{ "%.1f" | format(prefix="", value=user.core_hours) }} 核时</span>
+    </div>
+    {% endif %}
+
+    <div class="hero-actions">
+        {% if not user %}
+        <a href="/login" class="btn btn-primary btn-lg">登录 / 注册</a>
+        {% endif %}
+    </div>
+</section>
+
+{% if user %}
+<section class="quick-actions">
+    <h3>快捷操作</h3>
+    <div class="action-grid">
+        <a href="/servers/contribute" class="action-card">
+            <span class="action-icon">➕</span>
+            <span class="action-title">贡献服务器</span>
+            <span class="action-desc">分享闲置资源，获取奖励</span>
+        </a>
+        <a href="/marketplace" class="action-card">
+            <span class="action-icon">🛒</span>
+            <span class="action-title">机器广场</span>
+            <span class="action-desc">浏览并创建虚拟机</span>
+        </a>
+        <a href="/my/vms" class="action-card">
+            <span class="action-icon">🖥️</span>
+            <span class="action-title">我的机器</span>
+            <span class="action-desc">管理您的虚拟机</span>
+        </a>
+        <a href="/recharge" class="action-card">
+            <span class="action-icon">💎</span>
+            <span class="action-title">充值</span>
+            <span class="action-desc">LDC 兑换核时</span>
+        </a>
+        <a href="/redeem" class="action-card">
+            <span class="action-icon">🎁</span>
+            <span class="action-title">兑换码</span>
+            <span class="action-desc">兑换核时奖励</span>
+        </a>
+        <a href="/packages" class="action-card">
+            <span class="action-icon">📦</span>
+            <span class="action-title">套餐</span>
+            <span class="action-desc">购买核时套餐</span>
+        </a>
+        <a href="/my/servers" class="action-card">
+            <span class="action-icon">📡</span>
+            <span class="action-title">我的服务器</span>
+            <span class="action-desc">查看贡献的服务器</span>
+        </a>
+        <a href="/sign-in" class="action-card">
+            <span class="action-icon">✅</span>
+            <span class="action-title">签到</span>
+            <span class="action-desc">每日签到领奖励</span>
+        </a>
+    </div>
+</section>
+{% endif %}
+
+<section class="features">
+    <h3>我们的服务</h3>
+    <div class="feature-grid">
+        <div class="feature-card">
+            <h4>🖥️ 虚拟主机</h4>
+            <p>提供高性能虚拟主机实例，支持 LXD/KVM 多种虚拟化技术</p>
+        </div>
+        <div class="feature-card">
+            <h4>⏱️ 算力时间</h4>
+            <p>通过 LDC 积分兑换算力时间，灵活使用，按需付费</p>
+        </div>
+        <div class="feature-card">
+            <h4>🔒 安全可靠</h4>
+            <p>SSH 代理访问，保障您的连接安全与数据传输</p>
+        </div>
+        <div class="feature-card">
+            <h4>💡 开源公益</h4>
+            <p>致力于为开源社区提供免费/低成本服务器资源</p>
+        </div>
+    </div>
+</section>
+
+<section class="status">
+    <h3>平台概况</h3>
+    <div class="status-grid">
+        <div class="status-card">
+            <span class="status-label">在线节点</span>
+            <span class="status-value">--</span>
+        </div>
+        <div class="status-card">
+            <span class="status-label">活跃用户</span>
+            <span class="status-value">--</span>
+        </div>
+        <div class="status-card">
+            <span class="status-label">可用资源</span>
+            <span class="status-value">--</span>
+        </div>
+    </div>
+</section>
+{% endblock content %}
