@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         let cfg = config::AppConfig::get();
         let start_port = cfg.ssh_proxy_port_start;
         // Start SSH proxy listeners on the port range
-        for port_offset in 0..100 {
+        for port_offset in 0..cfg.ssh_proxy_port_count {
             let port = start_port + port_offset;
             let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(l) => l,

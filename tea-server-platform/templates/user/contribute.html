@@ -75,7 +75,16 @@
                     </div>
 
                     <div class="mb-3 form-check">
-                        <input type="checkbox" class="form-check-input" id="use_bonus" name="use_bonus">
+                        {% if lock_bonus == "enabled" %}
+                            <input type="checkbox" name="use_bonus" checked disabled>
+                            <small class="text-muted">（管理员已强制开启赠金）</small>
+                        {% elif lock_bonus == "disabled" %}
+                            <input type="hidden" name="use_bonus" value="off">
+                            <input type="checkbox" name="use_bonus" disabled>
+                            <small class="text-muted">（管理员已强制关闭赠金）</small>
+                        {% else %}
+                            <input type="checkbox" name="use_bonus">
+                        {% endif %}
                         <label class="form-check-label" for="use_bonus">使用奖励</label>
                     </div>
 

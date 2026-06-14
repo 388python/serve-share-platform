@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub admin_password: String,
     pub platform_domain: String,
     pub ssh_proxy_port_start: u16,
+    pub ssh_proxy_port_count: u16,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -49,6 +50,7 @@ impl Default for AppConfig {
             admin_password: String::from("admin"),
             platform_domain: String::from("https://example.com"),
             ssh_proxy_port_start: 22000,
+            ssh_proxy_port_count: 100,
         }
     }
 }
@@ -88,6 +90,10 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(AppConfig::default().ssh_proxy_port_start),
+            ssh_proxy_port_count: std::env::var("SSH_PROXY_PORT_COUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100),
         };
 
         CONFIG

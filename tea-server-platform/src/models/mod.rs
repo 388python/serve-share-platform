@@ -16,6 +16,7 @@ pub struct User {
     pub is_banned: bool,
     pub created_at: DateTime<Utc>,
     pub last_checkin: Option<DateTime<Utc>>,
+    pub api_key: Option<String>,
 }
 
 // Table: servers

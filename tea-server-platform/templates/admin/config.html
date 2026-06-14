@@ -99,6 +99,17 @@
                         </div>
                     </div>
 
+                    <div class="mb-3">
+                        <label for="lock_bonus" class="form-label">赠金锁定模式</label>
+                        <select class="form-select" id="lock_bonus" name="lock_bonus">
+                            {% set lock_bonus_val = "" %}
+                            {% for c in configs %}{% if c.key == 'lock_bonus' %}{% set lock_bonus_val = c.value %}{% endif %}{% endfor %}
+                            <option value="unlocked" {% if lock_bonus_val == "unlocked" %}selected{% endif %}>不锁定（用户自由选择）</option>
+                            <option value="enabled" {% if lock_bonus_val == "enabled" %}selected{% endif %}>强制开启（赠金勾选且不可取消）</option>
+                            <option value="disabled" {% if lock_bonus_val == "disabled" %}selected{% endif %}>强制关闭（赠金不可勾选）</option>
+                        </select>
+                    </div>
+
                     <h5 class="mb-3 mt-4">全局倍率设置</h5>
                     <div class="row">
                         <div class="col-md-6 mb-3">

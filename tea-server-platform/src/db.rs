@@ -147,6 +147,11 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Add api_key column to users (ignore error if already exists)
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN api_key TEXT")
+        .execute(pool)
+        .await;
+
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
         ("checkin_enabled", "true"),
@@ -158,6 +163,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("withdraw_fee", "0.0"),
         ("virt_type", "lxd"),
         ("select_mode", "market"),
+        ("lock_bonus", "unlocked"),
         ("global_cpu_multiplier", "1.0"),
         ("global_memory_multiplier", "1.0"),
         ("global_bandwidth_multiplier", "1.0"),
@@ -169,6 +175,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_client_secret", ""),
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
+        ("admin_api_key", ""),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

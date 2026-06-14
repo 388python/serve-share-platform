@@ -250,6 +250,9 @@ pub async fn contribute_server_page(
         db::get_config_sync("select_mode").unwrap_or_else(|| "market".to_string());
     ctx.insert("select_mode", &select_mode);
 
+    let lock_bonus = db::get_config("lock_bonus").await.unwrap_or_else(|| "unlocked".to_string());
+    ctx.insert("lock_bonus", &lock_bonus);
+
     let rendered = state
         .templates
         .render("user/contribute.html", &ctx)
@@ -1550,6 +1553,7 @@ pub struct AdminUserEditForm {
     pub is_banned: Option<bool>,
     pub core_hours: Option<f64>,
     pub ldc_balance: Option<f64>,
+    pub is_admin: Option<String>,
 }
 
 pub async fn admin_user_edit(
@@ -1558,7 +1562,7 @@ pub async fn admin_user_edit(
     Path(path): Path<MachineIdPath>,
     Form(form): Form<AdminUserEditForm>,
 ) -> Result<impl IntoResponse, Redirect> {
-    let (_user_id, _username) = require_admin(&cookies)?;
+    let (admin_user_id, _admin_username) = require_admin(&cookies)?;
 
     let pool = db::get_db();
 
@@ -1582,6 +1586,24 @@ pub async fn admin_user_edit(
             .bind(path.id)
             .execute(pool)
             .await;
+    }
+
+    // Handle is_admin: checkbox value is "on" when checked, absent when unchecked
+    if let Some(is_admin_val) = &form.is_admin {
+        if is_admin_val == "on" {
+            let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
+                .bind(path.id)
+                .execute(pool)
+                .await;
+        }
+    } else {
+        // Checkbox not checked = revoke admin, but protect current admin
+        if path.id != admin_user_id {
+            let _ = sqlx::query("UPDATE users SET is_admin = 0 WHERE id = ?")
+                .bind(path.id)
+                .execute(pool)
+                .await;
+        }
     }
 
     Ok(Redirect::to("/admin/users"))
