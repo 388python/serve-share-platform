@@ -141,7 +141,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
-        .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
@@ -188,7 +187,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites", get(handlers::admin_invites))
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
-        .route("/admin/violations", get(handlers::admin_violations))
         // API routes (RESTful JSON)
         .merge(handlers::api::router(app_state.clone()))
         // Static files
@@ -335,29 +333,12 @@ async fn auth_callback(
 
             match invite_valid {
                 Some(invite_id) => {
-                    // Fetch public_note before consuming the invite
-                    let public_note: Option<String> = sqlx::query_scalar(
-                        "SELECT public_note FROM invites WHERE id = ?",
-                    )
-                    .bind(invite_id)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None)
-                    .unwrap_or(None);
-
                     sqlx::query("UPDATE invites SET is_used = 1, used_by = (SELECT id FROM users WHERE linuxdo_id = ? LIMIT 1), used_at = CURRENT_TIMESTAMP WHERE id = ?")
                         .bind(user_info.id)
                         .bind(invite_id)
                         .execute(pool)
                         .await
                         .ok();
-
-                    // If public_note exists, redirect with welcome message
-                    if let Some(note) = public_note {
-                        if !note.is_empty() {
-                            return Redirect::to(&format!("/?welcome={}", urlencoding::encode(&note))).into_response();
-                        }
-                    }
                 }
                 None => {
                     return Redirect::to("/?error=invalid_invite").into_response();

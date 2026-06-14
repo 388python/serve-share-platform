@@ -21,14 +21,6 @@
                         <label for="count" class="form-label">生成数量</label>
                         <input type="number" class="form-control" id="count" name="count" required min="1" max="1000" value="10">
                     </div>
-                    <div class="mb-3">
-                        <label for="private_note" class="form-label">私有备注</label>
-                        <input type="text" class="form-control" id="private_note" name="private_note" placeholder="仅管理员可见">
-                    </div>
-                    <div class="mb-3">
-                        <label for="public_note" class="form-label">公开备注</label>
-                        <input type="text" class="form-control" id="public_note" name="public_note" placeholder="注册时显示给用户">
-                    </div>
                     <button type="submit" class="btn btn-primary w-100">生成邀请码</button>
                 </form>
             </div>
@@ -50,8 +42,6 @@
                                 <th>邀请码</th>
                                 <th>已使用</th>
                                 <th>使用者</th>
-                                <th>私有备注</th>
-                                <th>公开备注</th>
                                 <th>创建时间</th>
                             </tr>
                         </thead>
@@ -68,8 +58,6 @@
                                     {% endif %}
                                 </td>
                                 <td>{{ inv.used_by | default(value="-") }}</td>
-                                <td>{{ inv.private_note | default(value="-") }}</td>
-                                <td>{{ inv.public_note | default(value="-") }}</td>
                                 <td>{{ inv.created_at }}</td>
                             </tr>
                             {% endfor %}

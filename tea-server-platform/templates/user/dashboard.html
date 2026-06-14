@@ -48,29 +48,6 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">我的 API Key</h5>
-                <form method="post" action="/dashboard/api-key">
-                    <button type="submit" class="btn btn-sm btn-outline-primary">重新生成</button>
-                </form>
-            </div>
-            <div class="card-body">
-                {% if api_key %}
-                <div class="input-group">
-                    <input type="text" class="form-control" id="apiKeyInput" value="{{ api_key }}" readonly>
-                    <button class="btn btn-outline-secondary" type="button" onclick="copyApiKey()">复制</button>
-                </div>
-                {% else %}
-                <p class="text-muted mb-0">尚未生成 API Key，请点击"重新生成"按钮创建。</p>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">我的机器</h5>
                 <a href="/market" class="btn btn-primary btn-sm">创建机器</a>
             </div>
@@ -190,18 +167,3 @@
     </div>
 </div>
 {% endblock content %}
-
-{% block scripts %}
-<script>
-function copyApiKey() {
-    var input = document.getElementById('apiKeyInput');
-    input.select();
-    input.setSelectionRange(0, 99999);
-    navigator.clipboard.writeText(input.value).then(function() {
-        alert('API Key 已复制到剪贴板');
-    }, function() {
-        alert('复制失败，请手动复制');
-    });
-}
-</script>
-{% endblock scripts %}

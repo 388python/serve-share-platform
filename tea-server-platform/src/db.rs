@@ -142,15 +142,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-
-        CREATE TABLE IF NOT EXISTS violations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            server_id INTEGER,
-            machine_id INTEGER,
-            violation_type TEXT NOT NULL,
-            detail TEXT DEFAULT '',
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
         "#,
     )
     .execute(pool)
@@ -158,14 +149,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
 
     // Add api_key column to users (ignore error if already exists)
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN api_key TEXT")
-        .execute(pool)
-        .await;
-
-    // Add note columns to invites (ignore error if already exists)
-    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN public_note TEXT DEFAULT ''")
         .execute(pool)
         .await;
 
@@ -193,7 +176,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
         ("admin_api_key", ""),
-        ("health_check_message", "欢迎使用茶的服务器公益站"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

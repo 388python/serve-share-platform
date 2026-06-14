@@ -29,20 +29,6 @@ if ! command -v python3 &>/dev/null; then
     apt-get install -y -qq python3
 fi
 
-# --- Install OpenGFW for traffic monitoring ---
-echo "[*] Installing OpenGFW..."
-if ! command -v openGFW &> /dev/null; then
-    # Install dependencies
-    apt-get update
-    apt-get install -y iptables nftables || true
-    # Download and install OpenGFW
-    curl -sSL https://github.com/apernet/OpenGFW/releases/latest/download/openGFW-linux-amd64 -o /usr/local/bin/openGFW 2>/dev/null || true
-    chmod +x /usr/local/bin/openGFW 2>/dev/null || true
-fi
-
-# Install nethogs for bandwidth monitoring
-apt-get install -y nethogs || true
-
 # --- Deploy agent script ---
 mkdir -p "${INSTALL_DIR}"
 cat > "${INSTALL_DIR}/agent.py" << 'PYEOF'
