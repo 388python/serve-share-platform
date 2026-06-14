@@ -108,7 +108,8 @@ pub struct SettingsUpdateForm {
     pub recharge_multiplier: String,
     pub recharge_fee_percent: String,
     pub withdraw_fee_percent: String,
-    pub virtualization_type: String,
+    pub virtualization_lxd: Option<String>,
+    pub virtualization_kvm: Option<String>,
     pub machine_select_mode: String,
     pub new_user_core_hours: String,
     pub sign_in_core_hours: String,
@@ -249,6 +250,16 @@ pub async fn settings_page(
         context.insert(key, value);
     }
 
+    // Parse virtualization_types for checkbox states
+    let virt_types = settings.iter()
+        .find(|(k, _)| k == "virtualization_types")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let lxd_enabled = virt_types.contains("lxd");
+    let kvm_enabled = virt_types.contains("kvm");
+    context.insert("virtualization_lxd", &lxd_enabled);
+    context.insert("virtualization_kvm", &kvm_enabled);
+
     render_admin(&state.tera, "admin/settings.html.tera", &context)
 }
 
@@ -261,23 +272,37 @@ pub async fn settings_update(
         return (StatusCode::UNAUTHORIZED, "请先登录管理后台").into_response();
     }
 
-    let pairs: Vec<(&str, &str)> = vec![
-        ("site_name", form.site_name.as_str()),
-        ("registration_open", form.registration_open.as_str()),
-        ("invite_code_required", form.invite_code_required.as_str()),
-        ("sign_in_enabled", form.sign_in_enabled.as_str()),
-        ("free_package_enabled", form.free_package_enabled.as_str()),
-        ("global_cpu_multiplier", form.global_cpu_multiplier.as_str()),
-        ("global_memory_multiplier", form.global_memory_multiplier.as_str()),
-        ("global_bandwidth_multiplier", form.global_bandwidth_multiplier.as_str()),
-        ("global_disk_multiplier", form.global_disk_multiplier.as_str()),
-        ("recharge_multiplier", form.recharge_multiplier.as_str()),
-        ("recharge_fee_percent", form.recharge_fee_percent.as_str()),
-        ("withdraw_fee_percent", form.withdraw_fee_percent.as_str()),
-        ("virtualization_type", form.virtualization_type.as_str()),
-        ("machine_select_mode", form.machine_select_mode.as_str()),
-        ("new_user_core_hours", form.new_user_core_hours.as_str()),
-        ("sign_in_core_hours", form.sign_in_core_hours.as_str()),
+    // Build virtualization_types from checkboxes
+    let mut virt_types = Vec::new();
+    if form.virtualization_lxd.as_deref() == Some("1") {
+        virt_types.push("lxd");
+    }
+    if form.virtualization_kvm.as_deref() == Some("1") {
+        virt_types.push("kvm");
+    }
+    let virtualization_types = if virt_types.is_empty() {
+        "lxd".to_string()
+    } else {
+        virt_types.join(",")
+    };
+
+    let pairs: Vec<(&str, String)>= vec![
+        ("site_name", form.site_name),
+        ("registration_open", form.registration_open),
+        ("invite_code_required", form.invite_code_required),
+        ("sign_in_enabled", form.sign_in_enabled),
+        ("free_package_enabled", form.free_package_enabled),
+        ("global_cpu_multiplier", form.global_cpu_multiplier),
+        ("global_memory_multiplier", form.global_memory_multiplier),
+        ("global_bandwidth_multiplier", form.global_bandwidth_multiplier),
+        ("global_disk_multiplier", form.global_disk_multiplier),
+        ("recharge_multiplier", form.recharge_multiplier),
+        ("recharge_fee_percent", form.recharge_fee_percent),
+        ("withdraw_fee_percent", form.withdraw_fee_percent),
+        ("virtualization_types", virtualization_types),
+        ("machine_select_mode", form.machine_select_mode),
+        ("new_user_core_hours", form.new_user_core_hours),
+        ("sign_in_core_hours", form.sign_in_core_hours),
     ];
 
     for (key, value) in &pairs {
@@ -314,7 +339,7 @@ async fn load_all_settings(db: &SqlitePool) -> Vec<(String, String)> {
         "recharge_multiplier",
         "recharge_fee_percent",
         "withdraw_fee_percent",
-        "virtualization_type",
+        "virtualization_types",
         "machine_select_mode",
         "new_user_core_hours",
         "sign_in_core_hours",

@@ -261,7 +261,7 @@ async fn init_default_settings(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ("recharge_multiplier", "1.0"),
         ("recharge_fee_percent", "0.0"),
         ("withdraw_fee_percent", "5.0"),
-        ("virtualization_type", "lxd"),
+        ("virtualization_types", "lxd,kvm"),
         ("machine_select_mode", "marketplace"),
         ("new_user_core_hours", "10.0"),
         ("sign_in_core_hours", "2.0"),

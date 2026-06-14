@@ -130,6 +130,16 @@ pub async fn contribute_page(
         }
     };
 
+    // 获取启用的虚拟化方式
+    let virt_types = crate::routes::auth::get_setting(&state.db, "virtualization_types")
+        .await
+        .unwrap_or_else(|| "lxd".to_string());
+    let lxd_enabled = virt_types.contains("lxd");
+    let kvm_enabled = virt_types.contains("kvm");
+    context.insert("virtualization_lxd", &lxd_enabled);
+    context.insert("virtualization_kvm", &kvm_enabled);
+    context.insert("virtualization_default", if lxd_enabled { "lxd" } else { "kvm" });
+
     render_template(&state.tera, "contribute.html.tera", &context)
 }
 

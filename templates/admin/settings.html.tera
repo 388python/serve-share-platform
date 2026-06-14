@@ -21,10 +21,16 @@
 
         <div>
             <label style="display: block; font-size: 13px; color: #555; margin-bottom: 4px;">虚拟化方式</label>
-            <select name="virtualization_type" style="width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
-                <option value="lxd" {% if virtualization_type == "lxd" %}selected{% endif %}>LXD</option>
-                <option value="kvm" {% if virtualization_type == "kvm" %}selected{% endif %}>KVM</option>
-            </select>
+            <div style="display: flex; gap: 16px; padding-top: 6px;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" name="virtualization_lxd" value="1" {% if virtualization_lxd %}checked{% endif %}>
+                    LXD
+                </label>
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" name="virtualization_kvm" value="1" {% if virtualization_kvm %}checked{% endif %}>
+                    KVM
+                </label>
+            </div>
         </div>
 
         <div>
