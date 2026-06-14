@@ -187,6 +187,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites", get(handlers::admin_invites))
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
+        // API routes (RESTful JSON)
+        .merge(handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())

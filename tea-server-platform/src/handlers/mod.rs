@@ -9,6 +9,8 @@ use tera::Context;
 use tower_cookies::{cookie::time::Duration, Cookie, Cookies};
 use uuid::Uuid;
 
+pub mod api;
+
 use crate::config::AppConfig;
 use crate::db;
 use crate::models::*;
