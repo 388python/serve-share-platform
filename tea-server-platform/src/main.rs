@@ -45,13 +45,88 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             let pool = db::get_db();
             let now = chrono::Utc::now();
-            let _ = sqlx::query(
-                "UPDATE machines SET status = 'stopped' WHERE status = 'running' AND expires_at < ?",
+
+            // Get expired machines
+            let expired: Vec<(i64, i64)> = sqlx::query_as(
+                "SELECT id, server_id FROM machines WHERE status = 'running' AND expires_at < ?",
             )
             .bind(now)
-            .execute(pool)
-            .await;
-            tracing::debug!("Expired machine cleanup completed");
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+            for (machine_id, server_id) in &expired {
+                let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
+                    .bind(machine_id)
+                    .execute(pool)
+                    .await;
+
+                // Call agent to stop VM
+                let server: Option<(String,)> = sqlx::query_as(
+                    "SELECT ip FROM servers WHERE id = ?",
+                )
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((ip,)) = server {
+                    let machine_name = format!("machine-{}", machine_id);
+                    let agent_url = format!("http://{}:19527", ip);
+                    let client = reqwest::Client::new();
+                    let _ = client
+                        .post(&format!("{}/stop/{}", agent_url, machine_name))
+                        .header("X-API-Key", "tea-platform-agent-key")
+                        .timeout(std::time::Duration::from_secs(15))
+                        .send()
+                        .await;
+                }
+            }
+            tracing::debug!("Expired machine cleanup: {} machines stopped", expired.len());
+        }
+    });
+
+    // Background task: SSH proxy listener (start on port range)
+    tokio::spawn(async move {
+        let cfg = config::AppConfig::get();
+        let start_port = cfg.ssh_proxy_port_start;
+        // Start SSH proxy listeners on the port range
+        for port_offset in 0..100 {
+            let port = start_port + port_offset;
+            let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            tokio::spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((mut incoming, _addr)) => {
+                            // Forward to the corresponding server
+                            let pool = db::get_db();
+                            let server: Option<(i32, String)> = sqlx::query_as(
+                                "SELECT ssh_port, ip FROM servers WHERE proxy_port = ? AND is_active = 1",
+                            )
+                            .bind(port as i32)
+                            .fetch_optional(pool)
+                            .await
+                            .unwrap_or(None);
+
+                            if let Some((ssh_port, ip)) = server {
+                                let target = format!("{}:{}", ip, ssh_port);
+                                if let Ok(mut outgoing) = tokio::net::TcpStream::connect(&target).await {
+                                    let (mut ri, mut wi) = tokio::io::split(incoming);
+                                    let (mut ro, mut wo) = tokio::io::split(outgoing);
+                                    let _ = tokio::join!(
+                                        tokio::io::copy(&mut ri, &mut wo),
+                                        tokio::io::copy(&mut ro, &mut wi),
+                                    );
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
         }
     });
 
@@ -223,12 +298,59 @@ async fn auth_callback(
         core_hours = ch;
         ldc_balance = ldc;
     } else {
+        // Check registration enabled
+        let reg_enabled = db::get_config("registration_enabled").await
+            .map(|v| v == "true")
+            .unwrap_or(true);
+        if !reg_enabled {
+            return Redirect::to("/?error=registration_closed").into_response();
+        }
+
+        // Check invite requirement
+        let require_invite = db::get_config("require_invite").await
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        let new_user_core_hours: f64 = db::get_config("new_user_core_hours").await
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
+
+        if require_invite {
+            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
+            if invite_code.is_empty() {
+                return Redirect::to("/?error=invite_required").into_response();
+            }
+            // Verify and consume invite code
+            let invite_valid: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM invites WHERE code = ? AND is_used = 0",
+            )
+            .bind(&invite_code)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match invite_valid {
+                Some(invite_id) => {
+                    sqlx::query("UPDATE invites SET is_used = 1, used_by = (SELECT id FROM users WHERE linuxdo_id = ? LIMIT 1), used_at = CURRENT_TIMESTAMP WHERE id = ?")
+                        .bind(user_info.id)
+                        .bind(invite_id)
+                        .execute(pool)
+                        .await
+                        .ok();
+                }
+                None => {
+                    return Redirect::to("/?error=invalid_invite").into_response();
+                }
+            }
+        }
+
         sqlx::query(
-            "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, 0, 0)",
+            "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
         )
         .bind(user_info.id)
         .bind(user_info.effective_name())
         .bind(user_info.effective_email())
+        .bind(new_user_core_hours)
         .execute(pool)
         .await
         .unwrap_or_else(|e| {

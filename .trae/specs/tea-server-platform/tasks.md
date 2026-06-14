@@ -83,7 +83,7 @@
 - [x] Task 13: 最终集成与推送
   - [x] 13.1 编写 Dockerfile 和 docker-compose.yml
   - [x] 13.2 编写 .env.example 和 .gitignore
-  - [ ] 13.3 推送代码到远程仓库
+  - [x] 13.3 推送代码到远程仓库
 
 # Task Dependencies
 

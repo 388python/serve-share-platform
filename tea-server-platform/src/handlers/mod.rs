@@ -491,6 +491,19 @@ pub async fn create_machine(
         _ => return Ok(Redirect::to("/market")),
     };
 
+    let mut hours = form.hours.unwrap_or(24) as i64;
+    let mut expires_at = now + chrono::Duration::hours(hours);
+
+    // Check machine expiry does not exceed server expiry
+    if expires_at > server.expires_at {
+        let remaining_hours = (server.expires_at - now).num_hours().max(0);
+        if remaining_hours == 0 {
+            return Ok(Redirect::to("/market?error=server_expired"));
+        }
+        hours = remaining_hours.min(hours);
+        expires_at = now + chrono::Duration::hours(hours);
+    }
+
     // Calculate core hours per hour
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
         form.cpu_cores,
@@ -504,15 +517,12 @@ pub async fn create_machine(
     )
     .await;
 
-    let hours = form.hours.unwrap_or(24);
     let total_cost = ch_per_hour * hours as f64;
 
     // Check if user has enough core hours
     if core_hours < total_cost {
         return Ok(Redirect::to("/recharge"));
     }
-
-    let expires_at = now + chrono::Duration::hours(hours as i64);
 
     // Get proxy port from server
     let proxy_port = server.proxy_port;
@@ -530,7 +540,7 @@ pub async fn create_machine(
     set_session_cookie(&cookies, user_id, &username, is_admin, new_core_hours, ldc_balance);
 
     // Create machine record
-    let _ = sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
     )
     .bind(user_id)
@@ -546,6 +556,8 @@ pub async fn create_machine(
     .await
     .unwrap();
 
+    let machine_id = result.last_insert_rowid();
+
     // Update total_usage_hours
     let _ = sqlx::query(
         "UPDATE users SET total_usage_hours = total_usage_hours + ? WHERE id = ?",
@@ -554,6 +566,86 @@ pub async fn create_machine(
     .bind(user_id)
     .execute(pool)
     .await;
+
+    // Check cumulative packages for auto-grant
+    let total_usage: Option<f64> = sqlx::query_scalar(
+        "SELECT total_usage_hours FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if let Some(total_hours) = total_usage {
+        let cumulative_packages: Vec<RechargePackage> = sqlx::query_as(
+            "SELECT * FROM recharge_packages WHERE is_cumulative = 1 AND is_active = 1 AND cumulative_hours IS NOT NULL",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for pkg in cumulative_packages {
+            if let Some(threshold) = pkg.cumulative_hours {
+                if total_hours >= threshold {
+                    // Check if already granted
+                    let already_granted: Option<i64> = sqlx::query_scalar(
+                        "SELECT id FROM user_packages WHERE user_id = ? AND package_id = ?",
+                    )
+                    .bind(user_id)
+                    .bind(pkg.id)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+
+                    if already_granted.is_none() {
+                        let _ = sqlx::query(
+                            "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, ?, 1)",
+                        )
+                        .bind(user_id)
+                        .bind(pkg.id)
+                        .bind(pkg.core_hours)
+                        .execute(pool)
+                        .await;
+
+                        // Grant core hours
+                        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                            .bind(pkg.core_hours)
+                            .bind(user_id)
+                            .execute(pool)
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+
+    // Trigger agent to create VM on the server
+    let server_ip = server.ip.clone();
+    let server_ssh_port = server.ssh_port;
+    let server_ssh_key = server.ssh_key.clone();
+    let machine_name = format!("machine-{}", machine_id);
+    let virt_type = server.virt_type.clone();
+    let cpu = form.cpu_cores;
+    let memory = form.memory_gb;
+    let disk = form.disk_gb;
+
+    tokio::spawn(async move {
+        let agent_url = format!("http://{}:19527", server_ip);
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(&format!("{}/create", agent_url))
+            .header("X-API-Key", "tea-platform-agent-key")
+            .json(&serde_json::json!({
+                "name": machine_name,
+                "cpu": cpu,
+                "memory": (memory * 1024.0) as i64,
+                "disk": disk,
+                "virt_type": virt_type,
+            }))
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await;
+    });
 
     Ok(Redirect::to("/machines"))
 }
@@ -597,19 +689,40 @@ pub async fn stop_machine(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let machine: Option<(i64,)> =
-        sqlx::query_as("SELECT user_id FROM machines WHERE id = ?")
+    let machine: Option<(i64, i64, String)> =
+        sqlx::query_as("SELECT user_id, server_id, virt_type FROM machines WHERE id = ?")
             .bind(path.id)
             .fetch_optional(pool)
             .await
             .unwrap_or(None);
 
     match machine {
-        Some((owner_id,)) if owner_id == user_id => {
+        Some((owner_id, server_id, virt_type)) if owner_id == user_id => {
             let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
                 .bind(path.id)
                 .execute(pool)
                 .await;
+
+            // Call agent to stop VM
+            let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+            if let Some(s) = server {
+                let machine_name = format!("machine-{}", path.id);
+                tokio::spawn(async move {
+                    let agent_url = format!("http://{}:19527", s.ip);
+                    let client = reqwest::Client::new();
+                    let _ = client
+                        .post(&format!("{}/stop/{}", agent_url, machine_name))
+                        .header("X-API-Key", "tea-platform-agent-key")
+                        .timeout(std::time::Duration::from_secs(15))
+                        .send()
+                        .await;
+                });
+            }
         }
         _ => {}
     }
@@ -625,19 +738,40 @@ pub async fn delete_machine(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let machine: Option<(i64,)> =
-        sqlx::query_as("SELECT user_id FROM machines WHERE id = ?")
+    let machine: Option<(i64, i64)> =
+        sqlx::query_as("SELECT user_id, server_id FROM machines WHERE id = ?")
             .bind(path.id)
             .fetch_optional(pool)
             .await
             .unwrap_or(None);
 
     match machine {
-        Some((owner_id,)) if owner_id == user_id => {
+        Some((owner_id, server_id)) if owner_id == user_id => {
             let _ = sqlx::query("DELETE FROM machines WHERE id = ?")
                 .bind(path.id)
                 .execute(pool)
                 .await;
+
+            // Call agent to delete VM
+            let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+            if let Some(s) = server {
+                let machine_name = format!("machine-{}", path.id);
+                tokio::spawn(async move {
+                    let agent_url = format!("http://{}:19527", s.ip);
+                    let client = reqwest::Client::new();
+                    let _ = client
+                        .delete(&format!("{}/{}", agent_url, machine_name))
+                        .header("X-API-Key", "tea-platform-agent-key")
+                        .timeout(std::time::Duration::from_secs(15))
+                        .send()
+                        .await;
+                });
+            }
         }
         _ => {}
     }
