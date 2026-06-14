@@ -1,0 +1,47 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 首页{% endblock title %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <h1 class="display-4 mb-3">欢迎来到 {{ site_name }}</h1>
+                <p class="lead text-muted mb-4">公益服务器分享平台，让每个人都能享受计算资源</p>
+
+                {% if user_name %}
+                <div class="row mt-4">
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <div class="stat-value text-primary">{{ user_balance }}</div>
+                            <div class="stat-label">核时余额</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <div class="stat-value text-success">{{ user_ldc }}</div>
+                            <div class="stat-label">LDC 余额</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="stat-card">
+                            <a href="/user/machines" class="btn btn-primary btn-lg">创建机器</a>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="mt-4">
+                    <p class="text-muted">请先登录以使用平台功能</p>
+                    <a href="/login" class="btn btn-primary btn-lg linuxdo-login-btn">
+                        <img src="https://linux.do/uploads/default/original/3X/b/4/b4fa45d8b03a4c0b5e509d12ab96cd20c18d5df1.png"
+                             alt="LinuxDo" style="height:24px;">
+                        使用 LinuxDo 登录
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

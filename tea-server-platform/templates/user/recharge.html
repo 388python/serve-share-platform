@@ -1,0 +1,82 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 充值{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>充值</h2>
+        <p class="text-muted">为你的账户充值 LDC 余额</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mx-auto">
+        <div class="card">
+            <div class="card-body">
+                <div class="mb-4">
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <div class="card bg-light">
+                                <div class="card-body">
+                                    <h6>当前 LDC</h6>
+                                    <h4 class="text-primary">{{ user_ldc | default(value="0") }}</h4>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="card bg-light">
+                                <div class="card-body">
+                                    <h6>当前核时</h6>
+                                    <h4 class="text-success">{{ user_balance | default(value="0") }}</h4>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="alert alert-info">
+                    <h6 class="alert-heading">充值说明</h6>
+                    <p class="mb-1">充值倍率: {{ recharge_multiplier | default(value="1.0") }}x</p>
+                    <p class="mb-0">每充值 1 元获得 {{ recharge_multiplier | default(value="1.0") }} LDC</p>
+                </div>
+
+                <form method="post" action="/recharge">
+                    <div class="mb-3">
+                        <label for="money" class="form-label">充值金额 (元)</label>
+                        <input type="number" class="form-control" id="money" name="money" required min="0.01" step="0.01" placeholder="输入充值金额">
+                    </div>
+                    <div class="mb-3">
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <p class="mb-1">你将获得 <strong id="previewAmount">0</strong> LDC</p>
+                                <p class="mb-0 small text-muted" id="previewFee">手续费: 0 LDC</p>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">使用 LinuxDo Credit 支付</button>
+                </form>
+
+                <div class="mt-3 text-center">
+                    <a href="/packages" class="btn btn-outline-secondary">查看套餐</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script>
+document.getElementById('money').addEventListener('input', function() {
+    var amount = parseFloat(this.value) || 0;
+    var multiplier = {{ recharge_multiplier | default(value="1.0") }};
+    var feeRate = 0;
+    var gross = amount * multiplier;
+    var fee = gross * feeRate;
+    var net = gross - fee;
+    document.getElementById('previewAmount').textContent = net.toFixed(2);
+    document.getElementById('previewFee').textContent = '手续费: ' + fee.toFixed(2) + ' LDC';
+});
+</script>
+{% endblock scripts %}

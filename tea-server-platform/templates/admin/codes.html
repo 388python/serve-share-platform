@@ -1,0 +1,113 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 兑换码管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>兑换码管理</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">生成兑换码</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/admin/codes/generate">
+                    <div class="mb-3">
+                        <label for="code_type" class="form-label">兑换码类型</label>
+                        <select class="form-select" id="code_type" name="code_type" onchange="toggleCodeFields()">
+                            <option value="core_hours">核时兑换码</option>
+                            <option value="subscription">套餐兑换码</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="count" class="form-label">生成数量</label>
+                        <input type="number" class="form-control" id="count" name="count" required min="1" max="1000" value="1">
+                    </div>
+                    <div class="mb-3" id="packageField" style="display:none">
+                        <label for="package_id" class="form-label">套餐</label>
+                        <select class="form-select" id="package_id" name="package_id">
+                            {% for p in packages %}
+                            <option value="{{ p.id }}">{{ p.name }} ({{ p.core_hours }} 核时 / {{ p.price_ldc }} LDC)</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3" id="coreHoursField">
+                        <label for="core_hours" class="form-label">核时数</label>
+                        <input type="number" class="form-control" id="core_hours" name="core_hours" step="0.1" min="0" value="100">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">生成兑换码</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已生成的兑换码</h5>
+            </div>
+            <div class="card-body">
+                {% if codes %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>兑换码</th>
+                                <th>类型</th>
+                                <th>已使用</th>
+                                <th>使用者</th>
+                                <th>创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for c in codes %}
+                            <tr>
+                                <td>{{ c.id }}</td>
+                                <td><code>{{ c.code }}</code></td>
+                                <td>
+                                    {% if c.code_type == "core_hours" %}
+                                    <span class="badge bg-primary">核时</span>
+                                    {% else %}
+                                    <span class="badge bg-info">套餐</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if c.is_used %}
+                                    <span class="badge bg-success">是</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ c.used_by | default(value="-") }}</td>
+                                <td>{{ c.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无兑换码</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script>
+function toggleCodeFields() {
+    var type = document.getElementById('code_type').value;
+    document.getElementById('packageField').style.display = type === 'subscription' ? 'block' : 'none';
+    document.getElementById('coreHoursField').style.display = type === 'core_hours' ? 'block' : 'none';
+}
+// Initialize on load
+toggleCodeFields();
+</script>
+{% endblock scripts %}

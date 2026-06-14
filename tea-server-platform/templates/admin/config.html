@@ -1,0 +1,169 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 系统配置{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>系统配置</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-body">
+                <form method="post" action="/admin/config">
+                    <h5 class="mb-3">基础设置</h5>
+                    <div class="mb-3">
+                        <label for="site_name" class="form-label">站点名称</label>
+                        <input type="text" class="form-control" id="site_name" name="site_name" value="{{ site_name }}">
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="checkin_enabled" value="false">
+                                <input type="checkbox" class="form-check-input" id="checkin_enabled" name="checkin_enabled" value="true" {% if configs | filter(attribute="key", value="checkin_enabled") | map(attribute="value") | first == "true" %}checked{% endif %}>
+                                <label class="form-check-label" for="checkin_enabled">启用签到</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="free_plan_enabled" value="false">
+                                <input type="checkbox" class="form-check-input" id="free_plan_enabled" name="free_plan_enabled" value="true" {% if configs | filter(attribute="key", value="free_plan_enabled") | map(attribute="value") | first == "true" %}checked{% endif %}>
+                                <label class="form-check-label" for="free_plan_enabled">启用免费计划</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="registration_enabled" value="false">
+                                <input type="checkbox" class="form-check-input" id="registration_enabled" name="registration_enabled" value="true" {% if configs | filter(attribute="key", value="registration_enabled") | map(attribute="value") | first == "true" %}checked{% endif %}>
+                                <label class="form-check-label" for="registration_enabled">启用注册</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="require_invite" value="false">
+                                <input type="checkbox" class="form-check-input" id="require_invite" name="require_invite" value="true" {% if configs | filter(attribute="key", value="require_invite") | map(attribute="value") | first == "true" %}checked{% endif %}>
+                                <label class="form-check-label" for="require_invite">需要邀请码</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">财务设置</h5>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="recharge_multiplier" class="form-label">充值倍率</label>
+                            <input type="number" class="form-control" id="recharge_multiplier" name="recharge_multiplier" value="{% for c in configs %}{% if c.key == 'recharge_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="recharge_fee" class="form-label">充值手续费 (%)</label>
+                            <input type="number" class="form-control" id="recharge_fee" name="recharge_fee" value="{% for c in configs %}{% if c.key == 'recharge_fee' %}{{ c.value }}{% endif %}{% endfor %}" step="0.01" min="0">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="withdraw_fee" class="form-label">提现手续费 (%)</label>
+                            <input type="number" class="form-control" id="withdraw_fee" name="withdraw_fee" value="{% for c in configs %}{% if c.key == 'withdraw_fee' %}{{ c.value }}{% endif %}{% endfor %}" step="0.01" min="0">
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">虚拟化设置</h5>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="virt_type" class="form-label">虚拟化类型</label>
+                            <select class="form-select" id="virt_type" name="virt_type">
+                                <option value="lxd" {% for c in configs %}{% if c.key == 'virt_type' and c.value == 'lxd' %}selected{% endif %}{% endfor %}>LXD</option>
+                                <option value="kvm" {% for c in configs %}{% if c.key == 'virt_type' and c.value == 'kvm' %}selected{% endif %}{% endfor %}>KVM</option>
+                                <option value="lxd,kvm" {% for c in configs %}{% if c.key == 'virt_type' and c.value == 'lxd,kvm' %}selected{% endif %}{% endfor %}>LXD + KVM</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">选择模式</label>
+                            <div>
+                                {% set select_mode = "" %}
+                                {% for c in configs %}{% if c.key == 'select_mode' %}{% set select_mode = c.value %}{% endif %}{% endfor %}
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="select_mode" id="select_market" value="market" {% if select_mode == "market" or select_mode == "" %}checked{% endif %}>
+                                    <label class="form-check-label" for="select_market">市场模式</label>
+                                </div>
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="select_mode" id="select_auto" value="auto" {% if select_mode == "auto" %}checked{% endif %}>
+                                    <label class="form-check-label" for="select_auto">自动模式</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">全局倍率设置</h5>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="global_cpu_multiplier" class="form-label">全局 CPU 倍率</label>
+                            <input type="number" class="form-control" id="global_cpu_multiplier" name="global_cpu_multiplier" value="{% for c in configs %}{% if c.key == 'global_cpu_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="global_memory_multiplier" class="form-label">全局内存倍率</label>
+                            <input type="number" class="form-control" id="global_memory_multiplier" name="global_memory_multiplier" value="{% for c in configs %}{% if c.key == 'global_memory_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="global_bandwidth_multiplier" class="form-label">全局带宽倍率</label>
+                            <input type="number" class="form-control" id="global_bandwidth_multiplier" name="global_bandwidth_multiplier" value="{% for c in configs %}{% if c.key == 'global_bandwidth_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="global_disk_multiplier" class="form-label">全局磁盘倍率</label>
+                            <input type="number" class="form-control" id="global_disk_multiplier" name="global_disk_multiplier" value="{% for c in configs %}{% if c.key == 'global_disk_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">用户奖励设置</h5>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="new_user_core_hours" class="form-label">新用户核时</label>
+                            <input type="number" class="form-control" id="new_user_core_hours" name="new_user_core_hours" value="{% for c in configs %}{% if c.key == 'new_user_core_hours' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="checkin_reward" class="form-label">签到奖励核时</label>
+                            <input type="number" class="form-control" id="checkin_reward" name="checkin_reward" value="{% for c in configs %}{% if c.key == 'checkin_reward' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0">
+                        </div>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">支付设置</h5>
+                    <div class="mb-3">
+                        <label for="payment_mode" class="form-label">支付模式</label>
+                        <select class="form-select" id="payment_mode" name="payment_mode">
+                            <option value="ldcpay" {% for c in configs %}{% if c.key == 'payment_mode' and c.value == 'ldcpay' %}selected{% endif %}{% endfor %}>LDC Pay</option>
+                            <option value="epay" {% for c in configs %}{% if c.key == 'payment_mode' and c.value == 'epay' %}selected{% endif %}{% endfor %}>Epay</option>
+                        </select>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">LDC API 设置</h5>
+                    <div class="mb-3">
+                        <label for="ldc_client_id" class="form-label">LDC Client ID</label>
+                        <input type="text" class="form-control" id="ldc_client_id" name="ldc_client_id" value="{% for c in configs %}{% if c.key == 'ldc_client_id' %}{{ c.value }}{% endif %}{% endfor %}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="ldc_client_secret" class="form-label">LDC Client Secret</label>
+                        <input type="password" class="form-control" id="ldc_client_secret" name="ldc_client_secret" value="{% for c in configs %}{% if c.key == 'ldc_client_secret' %}{{ c.value }}{% endif %}{% endfor %}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="ldc_ed25519_private_key" class="form-label">LDC Ed25519 私钥</label>
+                        <textarea class="form-control" id="ldc_ed25519_private_key" name="ldc_ed25519_private_key" rows="4">{% for c in configs %}{% if c.key == 'ldc_ed25519_private_key' %}{{ c.value }}{% endif %}{% endfor %}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="ldc_ed25519_public_key" class="form-label">LDC Ed25519 公钥</label>
+                        <textarea class="form-control" id="ldc_ed25519_public_key" name="ldc_ed25519_public_key" rows="4">{% for c in configs %}{% if c.key == 'ldc_ed25519_public_key' %}{{ c.value }}{% endif %}{% endfor %}</textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">保存配置</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

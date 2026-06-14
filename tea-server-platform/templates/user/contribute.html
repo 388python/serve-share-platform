@@ -1,0 +1,107 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 贡献服务器{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>贡献服务器</h2>
+        <p class="text-muted">分享你的服务器资源，获得核时奖励</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-body">
+                <form method="post" action="/servers/contribute">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">服务器名称</label>
+                        <input type="text" class="form-control" id="name" name="name" required placeholder="例如：我的高性能服务器">
+                    </div>
+                    <div class="mb-3">
+                        <label for="ip" class="form-label">IP 地址</label>
+                        <input type="text" class="form-control" id="ip" name="ip" required placeholder="例如：192.168.1.100">
+                    </div>
+                    <div class="mb-3">
+                        <label for="ssh_port" class="form-label">SSH 端口</label>
+                        <input type="number" class="form-control" id="ssh_port" name="ssh_port" value="22">
+                    </div>
+                    <div class="mb-3">
+                        <label for="ssh_key" class="form-label">SSH 私钥</label>
+                        <textarea class="form-control" id="ssh_key" name="ssh_key" rows="6" required placeholder="粘贴你的 SSH 私钥内容"></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="cpu_cores" class="form-label">CPU 核心数</label>
+                            <input type="number" class="form-control" id="cpu_cores" name="cpu_cores" required min="1">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="memory_gb" class="form-label">内存 (GB)</label>
+                            <input type="number" class="form-control" id="memory_gb" name="memory_gb" required min="0" step="0.1">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="bandwidth_mbps" class="form-label">带宽 (Mbps)</label>
+                            <input type="number" class="form-control" id="bandwidth_mbps" name="bandwidth_mbps" step="1">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="disk_gb" class="form-label">磁盘 (GB)</label>
+                            <input type="number" class="form-control" id="disk_gb" name="disk_gb" required min="1" step="0.1">
+                        </div>
+                    </div>
+
+                    <h5 class="mt-3 mb-3">资源倍率设置</h5>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="cpu_multiplier" class="form-label">CPU 倍率</label>
+                            <input type="number" class="form-control" id="cpu_multiplier" name="cpu_multiplier" value="1.0" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="memory_multiplier" class="form-label">内存倍率</label>
+                            <input type="number" class="form-control" id="memory_multiplier" name="memory_multiplier" value="1.0" step="0.1" min="0">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="bandwidth_multiplier" class="form-label">带宽倍率</label>
+                            <input type="number" class="form-control" id="bandwidth_multiplier" name="bandwidth_multiplier" value="1.0" step="0.1" min="0">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="disk_multiplier" class="form-label">磁盘倍率</label>
+                            <input type="number" class="form-control" id="disk_multiplier" name="disk_multiplier" value="1.0" step="0.1" min="0">
+                        </div>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="use_bonus" name="use_bonus">
+                        <label class="form-check-label" for="use_bonus">使用奖励</label>
+                    </div>
+
+                    {% if available_virt_types %}
+                    <div class="mb-3">
+                        <label class="form-label">虚拟化类型</label>
+                        <div>
+                            {% for vt in available_virt_types %}
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio" name="virt_type" id="virt_{{ vt }}" value="{{ vt }}" {% if loop.first %}checked{% endif %}>
+                                <label class="form-check-label" for="virt_{{ vt }}">{{ vt | upper }}</label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label for="expires_days" class="form-label">过期天数</label>
+                        <input type="number" class="form-control" id="expires_days" name="expires_days" value="30" min="1">
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">提交贡献</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

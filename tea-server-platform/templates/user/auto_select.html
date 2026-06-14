@@ -1,0 +1,92 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 自动选择机器{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>自动选择机器</h2>
+        <p class="text-muted">输入你需要的配置，系统将自动匹配最佳服务器</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-body">
+                <form method="post" action="/machines/create">
+                    <h5 class="mb-3">需求配置</h5>
+                    <div class="mb-3">
+                        <label for="cpu_cores" class="form-label">CPU 核心数</label>
+                        <input type="number" class="form-control" id="cpu_cores" name="cpu_cores" required min="1" value="1">
+                    </div>
+                    <div class="mb-3">
+                        <label for="memory_gb" class="form-label">内存 (GB)</label>
+                        <input type="number" class="form-control" id="memory_gb" name="memory_gb" required min="0.1" value="1" step="0.1">
+                    </div>
+                    <div class="mb-3">
+                        <label for="disk_gb" class="form-label">磁盘 (GB)</label>
+                        <input type="number" class="form-control" id="disk_gb" name="disk_gb" required min="1" value="10" step="0.1">
+                    </div>
+                    <div class="mb-3">
+                        <label for="hours" class="form-label">时长 (小时)</label>
+                        <input type="number" class="form-control" id="hours" name="hours" value="24" min="1">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">查找可用服务器</button>
+                </form>
+            </div>
+        </div>
+
+        {% if matched_server %}
+        <div class="card mt-4 border-success">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">找到匹配的服务器</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group mb-3">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>服务器名称</span>
+                        <span class="fw-bold">{{ matched_server.name }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>虚拟化类型</span>
+                        <span class="badge bg-info">{{ matched_server.virt_type | upper }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>剩余 CPU</span>
+                        <span class="fw-bold">{{ matched_server.cpu_cores }} 核</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>剩余内存</span>
+                        <span class="fw-bold">{{ matched_server.memory_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>剩余磁盘</span>
+                        <span class="fw-bold">{{ matched_server.disk_gb }} GB</span>
+                    </li>
+                </ul>
+                <form method="post" action="/machines/create" onsubmit="return confirm('确认使用此服务器创建机器？将消耗核时余额。')">
+                    <input type="hidden" name="server_id" value="{{ matched_server.id }}">
+                    <input type="hidden" name="cpu_cores" value="{{ cpu_cores }}">
+                    <input type="hidden" name="memory_gb" value="{{ memory_gb }}">
+                    <input type="hidden" name="disk_gb" value="{{ disk_gb }}">
+                    <input type="hidden" name="hours" value="{{ hours }}">
+                    <button type="submit" class="btn btn-success w-100">确认创建</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if no_match %}
+        <div class="card mt-4 border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0">无可用服务器</h5>
+            </div>
+            <div class="card-body text-center">
+                <p>当前没有满足你需求的服务器，请尝试降低配置要求或稍后再来。</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock content %}

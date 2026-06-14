@@ -1,0 +1,54 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 兑换码{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>兑换码</h2>
+        <p class="text-muted">输入兑换码获取核时或套餐奖励</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6 mx-auto">
+        <div class="card">
+            <div class="card-body">
+                <form method="post" action="/redeem">
+                    <div class="mb-3">
+                        <label for="code" class="form-label">兑换码</label>
+                        <input type="text" class="form-control" id="code" name="code" required placeholder="输入你的兑换码">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">兑换</button>
+                </form>
+            </div>
+        </div>
+
+        {% if success %}
+        <div class="card mt-4 border-success">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">兑换成功</h5>
+            </div>
+            <div class="card-body">
+                {% if redeemed_type == "core_hours" %}
+                <p>你获得了 <strong>{{ redeemed_amount }}</strong> 核时！</p>
+                {% elif redeemed_type == "subscription" %}
+                <p>你获得了套餐 <strong>{{ redeemed_package }}</strong>！</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if error %}
+        <div class="card mt-4 border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0">兑换失败</h5>
+            </div>
+            <div class="card-body">
+                <p>{{ error }}</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock content %}

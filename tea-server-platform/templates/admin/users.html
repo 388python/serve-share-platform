@@ -1,0 +1,105 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 用户管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>用户管理</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if users %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户名</th>
+                                <th>邮箱</th>
+                                <th>LDC 余额</th>
+                                <th>核时</th>
+                                <th>使用时长</th>
+                                <th>管理员</th>
+                                <th>已封禁</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for u in users %}
+                            <tr>
+                                <td>{{ u.id }}</td>
+                                <td>{{ u.username }}</td>
+                                <td>{{ u.email }}</td>
+                                <td>{{ u.ldc_balance }}</td>
+                                <td>{{ u.core_hours }}</td>
+                                <td>{{ u.total_usage_hours }}</td>
+                                <td>
+                                    {% if u.is_admin %}
+                                    <span class="badge bg-danger">是</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if u.is_banned %}
+                                    <span class="badge bg-danger">是</span>
+                                    {% else %}
+                                    <span class="badge bg-success">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ u.created_at }}</td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editUserModal{{ u.id }}">编辑</button>
+                                </td>
+                            </tr>
+
+                            <!-- Edit User Modal -->
+                            <div class="modal fade" id="editUserModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title">编辑用户 - {{ u.username }}</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                        </div>
+                                        <form method="post" action="/admin/users/{{ u.id }}">
+                                            <div class="modal-body">
+                                                <div class="mb-3">
+                                                    <label class="form-label">核时</label>
+                                                    <input type="number" class="form-control" name="core_hours" value="{{ u.core_hours }}" step="0.1">
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">LDC 余额</label>
+                                                    <input type="number" class="form-control" name="ldc_balance" value="{{ u.ldc_balance }}" step="0.1">
+                                                </div>
+                                                <div class="form-check mb-3">
+                                                    <input type="hidden" name="is_banned" value="false">
+                                                    <input type="checkbox" class="form-check-input" id="is_banned{{ u.id }}" name="is_banned" value="true" {% if u.is_banned %}checked{% endif %}>
+                                                    <label class="form-check-label" for="is_banned{{ u.id }}">封禁用户</label>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                                <button type="submit" class="btn btn-primary">保存</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无用户</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

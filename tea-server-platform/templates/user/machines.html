@@ -1,0 +1,115 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 我的机器{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>我的机器</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if machines %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>创建时间</th>
+                                <th>CPU</th>
+                                <th>内存</th>
+                                <th>磁盘</th>
+                                <th>状态</th>
+                                <th>核时/小时</th>
+                                <th>过期时间</th>
+                                <th>SSH 端口</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in machines %}
+                            <tr>
+                                <td>{{ m.id }}</td>
+                                <td>{{ m.created_at }}</td>
+                                <td>{{ m.cpu_cores }} 核</td>
+                                <td>{{ m.memory_gb }} GB</td>
+                                <td>{{ m.disk_gb }} GB</td>
+                                <td>
+                                    {% if m.status == "running" %}
+                                    <span class="badge bg-success">运行中</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">已停止</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ m.core_hours_per_hour }}</td>
+                                <td>{{ m.expires_at }}</td>
+                                <td>{{ m.ssh_port | default(value="N/A") }}</td>
+                                <td>
+                                    {% if m.status == "running" %}
+                                    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#sshModal{{ m.id }}">连接</button>
+                                    <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
+                                        <button type="submit" class="btn btn-sm btn-warning">停止</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
+                                </td>
+                            </tr>
+
+                            <!-- SSH Connection Modal -->
+                            <div class="modal fade" id="sshModal{{ m.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title">SSH 连接信息 - 机器 #{{ m.id }}</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <div class="mb-3">
+                                                <label class="form-label fw-bold">主机地址</label>
+                                                <div class="input-group">
+                                                    <input type="text" class="form-control" value="{{ site_name }}" readonly id="sshHost{{ m.id }}">
+                                                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ site_name }}')">复制</button>
+                                                </div>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label fw-bold">SSH 端口</label>
+                                                <div class="input-group">
+                                                    <input type="text" class="form-control" value="{{ m.ssh_port | default(value="N/A") }}" readonly id="sshPort{{ m.id }}">
+                                                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ m.ssh_port | default(value="0") }}')">复制</button>
+                                                </div>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label fw-bold">用户名</label>
+                                                <input type="text" class="form-control" value="root" readonly>
+                                            </div>
+                                            <div class="alert alert-warning">
+                                                <small>请使用平台分配的 SSH 密钥进行连接，不要使用密码登录。</small>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">你还没有创建任何机器</p>
+                <div class="text-center">
+                    <a href="/market" class="btn btn-primary">去市场选择机器</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

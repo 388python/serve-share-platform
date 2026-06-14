@@ -1,0 +1,14 @@
+[Unit]
+Description=Tea Server Platform Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/tea-agent/agent.py
+Environment=AGENT_API_KEY=tea-platform-agent-key
+Environment=VIRT_TYPE={{VIRT_TYPE}}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

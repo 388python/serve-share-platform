@@ -1,0 +1,24 @@
+version: "3.8"
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+      - "30001-30100:30001-30100"  # SSH proxy port range
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:/app/data/tea-server.db?mode=rwc
+      - BIND_ADDR=0.0.0.0:3000
+      - SESSION_SECRET=change-me-to-random-string
+      - LINUXDO_CLIENT_ID=
+      - LINUXDO_CLIENT_SECRET=
+      - LINUXDO_REDIRECT_URI=http://localhost:3000/auth/callback
+      - LINUXDO_AUTH_URL=https://connect.linux.do/oauth2/authorize
+      - LINUXDO_TOKEN_URL=https://connect.linux.do/oauth2/token
+      - LINUXDO_USER_INFO_URL=https://connect.linux.do/api/user
+      - PLATFORM_DOMAIN=http://localhost:3000
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      - SSH_PROXY_PORT_START=30001
+    restart: unless-stopped

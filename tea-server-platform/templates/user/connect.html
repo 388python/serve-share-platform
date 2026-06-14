@@ -1,0 +1,96 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 机器连接{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>机器连接</h2>
+        <p class="text-muted">机器 #{{ machine.id }} 的连接信息</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">SSH 连接详情</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">SSH 主机</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" value="{{ site_name }}" readonly id="sshHost">
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ site_name }}')">复制</button>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">SSH 端口</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" value="{{ proxy_port | default(value="0") }}" readonly id="sshPort">
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ proxy_port | default(value="0") }}')">复制</button>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">用户名</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" value="root" readonly id="sshUser">
+                        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('root')">复制</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-bold">完整 SSH 命令</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" value="ssh root@{{ site_name }} -p {{ proxy_port | default(value="0") }}" readonly id="sshCommand">
+                        <button class="btn btn-primary" type="button" onclick="navigator.clipboard.writeText('ssh root@{{ site_name }} -p {{ proxy_port | default(value="0") }}')">复制命令</button>
+                    </div>
+                </div>
+
+                <div class="alert alert-warning mt-3">
+                    <h6 class="alert-heading">注意</h6>
+                    <p class="mb-0">此连接通过平台代理转发，你的真实服务器 IP 不会暴露。请使用平台分配的 SSH 密钥进行认证。</p>
+                </div>
+
+                <div class="mt-3">
+                    <h6>连接说明</h6>
+                    <ol>
+                        <li>确保你已经将平台分配的 SSH 公钥添加到你的 <code>~/.ssh/authorized_keys</code></li>
+                        <li>使用上方显示的 SSH 命令进行连接</li>
+                        <li>如果连接失败，请检查你的 SSH 密钥配置是否正确</li>
+                        <li>机器到期后将自动停止，届时将无法连接</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-body">
+                <h6>机器信息</h6>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>CPU</span>
+                        <span>{{ machine.cpu_cores }} 核</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>内存</span>
+                        <span>{{ machine.memory_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>磁盘</span>
+                        <span>{{ machine.disk_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>核时消耗</span>
+                        <span>{{ machine.core_hours_per_hour }} / 小时</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>过期时间</span>
+                        <span>{{ machine.expires_at }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

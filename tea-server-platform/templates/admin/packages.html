@@ -1,0 +1,109 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 套餐管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>套餐管理</h2>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">创建套餐</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/admin/packages/create">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">套餐名称</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="duration_days" class="form-label">时长 (天) <span class="text-muted">(累计套餐可不填)</span></label>
+                        <input type="number" class="form-control" id="duration_days" name="duration_days">
+                    </div>
+                    <div class="mb-3">
+                        <label for="core_hours" class="form-label">核时</label>
+                        <input type="number" class="form-control" id="core_hours" name="core_hours" required step="0.1" min="0">
+                    </div>
+                    <div class="mb-3">
+                        <label for="price_ldc" class="form-label">价格 (LDC)</label>
+                        <input type="number" class="form-control" id="price_ldc" name="price_ldc" required step="0.01" min="0">
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="hidden" name="is_cumulative" value="false">
+                        <input type="checkbox" class="form-check-input" id="is_cumulative" name="is_cumulative" value="true" onchange="document.getElementById('cumulativeHoursGroup').style.display = this.checked ? 'block' : 'none'">
+                        <label class="form-check-label" for="is_cumulative">累计时长套餐</label>
+                    </div>
+                    <div class="mb-3" id="cumulativeHoursGroup" style="display:none">
+                        <label for="cumulative_hours" class="form-label">累计核时数</label>
+                        <input type="number" class="form-control" id="cumulative_hours" name="cumulative_hours" step="0.1" min="0">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">创建套餐</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已有套餐</h5>
+            </div>
+            <div class="card-body">
+                {% if packages %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>时长</th>
+                                <th>核时</th>
+                                <th>价格</th>
+                                <th>累计</th>
+                                <th>活跃</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in packages %}
+                            <tr>
+                                <td>{{ p.name }}</td>
+                                <td>{{ p.duration_days | default(value="-") }}</td>
+                                <td>{{ p.core_hours }}</td>
+                                <td>{{ p.price_ldc }}</td>
+                                <td>
+                                    {% if p.is_cumulative %}
+                                    <span class="badge bg-warning">是</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if p.is_active %}
+                                    <span class="badge bg-success">是</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <form method="post" action="/admin/packages/{{ p.id }}/delete" onsubmit="return confirm('确定要删除此套餐吗？')">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无套餐</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

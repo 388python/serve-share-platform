@@ -1,0 +1,21 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 错误{% endblock title %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-6 mx-auto">
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0">出错了</h5>
+            </div>
+            <div class="card-body text-center py-5">
+                <h2 class="text-danger mb-3">&#9888;</h2>
+                <p class="lead">{{ error_message | default(value="发生了一个未知错误，请稍后再试。") }}</p>
+                <a href="javascript:history.back()" class="btn btn-secondary">返回</a>
+                <a href="/" class="btn btn-primary">回到首页</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

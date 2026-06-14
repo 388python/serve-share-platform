@@ -1,0 +1,105 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 机器市场{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>机器市场</h2>
+        <p class="text-muted">从可用服务器中选择一台创建你的虚拟机</p>
+    </div>
+</div>
+
+<div class="row">
+    {% if servers %}
+    {% for s in servers %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">{{ s.name }}</h5>
+                <ul class="list-group list-group-flush mb-3">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>CPU</span>
+                        <span class="fw-bold">{{ s.cpu_cores }} 核</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>内存</span>
+                        <span class="fw-bold">{{ s.memory_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>带宽</span>
+                        <span class="fw-bold">{{ s.bandwidth_mbps }} Mbps</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>磁盘</span>
+                        <span class="fw-bold">{{ s.disk_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>到期时间</span>
+                        <span class="fw-bold">{{ s.expires_at }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>虚拟化</span>
+                        <span class="badge bg-info">{{ s.virt_type | upper }}</span>
+                    </li>
+                </ul>
+                <button type="button" class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
+                    选择此服务器
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Select Modal -->
+    <div class="modal fade" id="selectModal{{ s.id }}" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">配置机器 - {{ s.name }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="post" action="/machines/create">
+                    <div class="modal-body">
+                        <input type="hidden" name="server_id" value="{{ s.id }}">
+                        <div class="mb-3">
+                            <label class="form-label">CPU 核心数 (最大 {{ s.cpu_cores }})</label>
+                            <input type="number" class="form-control" name="cpu_cores" required min="1" max="{{ s.cpu_cores }}" value="1">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">内存 GB (最大 {{ s.memory_gb }})</label>
+                            <input type="number" class="form-control" name="memory_gb" required min="0.1" max="{{ s.memory_gb }}" value="1" step="0.1">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">磁盘 GB (最大 {{ s.disk_gb }})</label>
+                            <input type="number" class="form-control" name="disk_gb" required min="1" max="{{ s.disk_gb }}" value="10" step="0.1">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">时长 (小时)</label>
+                            <input type="number" class="form-control" name="hours" value="24" min="1">
+                        </div>
+                        <div class="alert alert-info">
+                            <small>核时消耗 = CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">确认创建</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <h5 class="text-muted">暂无可用服务器</h5>
+                <p>目前没有活跃的服务器可供选择，请稍后再来。</p>
+                <a href="/servers/contribute" class="btn btn-primary">贡献一台服务器</a>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock content %}

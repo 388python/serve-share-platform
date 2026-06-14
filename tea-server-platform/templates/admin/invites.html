@@ -1,0 +1,74 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 邀请码管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>邀请码管理</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-5">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">生成邀请码</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/admin/invites/generate">
+                    <div class="mb-3">
+                        <label for="count" class="form-label">生成数量</label>
+                        <input type="number" class="form-control" id="count" name="count" required min="1" max="1000" value="10">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">生成邀请码</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">邀请码列表</h5>
+            </div>
+            <div class="card-body">
+                {% if invites %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>邀请码</th>
+                                <th>已使用</th>
+                                <th>使用者</th>
+                                <th>创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for inv in invites %}
+                            <tr>
+                                <td>{{ inv.id }}</td>
+                                <td><code>{{ inv.code }}</code></td>
+                                <td>
+                                    {% if inv.is_used %}
+                                    <span class="badge bg-success">是</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ inv.used_by | default(value="-") }}</td>
+                                <td>{{ inv.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无邀请码</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

@@ -1,0 +1,169 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 仪表盘{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>欢迎回来，{{ user_name | default(value="用户") }}</h2>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body text-center">
+                <h5 class="card-title">LDC 余额</h5>
+                <p class="card-text display-6">{{ user_ldc | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body text-center">
+                <h5 class="card-title">核时余额</h5>
+                <p class="card-text display-6">{{ user_balance | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body text-center">
+                <h5 class="card-title">总使用时长</h5>
+                <p class="card-text display-6">{{ total_usage_hours | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body text-center">
+                <h5 class="card-title">运行中机器</h5>
+                <p class="card-text display-6">{{ active_machines | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">我的机器</h5>
+                <a href="/market" class="btn btn-primary btn-sm">创建机器</a>
+            </div>
+            <div class="card-body">
+                {% if machines %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>服务器</th>
+                                <th>CPU</th>
+                                <th>内存</th>
+                                <th>磁盘</th>
+                                <th>状态</th>
+                                <th>核时/小时</th>
+                                <th>过期时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in machines %}
+                            <tr>
+                                <td>{{ m.id }}</td>
+                                <td>{{ m.server_id }}</td>
+                                <td>{{ m.cpu_cores }} 核</td>
+                                <td>{{ m.memory_gb }} GB</td>
+                                <td>{{ m.disk_gb }} GB</td>
+                                <td>
+                                    {% if m.status == "running" %}
+                                    <span class="badge bg-success">运行中</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">已停止</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ m.core_hours_per_hour }}</td>
+                                <td>{{ m.expires_at }}</td>
+                                <td>
+                                    {% if m.status == "running" %}
+                                    <a href="/machines/{{ m.id }}/connect" class="btn btn-sm btn-primary">连接</a>
+                                    <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
+                                        <button type="submit" class="btn btn-sm btn-warning">停止</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无机器，<a href="/market">去创建一台</a></p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if packages %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已购套餐</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>套餐ID</th>
+                                <th>核时</th>
+                                <th>过期时间</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in packages %}
+                            <tr>
+                                <td>{{ p.package_id }}</td>
+                                <td>{{ p.core_hours }}</td>
+                                <td>{{ p.expires_at | default(value="无限制") }}</td>
+                                <td>
+                                    {% if p.is_active %}
+                                    <span class="badge bg-success">有效</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">已过期</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">每日签到</h5>
+                <form method="post" action="/checkin">
+                    <button type="submit" class="btn btn-success">立即签到</button>
+                </form>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-0">每日签到可获取核时奖励，连续签到奖励更多！</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

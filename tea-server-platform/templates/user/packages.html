@@ -1,0 +1,84 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 套餐{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>套餐</h2>
+        <p class="text-muted">购买核时套餐，享受更优惠的价格</p>
+    </div>
+</div>
+
+{% set regular_packages = packages | filter(attribute="is_cumulative", value=false) %}
+{% set cumulative_packages = packages | filter(attribute="is_cumulative", value=true) %}
+
+{% if regular_packages | length > 0 %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h4>时长套餐</h4>
+    </div>
+    {% for p in regular_packages %}
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <h5 class="card-title">{{ p.name }}</h5>
+                <hr>
+                {% if p.duration_days %}
+                <p class="mb-2">时长: <strong>{{ p.duration_days }} 天</strong></p>
+                {% endif %}
+                <p class="mb-2">核时: <strong class="text-primary">{{ p.core_hours }}</strong></p>
+                <p class="mb-3">价格: <strong class="text-danger h4">{{ p.price_ldc }} LDC</strong></p>
+                <form method="post" action="/packages/buy">
+                    <input type="hidden" name="package_id" value="{{ p.id }}">
+                    <button type="submit" class="btn btn-primary w-100">购买</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if cumulative_packages | length > 0 %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h4>累计时长套餐</h4>
+    </div>
+    {% for p in cumulative_packages %}
+    <div class="col-md-4 mb-4">
+        <div class="card h-100 border-warning">
+            <div class="card-header bg-warning text-dark text-center">
+                <span class="badge bg-dark">累计</span>
+            </div>
+            <div class="card-body text-center">
+                <h5 class="card-title">{{ p.name }}</h5>
+                <hr>
+                {% if p.cumulative_hours %}
+                <p class="mb-2">累计核时: <strong>{{ p.cumulative_hours }}</strong></p>
+                {% endif %}
+                <p class="mb-3">价格: <strong class="text-danger h4">{{ p.price_ldc }} LDC</strong></p>
+                <form method="post" action="/packages/buy">
+                    <input type="hidden" name="package_id" value="{{ p.id }}">
+                    <button type="submit" class="btn btn-warning w-100">购买</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if packages | length == 0 %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <h5 class="text-muted">暂无可用套餐</h5>
+                <p>目前还没有可购买的套餐，请稍后再来。</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock content %}

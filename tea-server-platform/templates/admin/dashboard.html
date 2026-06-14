@@ -1,0 +1,85 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 管理后台{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>管理后台</h2>
+        <p class="text-muted">平台管理控制面板</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body text-center">
+                <h5 class="card-title">总用户数</h5>
+                <p class="card-text display-6">{{ user_count | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body text-center">
+                <h5 class="card-title">总服务器数</h5>
+                <p class="card-text display-6">{{ server_count | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body text-center">
+                <h5 class="card-title">总机器数</h5>
+                <p class="card-text display-6">{{ machine_count | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body text-center">
+                <h5 class="card-title">总营收</h5>
+                <p class="card-text display-6">{{ total_revenue | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">快速导航</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/config" class="btn btn-outline-primary w-100 py-3">系统配置</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/users" class="btn btn-outline-primary w-100 py-3">用户管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/servers" class="btn btn-outline-primary w-100 py-3">服务器管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/machines" class="btn btn-outline-primary w-100 py-3">机器管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/packages" class="btn btn-outline-primary w-100 py-3">套餐管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/codes" class="btn btn-outline-primary w-100 py-3">兑换码管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/invites" class="btn btn-outline-primary w-100 py-3">邀请码管理</a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="/admin/orders" class="btn btn-outline-primary w-100 py-3">订单管理</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}
