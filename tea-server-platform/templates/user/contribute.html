@@ -107,10 +107,54 @@
                         <input type="number" class="form-control" id="expires_days" name="expires_days" value="30" min="1">
                     </div>
 
+                    <!-- 暴露 IP 地址 -->
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="expose_ip" name="expose_ip" onchange="toggleNatConfig()">
+                        <label class="form-check-label" for="expose_ip">暴露 IP 地址（SSH 将直连，不经过平台代理）</label>
+                    </div>
+
+                    <!-- NAT 内网穿透配置（仅暴露 IP 时显示） -->
+                    <div id="nat_config" style="display:none;">
+                        <h6 class="mt-3">NAT 内网穿透配置</h6>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="nat_port_start" class="form-label">免费起始端口</label>
+                                <input type="number" class="form-control" id="nat_port_start" name="nat_port_start" value="0" min="0" max="65535">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="nat_port_end" class="form-label">免费结束端口</label>
+                                <input type="number" class="form-control" id="nat_port_end" name="nat_port_end" value="0" min="0" max="65535">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="nat_multiplier" class="form-label">NAT 倍率</label>
+                                <input type="number" class="form-control" id="nat_multiplier" name="nat_multiplier" value="1.0" step="0.1" min="0.1">
+                            </div>
+                        </div>
+                        <small class="text-muted">超出免费范围外的 NAT 端口将按 NAT倍率×全局NAT倍率 计入核时</small>
+                    </div>
+
+                    <!-- 用户最大开机时长 -->
+                    <div class="mb-3">
+                        <label for="max_machine_hours" class="form-label">用户最大开机时长（小时，0=无限制）</label>
+                        <input type="number" class="form-control" id="max_machine_hours" name="max_machine_hours" value="0" min="0" step="1">
+                    </div>
+
                     <button type="submit" class="btn btn-primary w-100">提交贡献</button>
                 </form>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+function toggleNatConfig() {
+    var nat = document.getElementById('nat_config');
+    var ip = document.getElementById('expose_ip');
+    nat.style.display = ip.checked ? 'block' : 'none';
+}
+// 页面加载时检查
+document.addEventListener('DOMContentLoaded', function() {
+    toggleNatConfig();
+});
+</script>
 {% endblock content %}

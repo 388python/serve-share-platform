@@ -58,6 +58,7 @@
                                     <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
                                         <button type="submit" class="btn btn-sm btn-danger">删除</button>
                                     </form>
+                                    <a href="/disputes/new?machine_id={{ m.id }}" class="btn btn-sm btn-outline-danger">发起争议</a>
                                 </td>
                             </tr>
 

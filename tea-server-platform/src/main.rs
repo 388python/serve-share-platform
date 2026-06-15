@@ -171,6 +171,89 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Background task: Delayed settlement
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            let pool = db::get_db();
+            let threshold_pct: f64 = db::get_config("settlement_threshold_pct").await
+                .unwrap_or_else(|| "80".to_string())
+                .parse()
+                .unwrap_or(80.0);
+            let threshold = threshold_pct / 100.0;
+
+            // Find stopped/deleted machines that haven't been settled
+            let machines: Vec<(i64, i64, f64, f64)> = sqlx::query_as(
+                "SELECT m.id, m.server_id, m.core_hours_per_hour, m.used_hours FROM machines m WHERE m.status IN ('stopped','deleted') AND m.settled = 0"
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+            for (machine_id, server_id, ch_per_hour, used_hours) in &machines {
+                // Get server expiry
+                let server_expiry: Option<(String,)> = sqlx::query_as(
+                    "SELECT expires_at FROM servers WHERE id = ?"
+                )
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((expires_at_str,)) = server_expiry {
+                    if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
+                        let max_hours = (expires_at.naive_utc() - chrono::Utc::now().naive_utc()).num_hours() as f64;
+                        if max_hours > 0.0 && used_hours / max_hours >= threshold {
+                            // Settle: credit core hours to server owner
+                            let total_ch = ch_per_hour * used_hours;
+                            let _ = sqlx::query(
+                                "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
+                            )
+                            .bind(total_ch)
+                            .bind(server_id)
+                            .execute(pool)
+                            .await;
+                            let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
+                                .bind(machine_id)
+                                .execute(pool)
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Background task: Dispute auto-resolve
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let pool = db::get_db();
+            let now = chrono::Utc::now();
+            let _ = sqlx::query(
+                "UPDATE disputes SET status = 'platform' WHERE status = 'pending' AND auto_resolve_at <= ?"
+            )
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    });
+
+    // Background task: Clean expired bonus
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let pool = db::get_db();
+            let now = chrono::Utc::now();
+            let _ = sqlx::query(
+                "UPDATE users SET bonus_core_hours = 0, bonus_expires_at = NULL WHERE bonus_expires_at IS NOT NULL AND bonus_expires_at <= ?"
+            )
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    });
+
     // Build router
     let app = Router::new()
         // Public routes
@@ -196,6 +279,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines/:id/stop", post(handlers::stop_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
+        // Disputes
+        .route("/disputes/new", get(handlers::dispute_new_page))
+        .route("/disputes/create", post(handlers::dispute_create))
+        .route("/disputes/:id/reply", post(handlers::merchant_dispute_reply))
         // Recharge
         .route("/recharge", get(handlers::recharge_page))
         .route("/recharge", post(handlers::create_recharge_order))
@@ -213,6 +300,11 @@ async fn main() -> anyhow::Result<()> {
         // Packages
         .route("/packages", get(handlers::packages_page))
         .route("/packages/buy", post(handlers::buy_package))
+        // Balance to code
+        .route("/balance-to-code", get(handlers::balance_to_code_page))
+        .route("/balance-to-code", post(handlers::balance_to_code_submit))
+        // OAuth authorize
+        .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
         .route("/admin", get(handlers::admin_dashboard))
         .route("/admin/config", get(handlers::admin_config_page))
@@ -231,6 +323,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
         .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
+        .route("/admin/disputes", get(handlers::admin_disputes))
+        .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
+        .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
+        .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
         // API routes (RESTful JSON) - mounted under /api prefix
         .nest("/api", handlers::api::router(app_state.clone()))
         // Static files

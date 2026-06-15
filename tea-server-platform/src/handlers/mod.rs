@@ -309,6 +309,11 @@ pub struct ContributeServerForm {
     pub use_bonus: Option<bool>,
     pub virt_type: Option<String>,
     pub expires_days: Option<i32>,
+    pub expose_ip: Option<bool>,
+    pub nat_port_start: Option<i32>,
+    pub nat_port_end: Option<i32>,
+    pub nat_multiplier: Option<f64>,
+    pub max_machine_hours: Option<f64>,
 }
 
 pub async fn contribute_server_submit(
@@ -336,12 +341,17 @@ pub async fn contribute_server_submit(
     let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
     let disk_mult = form.disk_multiplier.unwrap_or(1.0);
     let use_bonus = form.use_bonus.unwrap_or(false);
+    let expose_ip = form.expose_ip.unwrap_or(false);
+    let nat_port_start = form.nat_port_start.unwrap_or(0);
+    let nat_port_end = form.nat_port_end.unwrap_or(0);
+    let nat_mult = form.nat_multiplier.unwrap_or(1.0);
+    let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
 
     // Allocate proxy port
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary, will update after insert
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -360,6 +370,11 @@ pub async fn contribute_server_submit(
     .bind(&virt_type)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(expose_ip)
+    .bind(nat_port_start)
+    .bind(nat_port_end)
+    .bind(nat_mult)
+    .bind(max_machine_hours)
     .execute(pool)
     .await;
 
@@ -531,15 +546,19 @@ pub async fn create_machine(
     let pool = db::get_db();
     let now = Utc::now();
 
-    // Get user info
-    let user: Option<(f64, f64)> =
-        sqlx::query_as("SELECT core_hours, ldc_balance FROM users WHERE id = ?")
+    // Get user info (including bonus)
+    let user: Option<User> =
+        sqlx::query_as("SELECT * FROM users WHERE id = ?")
             .bind(user_id)
             .fetch_optional(pool)
             .await
             .unwrap_or(None);
 
-    let (core_hours, ldc_balance) = user.unwrap_or((0.0, 0.0));
+    let user = user.ok_or_else(|| Redirect::to("/login"))?;
+    let core_hours = user.core_hours;
+    let bonus_core_hours = user.bonus_core_hours;
+    let total_available = core_hours + bonus_core_hours;
+    let ldc_balance = user.ldc_balance;
 
     // Get server info
     let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
@@ -556,6 +575,11 @@ pub async fn create_machine(
     let mut hours = form.hours.unwrap_or(24) as i64;
     let mut expires_at = now + chrono::Duration::hours(hours);
 
+    // Task 6.2: Check max machine hours
+    if server.max_machine_hours > 0.0 && hours as f64 > server.max_machine_hours {
+        return Ok(Redirect::to("/machines"));
+    }
+
     // Check machine expiry does not exceed server expiry
     if expires_at > server.expires_at {
         let remaining_hours = (server.expires_at - now).num_hours().max(0);
@@ -565,6 +589,21 @@ pub async fn create_machine(
         hours = remaining_hours.min(hours);
         expires_at = now + chrono::Duration::hours(hours);
     }
+
+    // Task 3.3: Calculate NAT ports
+    let nat_ports = if server.expose_ip {
+        let free_ports = server.nat_port_end - server.nat_port_start;
+        let used_ports: (i64,) = sqlx::query_as(
+            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+        )
+        .bind(server.id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+        (used_ports.0 as i32 - free_ports).max(0)
+    } else {
+        0
+    };
 
     // Calculate core hours per hour
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
@@ -576,34 +615,66 @@ pub async fn create_machine(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
+        nat_ports,
+        server.nat_multiplier,
     )
     .await;
 
     let total_cost = ch_per_hour * hours as f64;
 
-    // Check if user has enough core hours
-    if core_hours < total_cost {
+    // Check if user has enough core hours (bonus + regular)
+    if total_available < total_cost {
         return Ok(Redirect::to("/recharge"));
+    }
+
+    // Task 5.3: Deduct bonus first, then regular
+    let mut bonus_used = 0.0_f64;
+    let mut regular_used = 0.0_f64;
+    if bonus_core_hours >= total_cost {
+        bonus_used = total_cost;
+    } else {
+        bonus_used = bonus_core_hours;
+        regular_used = total_cost - bonus_used;
+    }
+
+    let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ?")
+        .bind(bonus_used)
+        .bind(regular_used)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+
+    let new_core_hours = core_hours - regular_used;
+
+    // Update session cookie
+    set_session_cookie(&cookies, user_id, &username, is_admin, new_core_hours, ldc_balance);
+
+    // Task 5.3: Credit merchant - bonus used goes to merchant's bonus_core_hours with expiry
+    if bonus_used > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = COALESCE(bonus_expires_at, ?) WHERE id = ?"
+        )
+        .bind(bonus_used)
+        .bind(user.bonus_expires_at)
+        .bind(server.owner_id)
+        .execute(pool)
+        .await;
+    }
+    if regular_used > 0.0 {
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(regular_used)
+            .bind(server.owner_id)
+            .execute(pool)
+            .await;
     }
 
     // Get proxy port from server
     let proxy_port = server.proxy_port;
 
-    // Deduct core hours from user
-    let new_core_hours = core_hours - total_cost;
-    sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
-        .bind(new_core_hours)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .unwrap();
-
-    // Update session cookie
-    set_session_cookie(&cookies, user_id, &username, is_admin, new_core_hours, ldc_balance);
-
-    // Create machine record
+    // Task 1.1: Include used_hours in machine insert
+    let used_hours = hours as f64;
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -614,6 +685,7 @@ pub async fn create_machine(
     .bind(ch_per_hour)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(used_hours)
     .execute(pool)
     .await
     .unwrap();
@@ -874,7 +946,15 @@ pub async fn machine_connect(
 
     if let Some(ref srv) = server {
         ctx.insert("server_ip", &srv.ip);
-        ctx.insert("proxy_port", &machine.ssh_port.unwrap_or(0));
+        if srv.expose_ip {
+            // Direct connection: expose server IP with SSH port
+            ctx.insert("proxy_port", &srv.ssh_port);
+            ctx.insert("direct_connect", &true);
+        } else {
+            // Proxy connection: use proxy port
+            ctx.insert("proxy_port", &machine.ssh_port.unwrap_or(0));
+            ctx.insert("direct_connect", &false);
+        }
     }
 
     let rendered = state
@@ -1230,12 +1310,24 @@ pub async fn checkin(
         .and_then(|v| v.parse().ok())
         .unwrap_or(10.0);
 
-    // Update user
-    let user_row: (f64, f64) = sqlx::query_as(
-        "UPDATE users SET core_hours = core_hours + ?, last_checkin = ? WHERE id = ? RETURNING core_hours, ldc_balance",
+    let expiry_days: f64 = db::get_config("checkin_bonus_expiry_days").await
+        .unwrap_or_else(|| "30".to_string())
+        .parse()
+        .unwrap_or(30.0);
+    let bonus_expires_at = chrono::Utc::now() + chrono::Duration::days(expiry_days as i64);
+
+    let _ = sqlx::query(
+        "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = ?, last_checkin = CURRENT_TIMESTAMP WHERE id = ?"
     )
     .bind(reward)
-    .bind(now)
+    .bind(bonus_expires_at)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+
+    let user_row: (f64, f64) = sqlx::query_as(
+        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
+    )
     .bind(user_id)
     .fetch_optional(pool)
     .await
@@ -1311,6 +1403,8 @@ pub async fn free_plan(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
+        0,
+        0.0,
     )
     .await;
 
@@ -2012,4 +2106,397 @@ pub async fn admin_traffic_alerts(
         .render("admin/traffic_alerts.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
+}
+
+// ---- Dispute handlers ----
+
+#[derive(Deserialize)]
+pub struct NewDisputeForm {
+    pub machine_id: i64,
+}
+
+#[derive(Deserialize)]
+pub struct CreateDisputeForm {
+    pub machine_id: i64,
+    pub reason: String,
+}
+
+pub async fn dispute_new_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Query(form): Query<NewDisputeForm>,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("machine_id", &form.machine_id);
+    let rendered = state.templates.render("user/dispute.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn dispute_create(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    Form(form): Form<CreateDisputeForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    // Get machine info
+    let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
+        .bind(form.machine_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let machine = machine.ok_or_else(|| Redirect::to("/machines"))?;
+
+    // Calculate amount to freeze (core hours)
+    let amount_frozen = machine.core_hours_per_hour * machine.used_hours;
+
+    // Freeze the core hours (deduct from contributor)
+    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
+        .bind(amount_frozen)
+        .bind(machine.server_id)
+        .execute(pool)
+        .await;
+
+    let auto_hours: f64 = db::get_config("dispute_auto_resolve_hours").await
+        .unwrap_or_else(|| "72".to_string())
+        .parse()
+        .unwrap_or(72.0);
+    let auto_resolve_at = chrono::Utc::now() + chrono::Duration::hours(auto_hours as i64);
+
+    let _ = sqlx::query(
+        "INSERT INTO disputes (machine_id, user_id, server_id, reason, amount_frozen, auto_resolve_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(form.machine_id)
+    .bind(user_id)
+    .bind(machine.server_id)
+    .bind(&form.reason)
+    .bind(amount_frozen)
+    .bind(auto_resolve_at)
+    .execute(pool)
+    .await;
+
+    Ok(Redirect::to("/machines"))
+}
+
+pub async fn admin_disputes(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+    let disputes: Vec<Dispute> = sqlx::query_as("SELECT * FROM disputes ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("disputes", &disputes);
+    let rendered = state.templates.render("admin/disputes.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+#[derive(Deserialize)]
+pub struct ResolveDisputeForm {
+    pub resolution: String,
+}
+
+pub async fn admin_dispute_resolve(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    Path(id): Path<i64>,
+    Form(form): Form<ResolveDisputeForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+
+    let dispute: Option<Dispute> = sqlx::query_as("SELECT * FROM disputes WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    if let Some(d) = dispute {
+        if form.resolution == "refund" {
+            // Refund to user
+            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                .bind(d.amount_frozen)
+                .bind(d.user_id)
+                .execute(pool)
+                .await;
+        } else {
+            // Reject: restore to server owner
+            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
+                .bind(d.amount_frozen)
+                .bind(d.server_id)
+                .execute(pool)
+                .await;
+        }
+        let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(&form.resolution)
+            .bind(id)
+            .execute(pool)
+            .await;
+    }
+
+    Ok(Redirect::to("/admin/disputes"))
+}
+
+// Merchant reply to dispute
+#[derive(Deserialize)]
+pub struct MerchantDisputeReplyForm {
+    pub reply: String,
+    pub action: String, // "refund" or "reject"
+}
+
+pub async fn merchant_dispute_reply(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+    Form(form): Form<MerchantDisputeReplyForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let dispute: Option<Dispute> = sqlx::query_as(
+        "SELECT d.* FROM disputes d JOIN servers s ON d.server_id = s.id WHERE d.id = ? AND s.owner_id = ?"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if let Some(d) = dispute {
+        let _ = sqlx::query("UPDATE disputes SET reply = ? WHERE id = ?")
+            .bind(&form.reply)
+            .bind(id)
+            .execute(pool)
+            .await;
+
+        if form.action == "refund" {
+            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                .bind(d.amount_frozen)
+                .bind(d.user_id)
+                .execute(pool)
+                .await;
+            let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = 'refund', resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(id)
+                .execute(pool)
+                .await;
+        } else if form.action == "reject" {
+            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                .bind(d.amount_frozen)
+                .bind(user_id)
+                .execute(pool)
+                .await;
+            let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = 'reject', resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(id)
+                .execute(pool)
+                .await;
+        }
+    }
+
+    Ok(Redirect::to("/dashboard"))
+}
+
+// ---- OAuth App handlers ----
+
+#[derive(Deserialize)]
+pub struct CreateOAuthAppForm {
+    pub name: String,
+    pub redirect_uri: String,
+}
+
+pub async fn admin_oauth_apps(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+    let apps: Vec<OAuthApp> = sqlx::query_as("SELECT * FROM oauth_apps ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("apps", &apps);
+    let rendered = state.templates.render("admin/oauth_apps.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn admin_oauth_apps_create(
+    cookies: Cookies,
+    Form(form): Form<CreateOAuthAppForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+    let client_id = format!("app_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let client_secret = format!("secret_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let _ = sqlx::query(
+        "INSERT INTO oauth_apps (name, client_id, client_secret, redirect_uri, created_by) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(&form.name)
+    .bind(&client_id)
+    .bind(&client_secret)
+    .bind(&form.redirect_uri)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+    Ok(Redirect::to("/admin/oauth-apps"))
+}
+
+// ---- Balance to Code handlers ----
+
+pub async fn balance_to_code_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let user = user.ok_or_else(|| Redirect::to("/login"))?;
+
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
+        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
+        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
+    let enabled = db::get_config("balance_to_code_enabled").await
+        .unwrap_or_else(|| "true".to_string());
+
+    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+    )
+    .bind(user_id)
+    .bind(today_start)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let logs: Vec<BalanceToCodeLog> = sqlx::query_as(
+        "SELECT * FROM balance_to_code_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let can_convert = enabled == "true" && today_count.0 < daily_limit;
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("core_hours", &user.core_hours);
+    ctx.insert("bonus_core_hours", &user.bonus_core_hours);
+    ctx.insert("bonus_expires_at", &user.bonus_expires_at);
+    ctx.insert("today_count", &today_count.0);
+    ctx.insert("daily_limit", &daily_limit);
+    ctx.insert("fee_pct", &(fee_pct * 100.0));
+    ctx.insert("can_convert", &can_convert);
+    ctx.insert("logs", &logs);
+
+    let rendered = state.templates.render("user/balance_to_code.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+#[derive(Deserialize)]
+pub struct BalanceToCodeForm {
+    pub amount: f64,
+    pub use_bonus: Option<String>,
+}
+
+pub async fn balance_to_code_submit(
+    cookies: Cookies,
+    Form(form): Form<BalanceToCodeForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
+        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
+        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
+
+    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+    )
+    .bind(user_id)
+    .bind(today_start)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    if today_count.0 >= daily_limit {
+        return Ok(Redirect::to("/balance-to-code"));
+    }
+
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    let user = user.ok_or_else(|| Redirect::to("/login"))?;
+
+    let fee = form.amount * fee_pct;
+    let total_deduct = form.amount + fee;
+    let is_bonus = form.use_bonus.as_deref() == Some("on");
+
+    if is_bonus {
+        if user.bonus_core_hours < total_deduct {
+            return Ok(Redirect::to("/balance-to-code"));
+        }
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
+            .bind(total_deduct)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+    } else {
+        if user.core_hours < total_deduct {
+            return Ok(Redirect::to("/balance-to-code"));
+        }
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+            .bind(total_deduct)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+    }
+
+    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
+
+    // Create redeem code
+    let _ = sqlx::query(
+        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)"
+    )
+    .bind(&code)
+    .bind(form.amount)
+    .execute(pool)
+    .await;
+
+    // Log
+    let _ = sqlx::query(
+        "INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)"
+    )
+    .bind(user_id)
+    .bind(form.amount)
+    .bind(fee)
+    .bind(is_bonus)
+    .bind(&code)
+    .execute(pool)
+    .await;
+
+    Ok(Redirect::to("/balance-to-code"))
 }

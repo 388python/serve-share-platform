@@ -186,6 +186,54 @@
                         <input type="number" class="form-control" id="traffic_bandwidth_threshold_mbps" name="traffic_bandwidth_threshold_mbps" value="{% for c in configs %}{% if c.key == 'traffic_bandwidth_threshold_mbps' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
                     </div>
 
+                    <!-- 结算阈值 -->
+                    <div class="mb-3">
+                        <label for="settlement_threshold_pct" class="form-label">结算阈值 (%)</label>
+                        <input type="number" class="form-control" id="settlement_threshold_pct" name="settlement_threshold_pct" value="{% for c in configs %}{% if c.key == 'settlement_threshold_pct' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="0" max="100">
+                        <small class="text-muted">机器使用超过此百分比后才结算核时给贡献者</small>
+                    </div>
+
+                    <!-- 全局 NAT 倍率 -->
+                    <div class="mb-3">
+                        <label for="global_nat_multiplier" class="form-label">全局 NAT 倍率</label>
+                        <input type="number" class="form-control" id="global_nat_multiplier" name="global_nat_multiplier" value="{% for c in configs %}{% if c.key == 'global_nat_multiplier' %}{{ c.value }}{% endif %}{% endfor %}" step="0.1" min="0.1">
+                    </div>
+
+                    <!-- 争议自动介入时间 -->
+                    <div class="mb-3">
+                        <label for="dispute_auto_resolve_hours" class="form-label">争议自动介入时间（小时）</label>
+                        <input type="number" class="form-control" id="dispute_auto_resolve_hours" name="dispute_auto_resolve_hours" value="{% for c in configs %}{% if c.key == 'dispute_auto_resolve_hours' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
+                    </div>
+
+                    <!-- 签到赠金有效期 -->
+                    <div class="mb-3">
+                        <label for="checkin_bonus_expiry_days" class="form-label">签到赠金有效期（天）</label>
+                        <input type="number" class="form-control" id="checkin_bonus_expiry_days" name="checkin_bonus_expiry_days" value="{% for c in configs %}{% if c.key == 'checkin_bonus_expiry_days' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
+                    </div>
+
+                    <!-- 余额兑换码开关 -->
+                    <div class="mb-3">
+                        <label for="balance_to_code_enabled" class="form-label">余额兑换码开关</label>
+                        <select class="form-select" id="balance_to_code_enabled" name="balance_to_code_enabled">
+                            {% set btce = "" %}
+                            {% for c in configs %}{% if c.key == 'balance_to_code_enabled' %}{% set btce = c.value %}{% endif %}{% endfor %}
+                            <option value="true" {% if btce == "true" %}selected{% endif %}>开启</option>
+                            <option value="false" {% if btce == "false" %}selected{% endif %}>关闭</option>
+                        </select>
+                    </div>
+
+                    <!-- 兑换码手续费 -->
+                    <div class="mb-3">
+                        <label for="balance_to_code_fee" class="form-label">兑换码手续费（比例，如 0.05 = 5%）</label>
+                        <input type="number" class="form-control" id="balance_to_code_fee" name="balance_to_code_fee" value="{% for c in configs %}{% if c.key == 'balance_to_code_fee' %}{{ c.value }}{% endif %}{% endfor %}" step="0.01" min="0" max="1">
+                    </div>
+
+                    <!-- 兑换码每日上限 -->
+                    <div class="mb-3">
+                        <label for="balance_to_code_daily_limit" class="form-label">兑换码每日上限（次）</label>
+                        <input type="number" class="form-control" id="balance_to_code_daily_limit" name="balance_to_code_daily_limit" value="{% for c in configs %}{% if c.key == 'balance_to_code_daily_limit' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
+                    </div>
+
                     <button type="submit" class="btn btn-primary w-100">保存配置</button>
                 </form>
             </div>

@@ -169,6 +169,51 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Create disputes table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS disputes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            server_id INTEGER NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            resolution TEXT,
+            reply TEXT,
+            amount_frozen REAL NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME,
+            auto_resolve_at DATETIME NOT NULL
+        );
+    "#).execute(pool).await?;
+
+    // Create oauth_apps table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS oauth_apps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            client_id TEXT NOT NULL UNIQUE,
+            client_secret TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            created_by INTEGER NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
+    // Create balance_to_code_logs table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS balance_to_code_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            fee REAL NOT NULL DEFAULT 0,
+            is_bonus INTEGER NOT NULL DEFAULT 0,
+            code TEXT NOT NULL UNIQUE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
     // Add columns to invites
     let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
         .execute(pool)
@@ -176,6 +221,32 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE invites ADD COLUMN public_note TEXT DEFAULT ''")
         .execute(pool)
         .await;
+
+    // Settlement: machines table
+    let _ = sqlx::query("ALTER TABLE machines ADD COLUMN settled INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE machines ADD COLUMN used_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    // Expose IP & NAT: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN expose_ip INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_start INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_end INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_multiplier REAL NOT NULL DEFAULT 1.0")
+        .execute(pool).await;
+
+    // Max machine hours: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN max_machine_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    // Bonus expiry: users table
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_core_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_expires_at DATETIME")
+        .execute(pool).await;
 
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
@@ -203,6 +274,13 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("admin_api_key", ""),
         ("traffic_monitor_enabled", "true"),
         ("traffic_bandwidth_threshold_mbps", "100"),
+        ("settlement_threshold_pct", "80"),
+        ("global_nat_multiplier", "1.0"),
+        ("dispute_auto_resolve_hours", "72"),
+        ("checkin_bonus_expiry_days", "30"),
+        ("balance_to_code_fee", "0.05"),
+        ("balance_to_code_daily_limit", "5"),
+        ("balance_to_code_enabled", "true"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

@@ -176,6 +176,11 @@ pub struct ContributeServerRequest {
     pub use_bonus: Option<bool>,
     pub virt_type: Option<String>,
     pub expires_days: Option<i32>,
+    pub expose_ip: Option<bool>,
+    pub nat_port_start: Option<i32>,
+    pub nat_port_end: Option<i32>,
+    pub nat_multiplier: Option<f64>,
+    pub max_machine_hours: Option<f64>,
 }
 
 // POST /api/v1/servers/contribute
@@ -201,11 +206,16 @@ async fn api_servers_contribute(
     let disk_mult = form.disk_multiplier.unwrap_or(1.0);
     let use_bonus = form.use_bonus.unwrap_or(false);
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
+    let expose_ip = form.expose_ip.unwrap_or(false);
+    let nat_port_start = form.nat_port_start.unwrap_or(0);
+    let nat_port_end = form.nat_port_end.unwrap_or(0);
+    let nat_mult = form.nat_multiplier.unwrap_or(1.0);
+    let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
 
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -224,6 +234,11 @@ async fn api_servers_contribute(
     .bind(&virt_type)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(expose_ip)
+    .bind(nat_port_start)
+    .bind(nat_port_end)
+    .bind(nat_mult)
+    .bind(max_machine_hours)
     .execute(pool)
     .await;
 
@@ -384,6 +399,8 @@ async fn api_machines_create(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
+        0,
+        0.0,
     )
     .await;
 
@@ -1022,6 +1039,74 @@ async fn api_admin_packages(headers: HeaderMap) -> impl IntoResponse {
 }
 
 // ==============================
+// Balance to Code API
+// ==============================
+
+#[derive(Deserialize)]
+struct BalanceToCodeApiRequest {
+    amount: f64,
+    use_bonus: Option<bool>,
+}
+
+async fn api_balance_to_code(
+    headers: HeaderMap,
+    Json(req): Json<BalanceToCodeApiRequest>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
+        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
+        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
+
+    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+    ).bind(user_id).bind(today_start).fetch_one(pool).await.unwrap_or((0,));
+
+    if today_count.0 >= daily_limit {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"daily_limit","message":"每日兑换次数已达上限"}))).into_response();
+    }
+
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+    let user = match user {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
+    };
+
+    let fee = req.amount * fee_pct;
+    let total_deduct = req.amount + fee;
+    let is_bonus = req.use_bonus.unwrap_or(false);
+
+    if is_bonus {
+        if user.bonus_core_hours < total_deduct {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_bonus"}))).into_response();
+        }
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
+            .bind(total_deduct).bind(user_id).execute(pool).await;
+    } else {
+        if user.core_hours < total_deduct {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_balance"}))).into_response();
+        }
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+            .bind(total_deduct).bind(user_id).execute(pool).await;
+    }
+
+    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let _ = sqlx::query("INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)")
+        .bind(&code).bind(req.amount).execute(pool).await;
+    let _ = sqlx::query("INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)")
+        .bind(user_id).bind(req.amount).bind(fee).bind(is_bonus).bind(&code).execute(pool).await;
+
+    ok_response(json!({"code": code, "amount": req.amount, "fee": fee})).into_response()
+}
+
+// ==============================
 // Router builder
 // ==============================
 
@@ -1039,6 +1124,7 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/packages", get(api_packages))
         .route("/v1/packages/buy", post(api_packages_buy))
         .route("/v1/redeem", post(api_redeem))
+        .route("/v1/balance-to-code", post(api_balance_to_code))
         .route("/v1/admin/users", get(api_admin_users))
         .route(
             "/v1/admin/users/:id",

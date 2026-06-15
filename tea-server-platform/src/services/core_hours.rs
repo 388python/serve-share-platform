@@ -9,6 +9,8 @@ pub async fn calculate_core_hours_per_hour(
     memory_multiplier: f64,
     bandwidth_multiplier: f64,
     disk_multiplier: f64,
+    nat_ports: i32,
+    nat_multiplier: f64,
 ) -> f64 {
     let global_cpu = db::get_config("global_cpu_multiplier")
         .await
@@ -26,9 +28,14 @@ pub async fn calculate_core_hours_per_hour(
         .await
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(1.0);
+    let global_nat = db::get_config("global_nat_multiplier")
+        .await
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.0);
 
     cpu_cores as f64 * cpu_multiplier * global_cpu
         + memory_gb * memory_multiplier * global_mem
         + bandwidth_mbps * bandwidth_multiplier * global_bw
         + disk_gb * disk_multiplier * global_disk
+        + nat_ports as f64 * nat_multiplier * global_nat
 }

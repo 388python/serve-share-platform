@@ -83,3 +83,47 @@ pub async fn get_user_info(
         .await?;
     Ok(resp)
 }
+
+use axum::{
+    extract::Query,
+    response::{IntoResponse, Redirect},
+};
+
+#[derive(Deserialize)]
+pub struct OAuthAuthorizeQuery {
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub state: Option<String>,
+    pub response_type: Option<String>,
+}
+
+/// Silent authorization endpoint - no user confirmation
+pub async fn oauth_authorize(
+    Query(q): Query<OAuthAuthorizeQuery>,
+) -> impl IntoResponse {
+    let pool = crate::db::get_db();
+
+    // Verify the app
+    let app: Option<(String, String)> = sqlx::query_as(
+        "SELECT client_id, redirect_uri FROM oauth_apps WHERE client_id = ? AND is_active = 1"
+    )
+    .bind(&q.client_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if app.is_none() {
+        return Redirect::to(&format!("{}?error=invalid_client&state={}",
+            q.redirect_uri, q.state.as_deref().unwrap_or("")));
+    }
+
+    // Generate a code (in production, this would be a real auth code)
+    let code = format!("auth_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+
+    // Redirect back with code
+    let mut redirect_url = format!("{}?code={}", q.redirect_uri, code);
+    if let Some(state) = &q.state {
+        redirect_url = format!("{}&state={}", redirect_url, state);
+    }
+    Redirect::to(&redirect_url)
+}
