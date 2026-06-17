@@ -50,6 +50,8 @@ pub struct Server {
     pub nat_port_end: i32,
     pub nat_multiplier: f64,
     pub max_machine_hours: f64,
+    pub is_premium: bool,
+    pub linux_version: String,
 }
 
 // Table: machines

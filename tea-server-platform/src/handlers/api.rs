@@ -181,6 +181,7 @@ pub struct ContributeServerRequest {
     pub nat_port_end: Option<i32>,
     pub nat_multiplier: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub linux_version: Option<String>,
 }
 
 // POST /api/v1/servers/contribute
@@ -215,7 +216,7 @@ async fn api_servers_contribute(
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -239,6 +240,7 @@ async fn api_servers_contribute(
     .bind(nat_port_end)
     .bind(nat_mult)
     .bind(max_machine_hours)
+    .bind(form.linux_version.as_deref().unwrap_or(""))
     .execute(pool)
     .await;
 
@@ -1107,6 +1109,61 @@ async fn api_balance_to_code(
 }
 
 // ==============================
+// Buy Premium API
+// ==============================
+
+// POST /api/v1/servers/:id/buy-premium
+async fn api_buy_premium(
+    headers: HeaderMap,
+    Path(server_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let premium_enabled = db::get_config("premium_enabled").await.unwrap_or_else(|| "false".to_string());
+    if premium_enabled != "true" {
+        return (StatusCode::FORBIDDEN, Json(json!({"error":"premium_disabled","message":"优选功能未开放"}))).into_response();
+    }
+
+    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
+        .bind(server_id).bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+
+    let server = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"server_not_found"}))).into_response(),
+    };
+
+    if server.is_premium {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"already_premium"}))).into_response();
+    }
+
+    let cost: f64 = db::get_config("premium_ldc_cost").await
+        .unwrap_or_else(|| "100".to_string()).parse().unwrap_or(100.0);
+
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+    let user = match user {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
+    };
+
+    if user.ldc_balance < cost {
+        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"}))).into_response();
+    }
+
+    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+        .bind(cost).bind(user_id).execute(pool).await;
+    let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
+        .bind(server_id).execute(pool).await;
+
+    ok_response(json!({"server_id": server_id, "is_premium": true, "cost_ldc": cost})).into_response()
+}
+
+// ==============================
 // Router builder
 // ==============================
 
@@ -1117,6 +1174,7 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/me/api-key", post(api_me_regenerate_key))
         .route("/v1/servers", get(api_my_servers))
         .route("/v1/servers/contribute", post(api_servers_contribute))
+        .route("/v1/servers/:id/buy-premium", post(api_buy_premium))
         .route("/v1/machines", get(api_my_machines))
         .route("/v1/machines/create", post(api_machines_create))
         .route("/v1/market", get(api_market))

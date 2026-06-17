@@ -248,6 +248,12 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_expires_at DATETIME")
         .execute(pool).await;
 
+    // Premium and Linux version: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN linux_version TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
         ("checkin_enabled", "true"),
@@ -281,6 +287,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("balance_to_code_fee", "0.05"),
         ("balance_to_code_daily_limit", "5"),
         ("balance_to_code_enabled", "true"),
+        ("premium_enabled", "false"),
+        ("premium_ldc_cost", "100"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

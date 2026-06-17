@@ -16,7 +16,10 @@
     <div class="col-md-6 col-lg-4 mb-4">
         <div class="card h-100">
             <div class="card-body">
-                <h5 class="card-title">{{ s.name }}</h5>
+                <h5 class="card-title">
+                    {{ s.name }}
+                    {% if s.is_premium and premium_enabled %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
+                </h5>
                 <ul class="list-group list-group-flush mb-3">
                     <li class="list-group-item d-flex justify-content-between">
                         <span>CPU</span>
@@ -41,6 +44,14 @@
                     <li class="list-group-item d-flex justify-content-between">
                         <span>虚拟化</span>
                         <span class="badge bg-info">{{ s.virt_type | upper }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>服务器地址</span>
+                        <span class="fw-bold">{{ s.ip }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>系统版本</span>
+                        <span class="fw-bold">{% if s.linux_version %}{{ s.linux_version }}{% else %}未知{% endif %}</span>
                     </li>
                 </ul>
                 <button type="button" class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">

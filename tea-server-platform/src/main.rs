@@ -271,6 +271,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
         .route("/servers/:id/delete", post(handlers::delete_server))
+        .route("/servers/:id/buy-premium", post(handlers::buy_premium))
         // Machine market / auto select
         .route("/market", get(handlers::machine_market))
         .route("/machines/auto", get(handlers::auto_select_machine))

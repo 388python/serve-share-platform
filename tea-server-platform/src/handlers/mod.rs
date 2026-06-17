@@ -224,6 +224,18 @@ pub async fn user_dashboard(
     .await
     .unwrap_or_default();
 
+    // Get user's contributed servers
+    let my_servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
+    let premium_ldc_cost = db::get_config_sync("premium_ldc_cost").unwrap_or_else(|| "100".to_string());
+
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("core_hours", &user.0);
@@ -231,6 +243,9 @@ pub async fn user_dashboard(
     ctx.insert("api_key", &api_key);
     ctx.insert("machines", &machines);
     ctx.insert("packages", &packages);
+    ctx.insert("my_servers", &my_servers);
+    ctx.insert("premium_enabled", &premium_enabled);
+    ctx.insert("premium_ldc_cost", &premium_ldc_cost);
 
     let rendered = state
         .templates
@@ -314,6 +329,7 @@ pub struct ContributeServerForm {
     pub nat_port_end: Option<i32>,
     pub nat_multiplier: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub linux_version: Option<String>,
 }
 
 pub async fn contribute_server_submit(
@@ -346,12 +362,13 @@ pub async fn contribute_server_submit(
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let linux_version = form.linux_version.unwrap_or_default();
 
     // Allocate proxy port
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary, will update after insert
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -375,6 +392,7 @@ pub async fn contribute_server_submit(
     .bind(nat_port_end)
     .bind(nat_mult)
     .bind(max_machine_hours)
+    .bind(&linux_version)
     .execute(pool)
     .await;
 
@@ -443,11 +461,23 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &st
                 {
                     let _ = channel.wait_close();
                     if channel.exit_status().unwrap_or(1) == 0 {
-                        // Mark agent as installed
+                        // Detect Linux version via uname -r
+                        let mut detected_linux_version = String::new();
+                        if let Ok(mut ver_channel) = session.channel_session() {
+                            if ver_channel.exec("uname -r").is_ok() {
+                                use std::io::Read;
+                                let _ = ver_channel.read_to_string(&mut detected_linux_version);
+                                detected_linux_version = detected_linux_version.trim().to_string();
+                                let _ = ver_channel.wait_close();
+                            }
+                        }
+
+                        // Mark agent as installed, backfill linux_version if empty
                         let pool = db::get_db();
                         let _ = sqlx::query(
-                            "UPDATE servers SET agent_installed = 1 WHERE id = ?",
+                            "UPDATE servers SET agent_installed = 1, linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END WHERE id = ?",
                         )
+                        .bind(&detected_linux_version)
                         .bind(server_id)
                         .execute(pool);
                     }
@@ -492,9 +522,13 @@ pub async fn machine_market(
         server_capacities.push((s, has_capacity));
     }
 
-    // Sort: has capacity first, then by created_at DESC
+    // Sort: premium first (if enabled), then has capacity, then by created_at DESC
+    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
     server_capacities.sort_by(|a, b| {
-        b.1.cmp(&a.1)  // true (has capacity) comes first
+        let a_premium = premium_enabled && a.0.is_premium;
+        let b_premium = premium_enabled && b.0.is_premium;
+        b_premium.cmp(&a_premium)  // premium first
+            .then_with(|| b.1.cmp(&a.1))  // true (has capacity) comes first
             .then_with(|| b.0.created_at.cmp(&a.0.created_at))
     });
 
@@ -503,6 +537,7 @@ pub async fn machine_market(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("servers", &sorted_servers);
+    ctx.insert("premium_enabled", &premium_enabled);
 
     let rendered = state
         .templates
@@ -2499,4 +2534,72 @@ pub async fn balance_to_code_submit(
     .await;
 
     Ok(Redirect::to("/balance-to-code"))
+}
+
+// ---- Buy Premium Handler ----
+
+pub async fn buy_premium(
+    cookies: Cookies,
+    Path(server_id): Path<i64>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    // Check if premium is enabled
+    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string());
+    if premium_enabled != "true" {
+        return Ok(Redirect::to("/dashboard"));
+    }
+
+    // Check server ownership
+    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
+        .bind(server_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let server = match server {
+        Some(s) => s,
+        None => return Ok(Redirect::to("/dashboard")),
+    };
+
+    if server.is_premium {
+        return Ok(Redirect::to("/dashboard"));
+    }
+
+    // Check LDC balance
+    let cost: f64 = db::get_config_sync("premium_ldc_cost")
+        .unwrap_or_else(|| "100".to_string())
+        .parse()
+        .unwrap_or(100.0);
+
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let user = match user {
+        Some(u) => u,
+        None => return Ok(Redirect::to("/login")),
+    };
+
+    if user.ldc_balance < cost {
+        return Ok(Redirect::to("/dashboard"));
+    }
+
+    // Deduct LDC and set premium
+    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+        .bind(cost)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
+        .bind(server_id)
+        .execute(pool)
+        .await;
+
+    Ok(Redirect::to("/dashboard"))
 }

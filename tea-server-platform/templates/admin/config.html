@@ -186,6 +186,20 @@
                         <input type="number" class="form-control" id="traffic_bandwidth_threshold_mbps" name="traffic_bandwidth_threshold_mbps" value="{% for c in configs %}{% if c.key == 'traffic_bandwidth_threshold_mbps' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
                     </div>
 
+                    <!-- 优选套餐 -->
+                    <div class="mb-3">
+                        <label for="premium_enabled" class="form-label">优选套餐开关</label>
+                        <select class="form-select" id="premium_enabled" name="premium_enabled">
+                            <option value="false" {% if config.get("premium_enabled") == "false" %}selected{% endif %}>关闭</option>
+                            <option value="true" {% if config.get("premium_enabled") == "true" %}selected{% endif %}>开启</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="premium_ldc_cost" class="form-label">优选费用（LDC）</label>
+                        <input type="number" class="form-control" id="premium_ldc_cost" name="premium_ldc_cost" value="{{ config.get("premium_ldc_cost") | default(value="100") }}" step="1" min="1">
+                        <small class="text-muted">贡献者标记服务器为优选需要支付的 LDC 数量</small>
+                    </div>
+
                     <!-- 结算阈值 -->
                     <div class="mb-3">
                         <label for="settlement_threshold_pct" class="form-label">结算阈值 (%)</label>

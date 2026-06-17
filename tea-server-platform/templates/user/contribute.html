@@ -103,6 +103,11 @@
                     {% endif %}
 
                     <div class="mb-3">
+                        <label for="linux_version" class="form-label">Linux 版本（可选，留空将自动探测）</label>
+                        <input type="text" class="form-control" id="linux_version" name="linux_version" placeholder="例如：Ubuntu 22.04">
+                    </div>
+
+                    <div class="mb-3">
                         <label for="expires_days" class="form-label">过期天数</label>
                         <input type="number" class="form-control" id="expires_days" name="expires_days" value="30" min="1">
                     </div>
