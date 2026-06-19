@@ -182,6 +182,8 @@ pub struct ContributeServerRequest {
     pub nat_multiplier: Option<f64>,
     pub max_machine_hours: Option<f64>,
     pub linux_version: Option<String>,
+    pub description: Option<String>,
+    pub provider: Option<String>,
 }
 
 // POST /api/v1/servers/contribute
@@ -216,7 +218,7 @@ async fn api_servers_contribute(
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -241,6 +243,8 @@ async fn api_servers_contribute(
     .bind(nat_mult)
     .bind(max_machine_hours)
     .bind(form.linux_version.as_deref().unwrap_or(""))
+    .bind(form.description.as_deref().unwrap_or(""))
+    .bind(form.provider.as_deref().unwrap_or(""))
     .execute(pool)
     .await;
 

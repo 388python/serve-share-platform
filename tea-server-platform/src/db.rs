@@ -254,6 +254,12 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN linux_version TEXT NOT NULL DEFAULT ''")
         .execute(pool).await;
 
+    // Description and provider: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
         ("checkin_enabled", "true"),

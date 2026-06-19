@@ -53,6 +53,17 @@
                         <span>系统版本</span>
                         <span class="fw-bold">{% if s.linux_version %}{{ s.linux_version }}{% else %}未知{% endif %}</span>
                     </li>
+                    {% if s.provider %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>供应商</span>
+                        <span class="fw-bold">{{ s.provider }}</span>
+                    </li>
+                    {% endif %}
+                    {% if s.description %}
+                    <li class="list-group-item">
+                        <small class="text-muted">{{ s.description | truncate(length=80) }}</small>
+                    </li>
+                    {% endif %}
                 </ul>
                 <button type="button" class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
                     选择此服务器

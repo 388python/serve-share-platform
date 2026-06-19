@@ -52,6 +52,8 @@ pub struct Server {
     pub max_machine_hours: f64,
     pub is_premium: bool,
     pub linux_version: String,
+    pub description: String,
+    pub provider: String,
 }
 
 // Table: machines
