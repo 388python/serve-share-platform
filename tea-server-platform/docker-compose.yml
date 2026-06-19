@@ -21,4 +21,5 @@ services:
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin123
       - SSH_PROXY_PORT_START=30001
+      - SSH_PROXY_PORT_COUNT=100
     restart: unless-stopped

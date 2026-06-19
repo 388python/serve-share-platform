@@ -1,0 +1,74 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - OAuth 应用管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>OAuth2 应用管理</h2>
+        <p class="text-muted">注册第三方 OAuth2 应用，支持静默授权</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">注册新应用</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/admin/oauth-apps">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">应用名称</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="redirect_uri" class="form-label">回调地址</label>
+                        <input type="url" class="form-control" id="redirect_uri" name="redirect_uri" required placeholder="https://example.com/callback">
+                    </div>
+                    <button type="submit" class="btn btn-primary">注册</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if apps %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>Client ID</th>
+                                <th>Client Secret</th>
+                                <th>回调地址</th>
+                                <th>状态</th>
+                                <th>创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for app in apps %}
+                            <tr>
+                                <td>{{ app.name }}</td>
+                                <td><code>{{ app.client_id }}</code></td>
+                                <td><code>{{ app.client_secret | truncate(length=16, end="...") }}</code></td>
+                                <td>{{ app.redirect_uri }}</td>
+                                <td>{% if app.is_active %}<span class="badge bg-success">启用</span>{% else %}<span class="badge bg-secondary">禁用</span>{% endif %}</td>
+                                <td>{{ app.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无 OAuth 应用</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

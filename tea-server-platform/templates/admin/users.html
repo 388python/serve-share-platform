@@ -82,6 +82,10 @@
                                                     <input type="checkbox" class="form-check-input" id="is_banned{{ u.id }}" name="is_banned" value="true" {% if u.is_banned %}checked{% endif %}>
                                                     <label class="form-check-label" for="is_banned{{ u.id }}">封禁用户</label>
                                                 </div>
+                                                <div class="mb-3 form-check">
+                                                    <input type="checkbox" class="form-check-input" id="editIsAdmin{{ u.id }}" name="is_admin" {% if u.is_admin %}checked{% endif %}>
+                                                    <label class="form-check-label" for="editIsAdmin{{ u.id }}">设为管理员</label>
+                                                </div>
                                             </div>
                                             <div class="modal-footer">
                                                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>

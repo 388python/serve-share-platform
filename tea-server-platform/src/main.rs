@@ -29,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
     config::AppConfig::from_env()?;
     let cfg = config::AppConfig::get();
 
+    // Record startup time for health endpoint
+    handlers::api::set_startup_time(chrono::Utc::now());
+
     // Init database
     db::init_db(&cfg.database_url).await?;
 
@@ -91,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
         let cfg = config::AppConfig::get();
         let start_port = cfg.ssh_proxy_port_start;
         // Start SSH proxy listeners on the port range
-        for port_offset in 0..100 {
+        for port_offset in 0..cfg.ssh_proxy_port_count {
             let port = start_port + port_offset;
             let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(l) => l,
@@ -130,21 +133,145 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Background task: Traffic monitoring
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            let enabled = db::get_config("traffic_monitor_enabled").await
+                .unwrap_or_else(|| "true".to_string());
+            if enabled != "true" {
+                continue;
+            }
+            let pool = db::get_db();
+            let machines: Vec<(i64, String)> = sqlx::query_as(
+                "SELECT m.id, s.ip FROM machines m JOIN servers s ON m.server_id = s.id WHERE m.status = 'running'"
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+            
+            for (machine_id, server_ip) in &machines {
+                let alerts = services::traffic_monitor::scan_machine_traffic(*machine_id, server_ip).await;
+                for alert_msg in &alerts {
+                    tracing::warn!("Traffic alert for machine {}: {}", machine_id, alert_msg);
+                    let _ = sqlx::query(
+                        "INSERT INTO traffic_alerts (machine_id, alert_type, message) VALUES (?, 'traffic_violation', ?)"
+                    )
+                    .bind(machine_id)
+                    .bind(alert_msg)
+                    .execute(pool)
+                    .await;
+                    // Stop the machine
+                    let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
+                        .bind(machine_id)
+                        .execute(pool)
+                        .await;
+                }
+            }
+        }
+    });
+
+    // Background task: Delayed settlement
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            let pool = db::get_db();
+            let threshold_pct: f64 = db::get_config("settlement_threshold_pct").await
+                .unwrap_or_else(|| "80".to_string())
+                .parse()
+                .unwrap_or(80.0);
+            let threshold = threshold_pct / 100.0;
+
+            // Find stopped/deleted machines that haven't been settled
+            let machines: Vec<(i64, i64, f64, f64)> = sqlx::query_as(
+                "SELECT m.id, m.server_id, m.core_hours_per_hour, m.used_hours FROM machines m WHERE m.status IN ('stopped','deleted') AND m.settled = 0"
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+            for (machine_id, server_id, ch_per_hour, used_hours) in &machines {
+                // Get server expiry
+                let server_expiry: Option<(String,)> = sqlx::query_as(
+                    "SELECT expires_at FROM servers WHERE id = ?"
+                )
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((expires_at_str,)) = server_expiry {
+                    if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
+                        let max_hours = (expires_at.naive_utc() - chrono::Utc::now().naive_utc()).num_hours() as f64;
+                        if max_hours > 0.0 && used_hours / max_hours >= threshold {
+                            // Settle: credit core hours to server owner
+                            let total_ch = ch_per_hour * used_hours;
+                            let _ = sqlx::query(
+                                "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
+                            )
+                            .bind(total_ch)
+                            .bind(server_id)
+                            .execute(pool)
+                            .await;
+                            let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
+                                .bind(machine_id)
+                                .execute(pool)
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Background task: Dispute auto-resolve
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let pool = db::get_db();
+            let now = chrono::Utc::now();
+            let _ = sqlx::query(
+                "UPDATE disputes SET status = 'platform' WHERE status = 'pending' AND auto_resolve_at <= ?"
+            )
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    });
+
+    // Background task: Clean expired bonus
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let pool = db::get_db();
+            let now = chrono::Utc::now();
+            let _ = sqlx::query(
+                "UPDATE users SET bonus_core_hours = 0, bonus_expires_at = NULL WHERE bonus_expires_at IS NOT NULL AND bonus_expires_at <= ?"
+            )
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    });
+
     // Build router
     let app = Router::new()
         // Public routes
         .route("/", get(index_page))
         .route("/health", get(handlers::health_check))
+        .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
         .route("/admin-login", get(handlers::admin_login))
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
+        .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
         .route("/servers/:id/delete", post(handlers::delete_server))
+        .route("/servers/:id/buy-premium", post(handlers::buy_premium))
         // Machine market / auto select
         .route("/market", get(handlers::machine_market))
         .route("/machines/auto", get(handlers::auto_select_machine))
@@ -153,6 +280,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines/:id/stop", post(handlers::stop_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
+        // Disputes
+        .route("/disputes/new", get(handlers::dispute_new_page))
+        .route("/disputes/create", post(handlers::dispute_create))
+        .route("/disputes/:id/reply", post(handlers::merchant_dispute_reply))
         // Recharge
         .route("/recharge", get(handlers::recharge_page))
         .route("/recharge", post(handlers::create_recharge_order))
@@ -170,6 +301,11 @@ async fn main() -> anyhow::Result<()> {
         // Packages
         .route("/packages", get(handlers::packages_page))
         .route("/packages/buy", post(handlers::buy_package))
+        // Balance to code
+        .route("/balance-to-code", get(handlers::balance_to_code_page))
+        .route("/balance-to-code", post(handlers::balance_to_code_submit))
+        // OAuth authorize
+        .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
         .route("/admin", get(handlers::admin_dashboard))
         .route("/admin/config", get(handlers::admin_config_page))
@@ -187,6 +323,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites", get(handlers::admin_invites))
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
+        .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
+        .route("/admin/disputes", get(handlers::admin_disputes))
+        .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
+        .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
+        .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
+        // API routes (RESTful JSON) - mounted under /api prefix
+        .nest("/api", handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())
@@ -339,6 +482,19 @@ async fn auth_callback(
                         .ok();
                 }
                 None => {
+                    let public_note: Option<String> = sqlx::query_scalar(
+                        "SELECT public_note FROM invites WHERE code = ?"
+                    )
+                    .bind(&invite_code)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None)
+                    .flatten();
+                    if let Some(note) = public_note {
+                        if !note.is_empty() {
+                            return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
+                        }
+                    }
                     return Redirect::to("/?error=invalid_invite").into_response();
                 }
             }

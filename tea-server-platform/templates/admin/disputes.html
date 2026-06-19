@@ -1,0 +1,71 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 争议管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>争议管理</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if disputes %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户</th>
+                                <th>机器ID</th>
+                                <th>原因</th>
+                                <th>冻结核时</th>
+                                <th>状态</th>
+                                <th>回复</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for d in disputes %}
+                            <tr>
+                                <td>{{ d.id }}</td>
+                                <td>{{ d.user_id }}</td>
+                                <td>{{ d.machine_id }}</td>
+                                <td>{{ d.reason | truncate(length=30) }}</td>
+                                <td>{{ d.amount_frozen }}</td>
+                                <td>
+                                    {% if d.status == "pending" %}<span class="badge bg-warning">待处理</span>
+                                    {% elif d.status == "platform" %}<span class="badge bg-danger">平台介入</span>
+                                    {% elif d.status == "resolved" %}<span class="badge bg-success">已解决</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ d.reply | default(value="-") | truncate(length=20) }}</td>
+                                <td>{{ d.created_at }}</td>
+                                <td>
+                                    {% if d.status != "resolved" %}
+                                    <form method="post" action="/admin/disputes/{{ d.id }}/resolve" style="display:inline">
+                                        <select name="resolution" class="form-select form-select-sm d-inline w-auto">
+                                            <option value="refund">退款</option>
+                                            <option value="reject">驳回</option>
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-primary">裁决</button>
+                                    </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无争议记录</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

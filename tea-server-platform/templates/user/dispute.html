@@ -1,0 +1,30 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 发起争议{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>发起争议</h2>
+        <p class="text-muted">对机器 {{ machine_id }} 发起争议</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <form method="post" action="/disputes/create">
+                    <input type="hidden" name="machine_id" value="{{ machine_id }}">
+                    <div class="mb-3">
+                        <label for="reason" class="form-label">争议原因</label>
+                        <textarea class="form-control" id="reason" name="reason" rows="5" required placeholder="请详细描述您遇到的问题..."></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-danger">提交争议</button>
+                    <a href="/machines" class="btn btn-secondary">取消</a>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

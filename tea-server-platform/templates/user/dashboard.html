@@ -155,6 +155,81 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">我的 API Key</h5>
+                <form method="post" action="/dashboard/api-key" style="display:inline">
+                    <button type="submit" class="btn btn-warning btn-sm">重新生成</button>
+                </form>
+            </div>
+            <div class="card-body">
+                {% if api_key %}
+                <div class="input-group">
+                    <input type="text" class="form-control" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
+                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">显示</button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">复制</button>
+                </div>
+                <small class="text-muted">请妥善保管此 Key，用于 API 请求认证。点击「显示」查看完整 Key</small>
+                {% else %}
+                <div class="input-group">
+                    <input type="text" class="form-control" value="尚未生成 API Key" readonly disabled>
+                    <button class="btn btn-primary" type="submit" form="genApiKeyForm">生成 API Key</button>
+                </div>
+                <form id="genApiKeyForm" method="post" action="/dashboard/api-key" style="display:none"></form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header"><h5 class="mb-0">我的服务器</h5></div>
+            <div class="card-body">
+                {% if my_servers %}
+                <div class="list-group">
+                    {% for s in my_servers %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ s.name }}</strong>
+                            {% if s.is_premium %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
+                            <small class="text-muted ms-2">{{ s.ip }} · {{ s.cpu_cores }}核 / {{ s.memory_gb }}GB</small>
+                        </div>
+                        <div>
+                            {% if premium_enabled and not s.is_premium %}
+                            <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">购买优选 ({{ premium_ldc_cost }} LDC)</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted">暂无贡献的服务器</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">余额兑换码</h5>
+            </div>
+            <div class="card-body text-center">
+                <p class="card-text">将余额转换为兑换码分享给他人</p>
+                <a href="/balance-to-code" class="btn btn-outline-primary">立即兑换</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">每日签到</h5>
                 <form method="post" action="/checkin">
                     <button type="submit" class="btn btn-success">立即签到</button>

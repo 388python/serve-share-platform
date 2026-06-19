@@ -1,0 +1,77 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 余额兑换码{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>余额兑换码</h2>
+        <p class="text-muted">将余额转换为兑换码，可分享给他人使用</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">生成兑换码</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <span class="badge bg-info">充值余额: {{ core_hours | default(value=0) | round(precision=2) }} 核时</span>
+                    <span class="badge bg-warning">赠金余额: {{ bonus_core_hours | default(value=0) | round(precision=2) }} 核时{% if bonus_expires_at %} (到期: {{ bonus_expires_at }}){% endif %}</span>
+                </div>
+                <div class="mb-3">
+                    <span class="text-muted">今日已兑换: {{ today_count | default(value=0) }} / {{ daily_limit | default(value=5) }} 次</span>
+                    <span class="text-muted ms-3">手续费: {{ fee_pct | default(value=5) }}%</span>
+                </div>
+                {% if can_convert %}
+                <form method="post" action="/balance-to-code">
+                    <div class="mb-3">
+                        <label for="amount" class="form-label">兑换金额（核时）</label>
+                        <input type="number" class="form-control" id="amount" name="amount" required min="1" step="0.01">
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="use_bonus" name="use_bonus">
+                        <label class="form-check-label" for="use_bonus">使用赠金余额（赠金有效期不会暂停）</label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">生成兑换码</button>
+                </form>
+                {% else %}
+                <div class="alert alert-warning">今日兑换次数已达上限</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">兑换记录</h5>
+            </div>
+            <div class="card-body">
+                {% if logs %}
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr><th>金额</th><th>手续费</th><th>类型</th><th>时间</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for log in logs %}
+                            <tr>
+                                <td>{{ log.amount }}</td>
+                                <td>{{ log.fee }}</td>
+                                <td>{% if log.is_bonus %}<span class="badge bg-warning">赠金</span>{% else %}<span class="badge bg-info">余额</span>{% endif %}</td>
+                                <td>{{ log.created_at }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-3">暂无兑换记录</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

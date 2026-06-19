@@ -147,6 +147,119 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Add api_key column to users (ignore error if already exists)
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN api_key TEXT")
+        .execute(pool)
+        .await;
+
+    // Create traffic_alerts table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS traffic_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER,
+            server_id INTEGER,
+            alert_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create disputes table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS disputes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            server_id INTEGER NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            resolution TEXT,
+            reply TEXT,
+            amount_frozen REAL NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME,
+            auto_resolve_at DATETIME NOT NULL
+        );
+    "#).execute(pool).await?;
+
+    // Create oauth_apps table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS oauth_apps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            client_id TEXT NOT NULL UNIQUE,
+            client_secret TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            created_by INTEGER NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
+    // Create balance_to_code_logs table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS balance_to_code_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            fee REAL NOT NULL DEFAULT 0,
+            is_bonus INTEGER NOT NULL DEFAULT 0,
+            code TEXT NOT NULL UNIQUE,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
+    // Add columns to invites
+    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE invites ADD COLUMN public_note TEXT DEFAULT ''")
+        .execute(pool)
+        .await;
+
+    // Settlement: machines table
+    let _ = sqlx::query("ALTER TABLE machines ADD COLUMN settled INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE machines ADD COLUMN used_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    // Expose IP & NAT: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN expose_ip INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_start INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_end INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_multiplier REAL NOT NULL DEFAULT 1.0")
+        .execute(pool).await;
+
+    // Max machine hours: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN max_machine_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    // Bonus expiry: users table
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_core_hours REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_expires_at DATETIME")
+        .execute(pool).await;
+
+    // Premium and Linux version: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN linux_version TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+
+    // Description and provider: servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
         ("checkin_enabled", "true"),
@@ -158,6 +271,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("withdraw_fee", "0.0"),
         ("virt_type", "lxd"),
         ("select_mode", "market"),
+        ("lock_bonus", "unlocked"),
         ("global_cpu_multiplier", "1.0"),
         ("global_memory_multiplier", "1.0"),
         ("global_bandwidth_multiplier", "1.0"),
@@ -169,6 +283,18 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_client_secret", ""),
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
+        ("admin_api_key", ""),
+        ("traffic_monitor_enabled", "true"),
+        ("traffic_bandwidth_threshold_mbps", "100"),
+        ("settlement_threshold_pct", "80"),
+        ("global_nat_multiplier", "1.0"),
+        ("dispute_auto_resolve_hours", "72"),
+        ("checkin_bonus_expiry_days", "30"),
+        ("balance_to_code_fee", "0.05"),
+        ("balance_to_code_daily_limit", "5"),
+        ("balance_to_code_enabled", "true"),
+        ("premium_enabled", "false"),
+        ("premium_ldc_cost", "100"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")
