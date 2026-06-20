@@ -1049,6 +1049,11 @@ pub async fn stop_machine(
                     .unwrap_or(None);
 
             if let Some((status,)) = current_status {
+                if status == "pending" {
+                    // Pending machines are finalized by the provisioning lifecycle job.
+                    return Ok(Redirect::to("/machines"));
+                }
+
                 if status == "stopped" || status == "deleted" {
                     // Already stopped, no need to stop again
                     return Ok(Redirect::to("/machines"));
@@ -1115,6 +1120,11 @@ pub async fn delete_machine(
                     .unwrap_or(None);
 
             if let Some((status,)) = current_status {
+                if status == "pending" {
+                    // Pending machines must remain refundable by the provisioning lifecycle job.
+                    return Ok(Redirect::to("/machines"));
+                }
+
                 if status == "deleted" {
                     // Already deleted
                     return Ok(Redirect::to("/machines"));

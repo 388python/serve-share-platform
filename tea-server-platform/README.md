@@ -75,6 +75,17 @@ Agent 请求使用 `X-API-Key` 认证。平台会从站点配置 `agent_api_key`
 sudo bash agent/install.sh lxd {agent_api_key}
 ```
 
+如果手动使用 `agent/agent.service`，需先在目标服务器创建 `/etc/tea-agent/agent.env`：
+
+```bash
+sudo mkdir -p /etc/tea-agent
+sudo tee /etc/tea-agent/agent.env >/dev/null <<'EOF'
+AGENT_API_KEY={agent_api_key}
+VIRT_TYPE=lxd
+EOF
+sudo chmod 600 /etc/tea-agent/agent.env
+```
+
 虚拟机创建会先进入 `pending` 状态。Agent 确认创建成功后变为 `running`；Agent 创建失败时变为 `failed`，平台会退回本次扣除的核时并回滚机主入账。
 
 ### 管理员

@@ -5,8 +5,10 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /opt/tea-agent/agent.py
-Environment=AGENT_API_KEY=
-Environment=VIRT_TYPE={{VIRT_TYPE}}
+# Create /etc/tea-agent/agent.env before starting this service:
+# AGENT_API_KEY=<platform agent_api_key>
+# VIRT_TYPE=lxd
+EnvironmentFile=/etc/tea-agent/agent.env
 Restart=always
 RestartSec=10
 
