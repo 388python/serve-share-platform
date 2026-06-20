@@ -477,9 +477,9 @@ async fn auth_callback(
             if invite_code.is_empty() {
                 return Redirect::to("/?error=invite_required").into_response();
             }
-            // Verify and consume invite code
-            let invite_valid: Option<i64> = sqlx::query_scalar(
-                "SELECT id FROM invites WHERE code = ? AND is_used = 0",
+            // Verify invite code exists and is unused
+            let invite_valid: Option<(i64, String)> = sqlx::query_as(
+                "SELECT id, public_note FROM invites WHERE code = ? AND is_used = 0",
             )
             .bind(&invite_code)
             .fetch_optional(pool)
@@ -487,16 +487,18 @@ async fn auth_callback(
             .unwrap_or(None);
 
             match invite_valid {
-                Some(invite_id) => {
-                    sqlx::query("UPDATE invites SET is_used = 1, used_by = (SELECT id FROM users WHERE linuxdo_id = ? LIMIT 1), used_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(user_info.id)
-                        .bind(invite_id)
-                        .execute(pool)
-                        .await
-                        .ok();
+                Some((_, public_note)) => {
+                    // Note: invite will be marked used AFTER user is successfully created
+                    // Store invite_code for later use in session
+                    let invite_code_for_session = invite_code.clone();
+                    // Check if public_note has error message
+                    if !public_note.is_empty() {
+                        return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&public_note))).into_response();
+                    }
                 }
                 None => {
-                    let public_note: Option<String> = sqlx::query_scalar(
+                    // Check if code exists but already used
+                    let code_exists: Option<String> = sqlx::query_scalar(
                         "SELECT public_note FROM invites WHERE code = ?"
                     )
                     .bind(&invite_code)
@@ -504,7 +506,8 @@ async fn auth_callback(
                     .await
                     .unwrap_or(None)
                     .flatten();
-                    if let Some(note) = public_note {
+                    
+                    if let Some(note) = code_exists {
                         if !note.is_empty() {
                             return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
                         }
@@ -514,7 +517,8 @@ async fn auth_callback(
             }
         }
 
-        sqlx::query(
+        // Create user FIRST (invite code consumed only if this succeeds)
+        let result = sqlx::query(
             "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
         )
         .bind(user_info.id)
@@ -522,24 +526,35 @@ async fn auth_callback(
         .bind(user_info.effective_email())
         .bind(new_user_core_hours)
         .execute(pool)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to create user: {}", e);
-            panic!("User creation failed");
-        });
+        .await;
 
-        let new_user: (i64, bool, f64, f64) = sqlx::query_as(
-            "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
-        )
-        .bind(user_info.id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or((0, false, 0.0, 0.0));
+        let new_user_id: i64;
+        match result {
+            Ok(res) => {
+                new_user_id = res.last_insert_rowid();
+            }
+            Err(e) => {
+                tracing::error!("Failed to create user: {}", e);
+                return Redirect::to("/?error=registration_failed").into_response();
+            }
+        }
 
-        user_id = new_user.0;
-        is_admin = new_user.1;
-        core_hours = new_user.2;
-        ldc_balance = new_user.3;
+        // Mark invite code as used AFTER user is successfully created
+        if require_invite {
+            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
+            let _ = sqlx::query(
+                "UPDATE invites SET is_used = 1, used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND is_used = 0"
+            )
+            .bind(new_user_id)
+            .bind(&invite_code)
+            .execute(pool)
+            .await;
+        }
+
+        user_id = new_user_id;
+        is_admin = false;
+        core_hours = new_user_core_hours;
+        ldc_balance = 0.0;
     }
 
     // Create session cookie

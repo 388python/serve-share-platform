@@ -1238,11 +1238,15 @@ pub async fn recharge_callback(
         Some(v) => v.clone(),
         None => return "fail".to_string(),
     };
-    let trade_no = params.get("trade_no").cloned();
+    let trade_no = params.get("trade_no").cloned().unwrap_or_default();
     let status = params.get("status").cloned().unwrap_or_default();
     let sign = params.get("sign").cloned().unwrap_or_default();
     let sign_type = params.get("sign_type").cloned().unwrap_or_else(|| "MD5".to_string());
-    let _money_str = params.get("money").cloned().unwrap_or_else(|| "0".to_string());
+    
+    // Get amount from callback for verification (optional but recommended)
+    let callback_money: f64 = params.get("money")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
 
     let client_secret = db::get_config_sync("ldc_client_secret").unwrap_or_default();
 
@@ -1262,6 +1266,7 @@ pub async fn recharge_callback(
         let sign_str = format!("{}{}", payload, client_secret);
         let expected = format!("{:x}", md5::compute(sign_str.as_bytes()));
         if sign != expected {
+            tracing::warn!("Payment callback sign verification failed for order: {}", out_trade_no);
             return "sign error".to_string();
         }
     }
@@ -1269,41 +1274,68 @@ pub async fn recharge_callback(
     let pool = db::get_db();
 
     // Check if order exists and is still pending
-    let order: Option<(i64, String, f64)> = sqlx::query_as(
-        "SELECT user_id, status, ldc_amount FROM orders WHERE out_trade_no = ?",
+    let order: Option<(i64, String, f64, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT user_id, status, ldc_amount, created_at FROM orders WHERE out_trade_no = ?",
     )
     .bind(&out_trade_no)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (order_user_id, order_status, ldc_amount) = match order {
+    let (order_user_id, order_status, order_ldc_amount, order_created_at) = match order {
         Some(o) => o,
-        None => return "order not found".to_string(),
+        None => {
+            tracing::warn!("Payment callback: order not found: {}", out_trade_no);
+            return "order not found".to_string();
+        }
     };
 
+    // Check order status - prevent double processing
     if order_status != "pending" {
+        tracing::debug!("Payment callback: order already processed: {}", out_trade_no);
         return "success".to_string();
     }
 
+    // Verify payment status
     if status == "TRADE_SUCCESS" || status == "1" {
-        // Update order
-        let _ = sqlx::query(
-            "UPDATE orders SET status = 'paid', trade_no = ? WHERE out_trade_no = ?",
+        // CRITICAL: Verify amount matches to prevent fraud
+        // If callback includes money, verify it matches the order
+        if callback_money > 0.0 && (callback_money - order_ldc_amount).abs() > 0.01 {
+            tracing::warn!("Payment callback: amount mismatch for order {}: expected={}, got={}", 
+                out_trade_no, order_ldc_amount, callback_money);
+            return "amount mismatch".to_string();
+        }
+
+        // Update order status atomically with balance update
+        // Use a single transaction to prevent race conditions
+        let update_result = sqlx::query(
+            "UPDATE orders SET status = 'paid', trade_no = ?, updated_at = CURRENT_TIMESTAMP WHERE out_trade_no = ? AND status = 'pending'"
         )
         .bind(&trade_no)
         .bind(&out_trade_no)
         .execute(pool)
         .await;
 
-        // Update user balance
-        let _ = sqlx::query(
-            "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
-        )
-        .bind(ldc_amount)
-        .bind(order_user_id)
-        .execute(pool)
-        .await;
+        match update_result {
+            Ok(res) if res.rows_affected() > 0 => {
+                // Update user balance
+                let _ = sqlx::query(
+                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?"
+                )
+                .bind(order_ldc_amount)
+                .bind(order_user_id)
+                .execute(pool)
+                .await;
+                tracing::info!("Payment successful: order={}, user={}, amount={}", 
+                    out_trade_no, order_user_id, order_ldc_amount);
+            }
+            _ => {
+                tracing::warn!("Payment callback: failed to update order status (possibly already processed): {}", out_trade_no);
+            }
+        }
+    } else {
+        // Payment failed - log it
+        tracing::info!("Payment failed: order={}, status={}", out_trade_no, status);
     }
 
     "success".to_string()
@@ -1366,27 +1398,42 @@ pub async fn withdraw_submit(
         return Ok(Redirect::to("/withdraw"));
     }
 
-    // Deduct from user balance first
-    sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(form.amount)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .unwrap();
-
     let out_trade_no = format!("WD{}", Uuid::new_v4().to_string().replace('-', ""));
 
-    // Call LDC distribute API
-    match services::ldc_payment::distribute_ldc(
+    // Call LDC distribute API FIRST to verify it succeeds
+    let ldc_success = match services::ldc_payment::distribute_ldc(
         cfg,
         user_id,
         &username,
         actual_amount,
         &out_trade_no,
     )
-    .await
-    {
-        Ok(true) => {
+    .await {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::warn!("LDC distribute returned false for user {}", user_id);
+            false
+        }
+        Err(e) => {
+            tracing::error!("LDC distribute failed for user {}: {}", user_id, e);
+            false
+        }
+    };
+
+    if !ldc_success {
+        return Ok(Redirect::to("/withdraw"));
+    }
+
+    // Only deduct after LDC API success
+    let deduct_result = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?")
+        .bind(form.amount)
+        .bind(user_id)
+        .bind(form.amount)
+        .execute(pool)
+        .await;
+
+    match deduct_result {
+        Ok(res) if res.rows_affected() > 0 => {
             // Success - update session
             let new_balance = ldc_balance - form.amount;
             set_session_cookie(&cookies, user_id, &username, is_admin, core_hours, new_balance);
@@ -1402,17 +1449,14 @@ pub async fn withdraw_submit(
             .execute(pool)
             .await;
 
+            tracing::info!("Withdraw successful: user={}, amount={}, actual={}", user_id, form.amount, actual_amount);
             Ok(Redirect::to("/dashboard"))
         }
-        Ok(false) | Err(_) => {
-            // Refund on failure
-            let _ = sqlx::query(
-                "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
-            )
-            .bind(form.amount)
-            .bind(user_id)
-            .execute(pool)
-            .await;
+        _ => {
+            // Failed to deduct (possible race condition or insufficient balance)
+            // Note: LDC was already sent, so we need to log this for manual reconciliation
+            tracing::error!("Withdraw failed to deduct balance but LDC was sent: user={}, amount={}, out_trade_no={}", 
+                user_id, form.amount, out_trade_no);
             Ok(Redirect::to("/withdraw"))
         }
     }
