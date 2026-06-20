@@ -298,6 +298,43 @@ pub async fn regenerate_api_key(
     Ok(Redirect::to("/dashboard"))
 }
 
+/// 公开的服务器列表页面
+pub async fn servers_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> impl IntoResponse {
+    let pool = db::get_db();
+
+    // 只查询激活且未过期的服务器
+    let servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > NOW() ORDER BY is_premium DESC, created_at DESC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let cfg = AppConfig::get();
+    let site_name = db::get_config_sync("site_name")
+        .unwrap_or_else(|| cfg.platform_domain.clone());
+
+    let mut ctx = Context::new();
+    ctx.insert("site_name", &site_name);
+    // 已登录用户信息
+    if let Some(session) = services::session::get_session_checked(&cookies) {
+        ctx.insert("user_name", &session.username);
+        ctx.insert("is_admin", &session.is_admin.to_string());
+    }
+    ctx.insert("servers", &servers);
+
+    match state.templates.render("servers.html", &ctx) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to render servers template: {}", e);
+            Html(format!("<h1>Error loading template: {}</h1>", e)).into_response()
+        }
+    }
+}
+
 pub async fn contribute_server_page(
     State(state): State<AppState>,
     cookies: Cookies,

@@ -277,6 +277,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
+        .route("/servers", get(handlers::servers_page))
         .route(
             "/admin-login",
             post(handlers::admin_login),
