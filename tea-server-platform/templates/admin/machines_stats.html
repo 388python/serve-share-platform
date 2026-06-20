@@ -70,7 +70,7 @@
                                         <div class="progress-bar {% if m.cpu_usage > 80 %}bg-danger{% elif m.cpu_usage > 50 %}bg-warning{% else %}bg-success{% endif %}" 
                                              role="progressbar" 
                                              style="width: {{ m.cpu_usage }}%">
-                                            {{ m.cpu_usage | round(1) }}%
+                                            {{ m.cpu_usage }}%
                                         </div>
                                     </div>
                                     {% else %}
@@ -83,7 +83,7 @@
                                         <div class="progress-bar {% if (m.memory_used_mb / m.memory_total_mb * 100) > 80 %}bg-danger{% elif (m.memory_used_mb / m.memory_total_mb * 100) > 50 %}bg-warning{% else %}bg-info{% endif %}" 
                                              role="progressbar" 
                                              style="width: {{ (m.memory_used_mb / m.memory_total_mb * 100) | round }}%">
-                                            {{ m.memory_used_mb | round(0) }}M / {{ m.memory_total_mb | round(0) }}M
+                                            {{ m.memory_used_mb }}M / {{ m.memory_total_mb }}M
                                         </div>
                                     </div>
                                     {% else %}
@@ -96,7 +96,7 @@
                                         <div class="progress-bar {% if (m.disk_used_gb / m.disk_total_gb * 100) > 90 %}bg-danger{% elif (m.disk_used_gb / m.disk_total_gb * 100) > 70 %}bg-warning{% else %}bg-secondary{% endif %}" 
                                              role="progressbar" 
                                              style="width: {{ (m.disk_used_gb / m.disk_total_gb * 100) | round }}%">
-                                            {{ m.disk_used_gb | round(1) }}G / {{ m.disk_total_gb | round(1) }}G
+                                            {{ m.disk_used_gb }}G / {{ m.disk_total_gb }}G
                                         </div>
                                     </div>
                                     {% else %}
@@ -105,7 +105,7 @@
                                 </td>
                                 <td>
                                     {% if m.bandwidth_rx > 0 %}
-                                    <span class="text-success" title="下行">↓ {{ m.bandwidth_rx | round(1) }} Mbps</span>
+                                    <span class="text-success" title="下行">↓ {{ m.bandwidth_rx }} Mbps</span>
                                     {% else %}
                                     <span class="text-muted">-</span>
                                     {% endif %}
