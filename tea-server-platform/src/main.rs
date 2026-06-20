@@ -172,55 +172,29 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Background task: Delayed settlement
+    // NOTE: Core hours are already credited to server owner when machine is created.
+    // This task handles other settlement logic if needed (e.g., refunds for unused time).
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             let pool = db::get_db();
-            let threshold_pct: f64 = db::get_config("settlement_threshold_pct").await
-                .unwrap_or_else(|| "80".to_string())
-                .parse()
-                .unwrap_or(80.0);
-            let threshold = threshold_pct / 100.0;
-
-            // Find stopped/deleted machines that haven't been settled
-            let machines: Vec<(i64, i64, f64, f64)> = sqlx::query_as(
-                "SELECT m.id, m.server_id, m.core_hours_per_hour, m.used_hours FROM machines m WHERE m.status IN ('stopped','deleted') AND m.settled = 0"
+            
+            // Find stopped machines that haven't been settled
+            // (Deleted machines are already removed from DB)
+            let machines: Vec<(i64,)> = sqlx::query_as(
+                "SELECT id FROM machines WHERE status = 'stopped' AND settled = 0"
             )
             .fetch_all(pool)
             .await
             .unwrap_or_default();
 
-            for (machine_id, server_id, ch_per_hour, used_hours) in &machines {
-                // Get server expiry
-                let server_expiry: Option<(String,)> = sqlx::query_as(
-                    "SELECT expires_at FROM servers WHERE id = ?"
-                )
-                .bind(server_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-                if let Some((expires_at_str,)) = server_expiry {
-                    if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
-                        let max_hours = (expires_at.naive_utc() - chrono::Utc::now().naive_utc()).num_hours() as f64;
-                        if max_hours > 0.0 && used_hours / max_hours >= threshold {
-                            // Settle: credit core hours to server owner
-                            let total_ch = ch_per_hour * used_hours;
-                            let _ = sqlx::query(
-                                "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
-                            )
-                            .bind(total_ch)
-                            .bind(server_id)
-                            .execute(pool)
-                            .await;
-                            let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
-                                .bind(machine_id)
-                                .execute(pool)
-                                .await;
-                        }
-                    }
-                }
+            for (machine_id,) in &machines {
+                let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
+                    .bind(machine_id)
+                    .execute(pool)
+                    .await;
             }
+            tracing::debug!("Settlement processed {} stopped machines", machines.len());
         }
     });
 

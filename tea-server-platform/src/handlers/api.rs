@@ -387,6 +387,17 @@ async fn api_machines_create(
         }
     };
 
+    // Validate user input against server limits
+    if form.cpu_cores <= 0 || form.cpu_cores > server.cpu_cores {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_cpu", "message": format!("CPU must be between 1 and {}", server.cpu_cores) }))).into_response();
+    }
+    if form.memory_gb <= 0.0 || form.memory_gb > server.memory_gb {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_memory", "message": format!("Memory must be between 0.1 and {}", server.memory_gb) }))).into_response();
+    }
+    if form.disk_gb <= 0.0 || form.disk_gb > server.disk_gb {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_disk", "message": format!("Disk must be between 1 and {}", server.disk_gb) }))).into_response();
+    }
+
     let mut hours = form.hours.unwrap_or(24) as i64;
 
     // Check max machine hours limit
@@ -409,7 +420,7 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    // Calculate NAT ports if expose_ip is enabled
+    // NAT port allocation: each running machine uses 1 NAT port
     let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
         let used_ports: (i64,) = sqlx::query_as(
             "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
@@ -419,10 +430,11 @@ async fn api_machines_create(
         .await
         .unwrap_or((0,));
         let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
+        // Each machine uses 1 NAT port, check if there's capacity for this new machine
         if used_ports.0 < total_available_nat {
-            used_ports.0 as i32
+            1 // This new machine uses 1 NAT port
         } else {
-            0
+            0 // No ports available, won't charge for NAT
         }
     } else {
         0

@@ -669,6 +669,17 @@ pub async fn create_machine(
         _ => return Ok(Redirect::to("/market")),
     };
 
+    // Validate user input against server limits
+    if form.cpu_cores <= 0 || form.cpu_cores > server.cpu_cores as i32 {
+        return Ok(Redirect::to("/market?error=invalid_cpu"));
+    }
+    if form.memory_gb <= 0.0 || form.memory_gb > server.memory_gb {
+        return Ok(Redirect::to("/market?error=invalid_memory"));
+    }
+    if form.disk_gb <= 0.0 || form.disk_gb > server.disk_gb {
+        return Ok(Redirect::to("/market?error=invalid_disk"));
+    }
+
     let mut hours = form.hours.unwrap_or(24) as i64;
     let mut expires_at = now + chrono::Duration::hours(hours);
 
@@ -687,7 +698,7 @@ pub async fn create_machine(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    // Task 3.3: Calculate NAT ports based on used machines count
+    // NAT port allocation: each running machine uses 1 NAT port
     let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
         let used_ports: (i64,) = sqlx::query_as(
             "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
@@ -697,10 +708,11 @@ pub async fn create_machine(
         .await
         .unwrap_or((0,));
         let total_available = (server.nat_port_end - server.nat_port_start) as i64;
+        // Each machine uses 1 NAT port, check if there's capacity for this new machine
         if used_ports.0 < total_available {
-            used_ports.0 as i32
+            1 // This new machine uses 1 NAT port
         } else {
-            0 // No ports available
+            0 // No ports available, won't charge for NAT
         }
     } else {
         0
