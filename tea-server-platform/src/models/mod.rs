@@ -287,3 +287,58 @@ pub struct UserSession {
     pub ldc_balance: f64,
     pub core_hours: f64,
 }
+
+// Table: opengfw_rules
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OpenGFWRule {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub protocol: String,
+    pub action: String,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+// Table: opengfw_logs
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OpenGFWLog {
+    pub id: i64,
+    pub machine_id: i64,
+    pub server_id: i64,
+    pub protocol: String,
+    pub src_ip: Option<String>,
+    pub dst_ip: Option<String>,
+    pub dst_port: Option<i32>,
+    pub blocked_at: DateTime<Utc>,
+}
+
+// OpenGFW log with additional info for display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenGFWLogView {
+    pub id: i64,
+    pub machine_id: i64,
+    pub server_id: i64,
+    pub server_name: String,
+    pub server_ip: String,
+    pub username: String,
+    pub protocol: String,
+    pub src_ip: Option<String>,
+    pub dst_ip: Option<String>,
+    pub dst_port: Option<i32>,
+    pub blocked_at: String,
+}
+
+// OpenGFW configuration for agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenGFWConfig {
+    pub enabled: bool,
+    pub rules: Vec<OpenGFWRuleItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenGFWRuleItem {
+    pub name: String,
+    pub protocol: String,
+    pub action: String,
+}

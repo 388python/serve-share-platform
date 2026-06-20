@@ -267,6 +267,39 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         );
     "#).execute(pool).await?;
 
+    // Create OpenGFW rules table for VPN/protocol blocking
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS opengfw_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            protocol TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'block',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
+    // Create OpenGFW blocked logs table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS opengfw_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            server_id INTEGER NOT NULL,
+            protocol TEXT NOT NULL,
+            src_ip TEXT,
+            dst_ip TEXT,
+            dst_port INTEGER,
+            blocked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE,
+            FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+        );
+    "#).execute(pool).await?;
+
+    // Add OpenGFW enabled column to servers table
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN opengfw_enabled INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
     // Add columns to invites
     let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
         .execute(pool)
@@ -351,6 +384,16 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("balance_to_code_enabled", "true"),
         ("premium_enabled", "false"),
         ("premium_ldc_cost", "100"),
+        ("opengfw_enabled", "false"),
+        ("opengfw_block_vpn", "true"),
+        ("opengfw_block_shadowsocks", "true"),
+        ("opengfw_block_wireguard", "true"),
+        ("opengfw_block_openvpn", "true"),
+        ("opengfw_block_trojan", "true"),
+        ("opengfw_block_vmess", "true"),
+        ("opengfw_block_vless", "true"),
+        ("opengfw_block_xray", "true"),
+        ("opengfw_block_clash", "true"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")
