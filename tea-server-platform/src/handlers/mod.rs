@@ -729,14 +729,12 @@ pub async fn create_machine(
     }
 
     // Task 5.3: Deduct bonus first, then regular
-    let mut bonus_used = 0.0_f64;
-    let mut regular_used = 0.0_f64;
-    if bonus_core_hours >= total_cost {
-        bonus_used = total_cost;
+    let bonus_used = if bonus_core_hours >= total_cost {
+        total_cost
     } else {
-        bonus_used = bonus_core_hours;
-        regular_used = total_cost - bonus_used;
-    }
+        bonus_core_hours
+    };
+    let regular_used = total_cost - bonus_used;
 
     let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ?")
         .bind(bonus_used)

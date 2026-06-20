@@ -355,14 +355,20 @@ async fn api_machines_create(
     let pool = db::get_db();
     let now = chrono::Utc::now();
 
-    let user: Option<(f64,)> =
-        sqlx::query_as("SELECT core_hours FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
-
-    let core_hours = user.unwrap_or((0.0,)).0;
+    // Get full user info including bonus
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    
+    let user = match user {
+        Some(u) => u,
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "user_not_found" }))).into_response(),
+    };
+    let core_hours = user.core_hours;
+    let bonus_core_hours = user.bonus_core_hours;
+    let total_available = core_hours + bonus_core_hours;
 
     let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
         .bind(form.server_id)
@@ -382,6 +388,12 @@ async fn api_machines_create(
     };
 
     let mut hours = form.hours.unwrap_or(24) as i64;
+
+    // Check max machine hours limit
+    if server.max_machine_hours > 0.0 && hours as f64 > server.max_machine_hours {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "exceeds_max_hours" }))).into_response();
+    }
+
     let mut expires_at = now + chrono::Duration::hours(hours);
 
     if expires_at > server.expires_at {
@@ -397,6 +409,25 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
+    // Calculate NAT ports if expose_ip is enabled
+    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
+        let used_ports: (i64,) = sqlx::query_as(
+            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+        )
+        .bind(server.id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+        let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
+        if used_ports.0 < total_available_nat {
+            used_ports.0 as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
         form.cpu_cores,
         form.memory_gb,
@@ -406,14 +437,14 @@ async fn api_machines_create(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
-        0,
-        0.0,
+        nat_ports,
+        server.nat_multiplier,
     )
     .await;
 
     let total_cost = ch_per_hour * hours as f64;
 
-    if core_hours < total_cost {
+    if total_available < total_cost {
         return (
             StatusCode::PAYMENT_REQUIRED,
             Json(json!({ "error": "insufficient_balance", "message": "Not enough core hours" })),
@@ -421,18 +452,47 @@ async fn api_machines_create(
             .into_response();
     }
 
-    let new_core_hours = core_hours - total_cost;
-    sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
+    // Deduct bonus first, then regular
+    let bonus_used = if bonus_core_hours >= total_cost {
+        total_cost
+    } else {
+        bonus_core_hours
+    };
+    let regular_used = total_cost - bonus_used;
+
+    let new_core_hours = core_hours - regular_used;
+    sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = ? WHERE id = ?")
+        .bind(bonus_used)
         .bind(new_core_hours)
         .bind(user_id)
         .execute(pool)
         .await
         .unwrap();
 
+    // Credit server owner (merchant)
+    if bonus_used > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = COALESCE(bonus_expires_at, ?) WHERE id = ?"
+        )
+        .bind(bonus_used)
+        .bind(user.bonus_expires_at)
+        .bind(server.owner_id)
+        .execute(pool)
+        .await;
+    }
+    if regular_used > 0.0 {
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(regular_used)
+            .bind(server.owner_id)
+            .execute(pool)
+            .await;
+    }
+
     let proxy_port = server.proxy_port;
+    let used_hours = hours as f64;
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -443,6 +503,7 @@ async fn api_machines_create(
     .bind(ch_per_hour)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(used_hours)
     .execute(pool)
     .await
     .unwrap();
