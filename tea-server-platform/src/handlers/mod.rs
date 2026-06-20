@@ -1475,10 +1475,11 @@ pub async fn checkin(
     let bonus_expires_at = base_time + chrono::Duration::days(expiry_days as i64);
 
     let _ = sqlx::query(
-        "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = ? WHERE id = ?"
+        "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = ?, last_checkin = ? WHERE id = ?"
     )
     .bind(reward)
     .bind(bonus_expires_at)
+    .bind(now)
     .bind(user_id)
     .execute(pool)
     .await;
