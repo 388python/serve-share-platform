@@ -87,6 +87,15 @@ fn set_session_cookie(
     services::session::set_session_cookie(cookies, &session);
 }
 
+use std::net::IpAddr;
+
+// ---- Helpers ----
+
+/// 验证 IP 地址格式（IPv4 或 IPv6）
+fn is_valid_ip(ip: &str) -> bool {
+    ip.parse::<IpAddr>().is_ok()
+}
+
 // ---- Health Check ----
 
 pub async fn health_check() -> &'static str {
@@ -418,9 +427,67 @@ pub async fn contribute_server_submit(
 ) -> Result<impl IntoResponse, Redirect> {
     let (user_id, _username, is_admin) = require_auth(&cookies)?;
 
+    // ---- Input Validation ----
+    let name = form.name.trim();
+    let ip = form.ip.trim();
+    let ssh_key = form.ssh_key.trim();
+
+    // Validate required fields are not empty
+    if name.is_empty() || ip.is_empty() || ssh_key.is_empty() {
+        tracing::warn!("Server contribution failed: empty required fields");
+        return Ok(Redirect::to("/servers/contribute?error=empty_fields").into_response());
+    }
+
+    // Validate name length
+    if name.len() > 100 {
+        return Ok(Redirect::to("/servers/contribute?error=name_too_long").into_response());
+    }
+
+    // Validate IP address format
+    if !is_valid_ip(ip) {
+        tracing::warn!("Server contribution failed: invalid IP address: {}", ip);
+        return Ok(Redirect::to("/servers/contribute?error=invalid_ip").into_response());
+    }
+
+    // Validate SSH port range (1-65535)
+    let ssh_port = form.ssh_port.unwrap_or(22);
+    if ssh_port < 1 || ssh_port > 65535 {
+        return Ok(Redirect::to("/servers/contribute?error=invalid_ssh_port").into_response());
+    }
+
+    // Validate CPU cores
+    let cpu_cores = form.cpu_cores;
+    if cpu_cores < 1 || cpu_cores > 256 {
+        return Ok(Redirect::to("/servers/contribute?error=invalid_cpu").into_response());
+    }
+
+    // Validate memory
+    let memory_gb = form.memory_gb;
+    if memory_gb < 0.1 || memory_gb > 1000.0 {
+        return Ok(Redirect::to("/servers/contribute?error=invalid_memory").into_response());
+    }
+
+    // Validate disk
+    let disk_gb = form.disk_gb;
+    if disk_gb < 1.0 || disk_gb > 100000.0 {
+        return Ok(Redirect::to("/servers/contribute?error=invalid_disk").into_response());
+    }
+
+    // Validate expires_days
+    let expires_days = form.expires_days.unwrap_or(30);
+    if expires_days < 1 || expires_days > 3650 {
+        return Ok(Redirect::to("/servers/contribute?error=invalid_expires").into_response());
+    }
+
+    // Validate description length
+    if let Some(ref desc) = form.description {
+        if desc.len() > 1000 {
+            return Ok(Redirect::to("/servers/contribute?error=description_too_long").into_response());
+        }
+    }
+
     let pool = db::get_db();
     let now = Utc::now();
-    let expires_days = form.expires_days.unwrap_or(30);
     let expires_at = now + chrono::Duration::days(expires_days as i64);
 
     let virt_type = if is_admin {
@@ -429,7 +496,6 @@ pub async fn contribute_server_submit(
         db::get_config_sync("virt_type").unwrap_or_else(|| "lxd".to_string())
     };
 
-    let ssh_port = form.ssh_port.unwrap_or(22);
     let bandwidth_mbps = form.bandwidth_mbps.unwrap_or(0.0);
     let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
     let mem_mult = form.memory_multiplier.unwrap_or(1.0);
@@ -484,14 +550,14 @@ pub async fn contribute_server_submit(
         "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
-    .bind(&form.name)
-    .bind(&form.ip)
+    .bind(name)
+    .bind(ip)
     .bind(ssh_port)
-    .bind(&form.ssh_key)
-    .bind(form.cpu_cores)
-    .bind(form.memory_gb)
+    .bind(ssh_key)
+    .bind(cpu_cores)
+    .bind(memory_gb)
     .bind(bandwidth_mbps)
-    .bind(form.disk_gb)
+    .bind(disk_gb)
     .bind(cpu_mult)
     .bind(mem_mult)
     .bind(bw_mult)
@@ -530,20 +596,19 @@ pub async fn contribute_server_submit(
             }
 
             // Spawn background task to install agent via ssh2
-            let ip = form.ip.clone();
-            let ssh_port_copy = ssh_port;
-            let ssh_key = form.ssh_key.clone();
+            let ip_clone = ip.to_string();
+            let ssh_key_clone = ssh_key.to_string();
             tokio::spawn(async move {
-                install_agent_ssh(server_id, &ip, ssh_port_copy, &ssh_key).await;
+                install_agent_ssh(server_id, &ip_clone, ssh_port, &ssh_key_clone).await;
             });
 
-            Ok(Redirect::to("/dashboard"))
+            Ok(Redirect::to("/dashboard").into_response())
         }
         Err(e) => {
             // Release temp port on failure
             services::ssh_proxy::release_port(0);
             tracing::error!("Failed to insert server: {}", e);
-            Ok(Redirect::to("/servers/contribute"))
+            Err(Redirect::to("/servers/contribute"))
         }
     }
 }

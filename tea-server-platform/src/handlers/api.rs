@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use uuid::Uuid;
@@ -15,6 +16,13 @@ use crate::db;
 use crate::models::*;
 use crate::services;
 use crate::AppState;
+
+// ---- Helpers ----
+
+/// 验证 IP 地址格式（IPv4 或 IPv6）
+fn is_valid_ip(ip: &str) -> bool {
+    ip.parse::<IpAddr>().is_ok()
+}
 
 static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
 
@@ -229,12 +237,52 @@ async fn api_servers_contribute(
         Err(err) => return err.into_response(),
     };
 
-    let pool = db::get_db();
-    let now = chrono::Utc::now();
-    let expires_days = form.expires_days.unwrap_or(30);
-    let expires_at = now + chrono::Duration::days(expires_days as i64);
+    // ---- Input Validation ----
+    let name = form.name.trim();
+    let ip = form.ip.trim();
+    let ssh_key = form.ssh_key.trim();
+
+    if name.is_empty() || ip.is_empty() || ssh_key.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "empty_fields", "message": "Name, IP, and SSH key are required" }))).into_response();
+    }
+
+    if name.len() > 100 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name_too_long" }))).into_response();
+    }
+
+    if !is_valid_ip(ip) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_ip", "message": "Invalid IP address format" }))).into_response();
+    }
 
     let ssh_port = form.ssh_port.unwrap_or(22);
+    if ssh_port < 1 || ssh_port > 65535 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_ssh_port" }))).into_response();
+    }
+
+    let cpu_cores = form.cpu_cores;
+    if cpu_cores < 1 || cpu_cores > 256 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_cpu" }))).into_response();
+    }
+
+    let memory_gb = form.memory_gb;
+    if memory_gb < 0.1 || memory_gb > 1000.0 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_memory" }))).into_response();
+    }
+
+    let disk_gb = form.disk_gb;
+    if disk_gb < 1.0 || disk_gb > 100000.0 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_disk" }))).into_response();
+    }
+
+    let expires_days = form.expires_days.unwrap_or(30);
+    if expires_days < 1 || expires_days > 3650 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_expires" }))).into_response();
+    }
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+    let expires_at = now + chrono::Duration::days(expires_days as i64);
+
     let bandwidth_mbps = form.bandwidth_mbps.unwrap_or(0.0);
     let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
     let mem_mult = form.memory_multiplier.unwrap_or(1.0);
@@ -254,14 +302,14 @@ async fn api_servers_contribute(
         "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
-    .bind(&form.name)
-    .bind(&form.ip)
+    .bind(name)
+    .bind(ip)
     .bind(ssh_port)
-    .bind(&form.ssh_key)
-    .bind(form.cpu_cores)
-    .bind(form.memory_gb)
+    .bind(ssh_key)
+    .bind(cpu_cores)
+    .bind(memory_gb)
     .bind(bandwidth_mbps)
-    .bind(form.disk_gb)
+    .bind(disk_gb)
     .bind(cpu_mult)
     .bind(mem_mult)
     .bind(bw_mult)
