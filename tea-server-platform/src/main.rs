@@ -98,39 +98,64 @@ async fn main() -> anyhow::Result<()> {
             let port = start_port + port_offset;
             let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(l) => l,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!("Failed to bind SSH proxy port {}: {}", port, e);
+                    continue;
+                }
             };
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
                         Ok((mut incoming, _addr)) => {
-                            // Forward to the corresponding server
                             let pool = db::get_db();
+                            let now = chrono::Utc::now();
+                            // Check server is active AND not expired
                             let server: Option<(i32, String)> = sqlx::query_as(
-                                "SELECT ssh_port, ip FROM servers WHERE proxy_port = ? AND is_active = 1",
+                                "SELECT ssh_port, ip FROM servers WHERE proxy_port = ? AND is_active = 1 AND expires_at > ?",
                             )
                             .bind(port as i32)
+                            .bind(now)
                             .fetch_optional(pool)
                             .await
                             .unwrap_or(None);
 
                             if let Some((ssh_port, ip)) = server {
                                 let target = format!("{}:{}", ip, ssh_port);
-                                if let Ok(mut outgoing) = tokio::net::TcpStream::connect(&target).await {
-                                    let (mut ri, mut wi) = tokio::io::split(incoming);
-                                    let (mut ro, mut wo) = tokio::io::split(outgoing);
-                                    let _ = tokio::join!(
-                                        tokio::io::copy(&mut ri, &mut wo),
-                                        tokio::io::copy(&mut ro, &mut wi),
-                                    );
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    tokio::net::TcpStream::connect(&target)
+                                ).await {
+                                    Ok(Ok(mut outgoing)) => {
+                                        let (mut ri, mut wi) = tokio::io::split(incoming);
+                                        let (mut ro, mut wo) = tokio::io::split(outgoing);
+                                        let _ = tokio::join!(
+                                            tokio::io::copy(&mut ri, &mut wo),
+                                            tokio::io::copy(&mut ro, &mut wi),
+                                        );
+                                    }
+                                    Ok(Err(e)) => {
+                                        tracing::debug!("SSH proxy connection failed: {}", e);
+                                        drop(incoming);
+                                    }
+                                    Err(_) => {
+                                        tracing::debug!("SSH proxy connection timeout");
+                                        drop(incoming);
+                                    }
                                 }
+                            } else {
+                                // No valid server, close connection
+                                drop(incoming);
                             }
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            tracing::error!("SSH proxy accept error: {}", e);
+                            break;
+                        }
                     }
                 }
             });
         }
+        tracing::info!("SSH proxy listeners started");
     });
 
     // Background task: Traffic monitoring

@@ -943,6 +943,22 @@ pub async fn stop_machine(
 
     match machine {
         Some((owner_id, server_id, virt_type)) if owner_id == user_id => {
+            // Check if machine is already stopped
+            let current_status: Option<(String,)> = sqlx::query_as(
+                "SELECT status FROM machines WHERE id = ?"
+            )
+            .bind(path.id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            if let Some((status,)) = current_status {
+                if status == "stopped" || status == "deleted" {
+                    // Already stopped, no need to stop again
+                    return Ok(Redirect::to("/machines"));
+                }
+            }
+
             let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
                 .bind(path.id)
                 .execute(pool)
@@ -992,20 +1008,38 @@ pub async fn delete_machine(
 
     match machine {
         Some((owner_id, server_id)) if owner_id == user_id => {
-            let _ = sqlx::query("DELETE FROM machines WHERE id = ?")
-                .bind(path.id)
-                .execute(pool)
-                .await;
+            // Check if machine already deleted
+            let current_status: Option<(String,)> = sqlx::query_as(
+                "SELECT status FROM machines WHERE id = ?"
+            )
+            .bind(path.id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
-            // Call agent to delete VM
+            if let Some((status,)) = current_status {
+                if status == "deleted" {
+                    // Already deleted
+                    return Ok(Redirect::to("/machines"));
+                }
+            }
+
+            // Get server info before deletion for agent call
             let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
                 .bind(server_id)
                 .fetch_optional(pool)
                 .await
                 .unwrap_or(None);
 
+            let machine_name = format!("machine-{}", path.id);
+
+            // Mark as deleted and call agent (do in this order for consistency)
+            let _ = sqlx::query("UPDATE machines SET status = 'deleted' WHERE id = ?")
+                .bind(path.id)
+                .execute(pool)
+                .await;
+
             if let Some(s) = server {
-                let machine_name = format!("machine-{}", path.id);
                 tokio::spawn(async move {
                     let agent_url = format!("http://{}:19527", s.ip);
                     let client = reqwest::Client::new();
