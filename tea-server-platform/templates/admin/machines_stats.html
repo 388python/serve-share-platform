@@ -1,0 +1,137 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 机器概览{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>机器概览</h2>
+        <p class="text-muted">实时显示所有机器的CPU、内存、磁盘和流量信息</p>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12">
+        <a href="/admin/machines" class="btn btn-outline-secondary">返回列表</a>
+        <button onclick="refreshStats()" class="btn btn-primary">刷新</button>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if machines %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover table-sm">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>用户</th>
+                                <th>服务器</th>
+                                <th>IP</th>
+                                <th>配置</th>
+                                <th>状态</th>
+                                <th>过期时间</th>
+                                <th>CPU使用率</th>
+                                <th>内存使用</th>
+                                <th>磁盘使用</th>
+                                <th>带宽</th>
+                                <th>最后更新</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in machines %}
+                            <tr>
+                                <td>{{ m.id }}</td>
+                                <td>
+                                    <a href="/admin/users/{{ m.user_id }}">{{ m.username }}</a>
+                                </td>
+                                <td>{{ m.server_name }}</td>
+                                <td><code>{{ m.server_ip }}</code></td>
+                                <td>
+                                    <small>
+                                        {{ m.cpu_cores }}核 / {{ m.memory_gb }}G / {{ m.disk_gb }}G
+                                    </small>
+                                </td>
+                                <td>
+                                    {% if m.status == "running" %}
+                                    <span class="badge bg-success">运行中</span>
+                                    {% elif m.status == "stopped" %}
+                                    <span class="badge bg-warning">已停止</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">{{ m.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td><small>{{ m.expires_at }}</small></td>
+                                <td>
+                                    {% if m.cpu_usage > 0 %}
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar {% if m.cpu_usage > 80 %}bg-danger{% elif m.cpu_usage > 50 %}bg-warning{% else %}bg-success{% endif %}" 
+                                             role="progressbar" 
+                                             style="width: {{ m.cpu_usage }}%">
+                                            {{ m.cpu_usage | round(1) }}%
+                                        </div>
+                                    </div>
+                                    {% else %}
+                                    <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if m.memory_total_mb > 0 %}
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar {% if (m.memory_used_mb / m.memory_total_mb * 100) > 80 %}bg-danger{% elif (m.memory_used_mb / m.memory_total_mb * 100) > 50 %}bg-warning{% else %}bg-info{% endif %}" 
+                                             role="progressbar" 
+                                             style="width: {{ (m.memory_used_mb / m.memory_total_mb * 100) | round }}%">
+                                            {{ m.memory_used_mb | round(0) }}M / {{ m.memory_total_mb | round(0) }}M
+                                        </div>
+                                    </div>
+                                    {% else %}
+                                    <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if m.disk_total_gb > 0 %}
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar {% if (m.disk_used_gb / m.disk_total_gb * 100) > 90 %}bg-danger{% elif (m.disk_used_gb / m.disk_total_gb * 100) > 70 %}bg-warning{% else %}bg-secondary{% endif %}" 
+                                             role="progressbar" 
+                                             style="width: {{ (m.disk_used_gb / m.disk_total_gb * 100) | round }}%">
+                                            {{ m.disk_used_gb | round(1) }}G / {{ m.disk_total_gb | round(1) }}G
+                                        </div>
+                                    </div>
+                                    {% else %}
+                                    <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if m.bandwidth_rx > 0 %}
+                                    <span class="text-success" title="下行">↓ {{ m.bandwidth_rx | round(1) }} Mbps</span>
+                                    {% else %}
+                                    <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td><small>{{ m.last_updated }}</small></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无机器数据</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function refreshStats() {
+    location.reload();
+}
+
+// Auto refresh every 60 seconds
+setTimeout(function() {
+    location.reload();
+}, 60000);
+</script>
+{% endblock content %}

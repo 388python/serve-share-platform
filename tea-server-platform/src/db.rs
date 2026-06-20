@@ -227,6 +227,25 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         );
     "#).execute(pool).await?;
 
+    // Create machine_stats table for storing real-time machine stats
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS machine_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL UNIQUE,
+            cpu_usage_percent REAL NOT NULL DEFAULT 0,
+            memory_used_mb REAL NOT NULL DEFAULT 0,
+            memory_total_mb REAL NOT NULL DEFAULT 0,
+            disk_used_gb REAL NOT NULL DEFAULT 0,
+            disk_total_gb REAL NOT NULL DEFAULT 0,
+            bandwidth_rx_mbps REAL NOT NULL DEFAULT 0,
+            bandwidth_tx_mbps REAL NOT NULL DEFAULT 0,
+            uptime_seconds INTEGER NOT NULL DEFAULT 0,
+            process_count INTEGER NOT NULL DEFAULT 0,
+            last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+    "#).execute(pool).await?;
+
     // Add columns to invites
     let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
         .execute(pool)
@@ -299,6 +318,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
         ("admin_api_key", ""),
+        ("agent_api_key", "tea-platform-agent-key"),
         ("traffic_monitor_enabled", "true"),
         ("traffic_bandwidth_threshold_mbps", "100"),
         ("settlement_threshold_pct", "80"),

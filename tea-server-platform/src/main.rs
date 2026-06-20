@@ -329,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/servers", get(handlers::admin_servers))
         .route("/admin/servers/:id/toggle", post(handlers::admin_servers_toggle))
         .route("/admin/machines", get(handlers::admin_machines))
+        .route("/admin/machines-stats", get(handlers::admin_machines_stats))
         .route("/admin/packages", get(handlers::admin_packages))
         .route("/admin/packages/create", post(handlers::admin_package_create))
         .route("/admin/packages/:id/delete", post(handlers::admin_package_delete))

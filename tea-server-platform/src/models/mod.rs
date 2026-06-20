@@ -214,6 +214,33 @@ pub struct BalanceToCodeLog {
     pub created_at: DateTime<Utc>,
 }
 
+// Table: machine_stats
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MachineStats {
+    pub id: i64,
+    pub machine_id: i64,
+    pub cpu_usage_percent: f64,
+    pub memory_used_mb: f64,
+    pub memory_total_mb: f64,
+    pub disk_used_gb: f64,
+    pub disk_total_gb: f64,
+    pub bandwidth_rx_mbps: f64,
+    pub bandwidth_tx_mbps: f64,
+    pub uptime_seconds: i64,
+    pub process_count: i64,
+    pub last_updated: DateTime<Utc>,
+}
+
+// Combined machine info with stats
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MachineWithStats {
+    #[serde(flatten)]
+    pub machine: Machine,
+    pub stats: Option<MachineStats>,
+    pub server_name: String,
+    pub server_ip: String,
+}
+
 // Request/response types for API and template rendering
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserSession {

@@ -5,9 +5,12 @@ import json
 import subprocess
 import os
 import re
+import threading
+import time
 
 API_KEY = os.environ.get("AGENT_API_KEY", "tea-platform-agent-key")
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
+PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 
 class AgentHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
@@ -122,6 +125,80 @@ class AgentHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._send_json({"error": str(e), "bandwidth_mbps": 0})
+
+    def _get_machine_stats(self, machine_name):
+        """Get CPU, memory, disk stats for a container"""
+        try:
+            # Get LXD info
+            result = subprocess.run(
+                ["lxc", "info", machine_name],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            cpu_usage = 0.0
+            memory_used = 0
+            memory_total = 0
+            uptime = 0
+            
+            for line in result.stdout.split("\n"):
+                line = line.strip()
+                if "CPU usage:" in line:
+                    match = re.search(r'(\d+)', line)
+                    if match:
+                        cpu_usage = float(match.group(1))
+                elif "Memory usage:" in line:
+                    match = re.search(r'(\d+)(?:MiB|KiB|MB|GB)', line)
+                    if match:
+                        memory_used = int(match.group(1))
+                elif "Memory:" in line:
+                    match = re.search(r'(\d+)(?:MiB|KiB|MB|GB)', line)
+                    if match:
+                        memory_total = int(match.group(1))
+            
+            # Get disk usage
+            disk_used = 0
+            disk_total = 0
+            try:
+                disk_result = subprocess.run(
+                    ["lxc", "exec", machine_name, "--", "df", "-h", "/"],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in disk_result.stdout.split("\n"):
+                    match = re.search(r'/dev/\w+\s+\d+[GM]\s+(\d+)[GM]\s+', line)
+                    if match:
+                        disk_used = int(match.group(1))
+            except:
+                pass
+            
+            # Get process count
+            try:
+                proc_result = subprocess.run(
+                    ["lxc", "exec", machine_name, "--", "ps", "aux"],
+                    capture_output=True, text=True, timeout=10
+                )
+                process_count = len(proc_result.stdout.strip().split("\n")) - 1
+            except:
+                process_count = 0
+            
+            return {
+                "cpu_usage_percent": cpu_usage,
+                "memory_used_mb": float(memory_used),
+                "memory_total_mb": float(memory_total),
+                "disk_used_gb": float(disk_used),
+                "disk_total_gb": float(disk_total) if disk_total > 0 else 10.0,
+                "uptime_seconds": uptime,
+                "process_count": process_count
+            }
+        except Exception as e:
+            return {
+                "cpu_usage_percent": 0,
+                "memory_used_mb": 0,
+                "memory_total_mb": 0,
+                "disk_used_gb": 0,
+                "disk_total_gb": 0,
+                "uptime_seconds": 0,
+                "process_count": 0
+            }
 
     def do_POST(self):
         if not self._check_auth():
@@ -257,7 +334,104 @@ class AgentHandler(BaseHTTPRequestHandler):
             "error": result.stderr
         })
 
+def report_stats_loop():
+    """Background thread to report machine stats to platform"""
+    while True:
+        try:
+            # Get all running machines
+            result = subprocess.run(
+                ["lxc", "list", "name=machine-", "--format", "csv", "-c", "n"],
+                capture_output=True, text=True, timeout=30
+            )
+            
+            for line in result.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                machine_name = line.strip()
+                
+                # Get stats for this machine
+                stats = {}
+                try:
+                    info_result = subprocess.run(
+                        ["lxc", "info", machine_name],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    
+                    cpu_usage = 0.0
+                    memory_used = 0
+                    memory_total = 0
+                    
+                    for info_line in info_result.stdout.split("\n"):
+                        info_line = info_line.strip()
+                        if "CPU usage:" in info_line:
+                            match = re.search(r'(\d+\.?\d*)', info_line.split("CPU usage:")[1])
+                            if match:
+                                cpu_usage = float(match.group(1))
+                        elif "Memory usage:" in info_line:
+                            match = re.search(r'(\d+)', info_line.split("Memory usage:")[1])
+                            if match:
+                                memory_used = int(match.group(1))
+                        elif "Memory:" in info_line:
+                            match = re.search(r'(\d+)', info_line.split("Memory:")[1])
+                            if match:
+                                memory_total = int(match.group(1))
+                    
+                    # Get disk usage
+                    try:
+                        disk_result = subprocess.run(
+                            ["lxc", "exec", machine_name, "--", "df", "-BG", "/"],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        for dline in disk_result.stdout.strip().split("\n"):
+                            if dline.startswith("/dev"):
+                                parts = dline.split()
+                                if len(parts) >= 3:
+                                    disk_used = int(parts[2].replace("G", ""))
+                                    disk_total = int(parts[1].replace("G", ""))
+                                    break
+                    except:
+                        disk_used = 0
+                        disk_total = 0
+                    
+                    stats = {
+                        "machine_name": machine_name,
+                        "cpu_usage_percent": cpu_usage,
+                        "memory_used_mb": float(memory_used),
+                        "memory_total_mb": float(memory_total),
+                        "disk_used_gb": float(disk_used),
+                        "disk_total_gb": float(disk_total) if disk_total > 0 else 10.0,
+                        "bandwidth_rx_mbps": 0,
+                        "bandwidth_tx_mbps": 0,
+                        "uptime_seconds": 0,
+                        "process_count": 0
+                    }
+                except Exception as e:
+                    continue
+                
+                # Report to platform
+                try:
+                    import urllib.request
+                    data = json.dumps(stats).encode()
+                    req = urllib.request.Request(
+                        f"{PLATFORM_URL}/api/v1/agent/stats",
+                        data=data,
+                        headers={"Content-Type": "application/json", "X-API-Key": API_KEY},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        pass
+                except Exception as e:
+                    print(f"Failed to report stats for {machine_name}: {e}")
+        except Exception as e:
+            print(f"Stats reporting error: {e}")
+        
+        time.sleep(60)  # Report every 60 seconds
+
 if __name__ == "__main__":
+    # Start stats reporting thread
+    stats_thread = threading.Thread(target=report_stats_loop, daemon=True)
+    stats_thread.start()
+    
     server = HTTPServer(("0.0.0.0", 19527), AgentHandler)
     print(f"Agent running on port 19527, virt_type={VIRT_TYPE}")
     server.serve_forever()

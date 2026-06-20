@@ -1203,6 +1203,152 @@ async fn api_balance_to_code(
 }
 
 // ==============================
+// Agent Machine Stats API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct MachineStatsReport {
+    pub machine_name: String,
+    pub cpu_usage_percent: Option<f64>,
+    pub memory_used_mb: Option<f64>,
+    pub memory_total_mb: Option<f64>,
+    pub disk_used_gb: Option<f64>,
+    pub disk_total_gb: Option<f64>,
+    pub bandwidth_rx_mbps: Option<f64>,
+    pub bandwidth_tx_mbps: Option<f64>,
+    pub uptime_seconds: Option<i64>,
+    pub process_count: Option<i64>,
+}
+
+// POST /api/v1/agent/stats - Agent reports machine stats
+async fn api_agent_stats(
+    headers: HeaderMap,
+    Json(stats): Json<MachineStatsReport>,
+) -> impl IntoResponse {
+    // Verify agent API key
+    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
+    let expected_key = db::get_config_sync("agent_api_key").unwrap_or_else(|| "tea-platform-agent-key".to_string());
+    
+    if api_key != Some(expected_key.as_str()) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    }
+
+    // Extract machine_id from machine_name (format: machine-{id})
+    let machine_id = stats.machine_name
+        .strip_prefix("machine-")
+        .and_then(|s| s.parse::<i64>().ok());
+
+    let machine_id = match machine_id {
+        Some(id) => id,
+        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_machine_name"}))).into_response(),
+    };
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+
+    // Upsert machine stats
+    let _ = sqlx::query(
+        r#"
+        INSERT INTO machine_stats (
+            machine_id, cpu_usage_percent, memory_used_mb, memory_total_mb,
+            disk_used_gb, disk_total_gb, bandwidth_rx_mbps, bandwidth_tx_mbps,
+            uptime_seconds, process_count, last_updated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(machine_id) DO UPDATE SET
+            cpu_usage_percent = excluded.cpu_usage_percent,
+            memory_used_mb = excluded.memory_used_mb,
+            memory_total_mb = excluded.memory_total_mb,
+            disk_used_gb = excluded.disk_used_gb,
+            disk_total_gb = excluded.disk_total_gb,
+            bandwidth_rx_mbps = excluded.bandwidth_rx_mbps,
+            bandwidth_tx_mbps = excluded.bandwidth_tx_mbps,
+            uptime_seconds = excluded.uptime_seconds,
+            process_count = excluded.process_count,
+            last_updated = excluded.last_updated
+        "#
+    )
+    .bind(machine_id)
+    .bind(stats.cpu_usage_percent.unwrap_or(0.0))
+    .bind(stats.memory_used_mb.unwrap_or(0.0))
+    .bind(stats.memory_total_mb.unwrap_or(0.0))
+    .bind(stats.disk_used_gb.unwrap_or(0.0))
+    .bind(stats.disk_total_gb.unwrap_or(0.0))
+    .bind(stats.bandwidth_rx_mbps.unwrap_or(0.0))
+    .bind(stats.bandwidth_tx_mbps.unwrap_or(0.0))
+    .bind(stats.uptime_seconds.unwrap_or(0))
+    .bind(stats.process_count.unwrap_or(0))
+    .bind(now)
+    .execute(pool)
+    .await;
+
+    ok_response(json!({"status": "ok", "machine_id": machine_id})).into_response()
+}
+
+// GET /api/v1/admin/machines-stats - Admin views all machine stats
+async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    
+    // Get all machines with their stats
+    let machines: Vec<(i64, i64, String, String, String, i32, f64, f64, i64, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        r#"
+        SELECT 
+            m.id, m.user_id, m.server_id, s.name as server_name, s.ip as server_ip,
+            m.cpu_cores, m.memory_gb, m.disk_gb, m.status, m.virt_type, m.expires_at
+        FROM machines m
+        JOIN servers s ON m.server_id = s.id
+        ORDER BY m.created_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut result = Vec::new();
+    for (id, user_id, server_id, server_name, server_ip, cpu_cores, memory_gb, disk_gb, status, virt_type, expires_at) in machines {
+        // Get stats for this machine
+        let stats: Option<MachineStats> = sqlx::query_as(
+            "SELECT * FROM machine_stats WHERE machine_id = ?"
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        // Get user info
+        let username: Option<String> = sqlx::query_scalar(
+            "SELECT username FROM users WHERE id = ?"
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        result.push(json!({
+            "id": id,
+            "user_id": user_id,
+            "username": username.unwrap_or_else(|| "Unknown".to_string()),
+            "server_id": server_id,
+            "server_name": server_name,
+            "server_ip": server_ip,
+            "cpu_cores": cpu_cores,
+            "memory_gb": memory_gb,
+            "disk_gb": disk_gb,
+            "status": status,
+            "virt_type": virt_type,
+            "expires_at": expires_at,
+            "stats": stats
+        }));
+    }
+
+    ok_response(result).into_response()
+}
+
+// ==============================
 // Buy Premium API
 // ==============================
 
@@ -1288,6 +1434,8 @@ pub fn router(_state: AppState) -> Router<AppState> {
             post(api_admin_server_toggle),
         )
         .route("/v1/admin/machines", get(api_admin_machines))
+        .route("/v1/admin/machines-stats", get(api_admin_machines_stats))
+        .route("/v1/agent/stats", post(api_agent_stats))
         .route(
             "/v1/admin/config",
             get(api_admin_config).put(api_admin_config_save),

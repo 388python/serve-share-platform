@@ -3,7 +3,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tera::Context;
 use tower_cookies::{cookie::time::Duration, Cookie, Cookies};
@@ -2035,6 +2035,134 @@ pub async fn admin_machines(
     let rendered = state
         .templates
         .render("admin/machines.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+// Machine overview with stats for admin
+pub async fn admin_machines_stats(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username) = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    
+    // Get all machines with their server info
+    #[derive(Debug, sqlx::FromRow)]
+    struct MachineWithServer {
+        id: i64,
+        user_id: i64,
+        server_id: i64,
+        cpu_cores: i32,
+        memory_gb: f64,
+        disk_gb: f64,
+        status: String,
+        virt_type: String,
+        expires_at: chrono::DateTime<Utc>,
+        created_at: chrono::DateTime<Utc>,
+        server_name: String,
+        server_ip: String,
+    }
+    
+    let machines: Vec<MachineWithServer> = sqlx::query_as(
+        r#"
+        SELECT 
+            m.id, m.user_id, m.server_id, m.cpu_cores, m.memory_gb, m.disk_gb,
+            m.status, m.virt_type, m.expires_at, m.created_at,
+            s.name as server_name, s.ip as server_ip
+        FROM machines m
+        JOIN servers s ON m.server_id = s.id
+        ORDER BY m.created_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    
+    // Get stats and usernames for each machine
+    #[derive(Debug, Serialize, Deserialize)]
+    struct MachineStatsView {
+        id: i64,
+        user_id: i64,
+        username: String,
+        server_id: i64,
+        server_name: String,
+        server_ip: String,
+        cpu_cores: i32,
+        memory_gb: f64,
+        disk_gb: f64,
+        status: String,
+        virt_type: String,
+        expires_at: String,
+        created_at: String,
+        cpu_usage: f64,
+        memory_used_mb: f64,
+        memory_total_mb: f64,
+        disk_used_gb: f64,
+        disk_total_gb: f64,
+        bandwidth_rx: f64,
+        bandwidth_tx: f64,
+        last_updated: String,
+    }
+    
+    let mut machines_with_stats = Vec::new();
+    for m in &machines {
+        let username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+            .bind(m.user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .unwrap_or_else(|| "Unknown".to_string());
+        
+        let stats: Option<(f64, f64, f64, f64, f64, f64, String)> = sqlx::query_as(
+            r#"
+            SELECT cpu_usage_percent, memory_used_mb, memory_total_mb, 
+                   disk_used_gb, disk_total_gb, bandwidth_rx_mbps, 
+                   strftime('%Y-%m-%d %H:%M', last_updated) as updated
+            FROM machine_stats WHERE machine_id = ?
+            "#
+        )
+        .bind(m.id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total, bw_rx, last_updated) = 
+            stats.unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "N/A".to_string()));
+        
+        machines_with_stats.push(MachineStatsView {
+            id: m.id,
+            user_id: m.user_id,
+            username,
+            server_id: m.server_id,
+            server_name: m.server_name.clone(),
+            server_ip: m.server_ip.clone(),
+            cpu_cores: m.cpu_cores,
+            memory_gb: m.memory_gb,
+            disk_gb: m.disk_gb,
+            status: m.status.clone(),
+            virt_type: m.virt_type.clone(),
+            expires_at: m.expires_at.format("%Y-%m-%d %H:%M").to_string(),
+            created_at: m.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            cpu_usage,
+            memory_used_mb: memory_used,
+            memory_total_mb: memory_total,
+            disk_used_gb: disk_used,
+            disk_total_gb: disk_total,
+            bandwidth_rx: bw_rx,
+            bandwidth_tx: 0.0,
+            last_updated,
+        });
+    }
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("machines", &machines_with_stats);
+
+    let rendered = state
+        .templates
+        .render("admin/machines_stats.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
