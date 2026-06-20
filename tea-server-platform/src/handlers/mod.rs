@@ -101,6 +101,32 @@ pub struct AdminLoginForm {
     pub password: String,
 }
 
+/// 管理员登录 GUI 页面
+pub async fn admin_login_ui(
+    State(state): State<crate::AppState>,
+    cookies: Cookies,
+) -> impl IntoResponse {
+    // 如果已经登录，直接跳转管理后台
+    if services::session::get_session_checked(&cookies).is_some() {
+        return axum::response::Redirect::to("/admin").into_response();
+    }
+
+    let cfg = AppConfig::get();
+    let site_name = db::get_config_sync("site_name")
+        .unwrap_or_else(|| cfg.platform_domain.clone());
+
+    let mut ctx = Context::new();
+    ctx.insert("site_name", &site_name);
+
+    match state.templates.render("admin/login.html", &ctx) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to render admin login template: {}", e);
+            Html(format!("<h1>Error loading template: {}</h1>", e)).into_response()
+        }
+    }
+}
+
 pub async fn admin_login(
     cookies: Cookies,
     Form(params): Form<AdminLoginForm>,

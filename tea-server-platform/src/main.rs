@@ -281,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
             "/admin-login",
             post(handlers::admin_login),
         )
+        .route("/admin-login/ui", get(handlers::admin_login_ui))
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
