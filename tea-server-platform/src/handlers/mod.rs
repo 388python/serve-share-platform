@@ -419,7 +419,7 @@ pub async fn contribute_server_submit(
     let _ = premium_cost; // suppress unused warning
 
     // Allocate proxy port
-    let proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary, will update after insert
+    let temp_proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary
 
     let result = sqlx::query(
         "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -440,7 +440,7 @@ pub async fn contribute_server_submit(
     .bind(use_bonus)
     .bind(&virt_type)
     .bind(expires_at)
-    .bind(proxy_port)
+    .bind(temp_proxy_port)
     .bind(expose_ip)
     .bind(nat_port_start)
     .bind(nat_port_end)
@@ -457,16 +457,18 @@ pub async fn contribute_server_submit(
     match result {
         Ok(res) => {
             let server_id = res.last_insert_rowid();
-            // Update proxy port allocation with real server_id
+            // Release temp port and allocate with real server_id
             services::ssh_proxy::release_port(0);
-            services::ssh_proxy::allocate_port(server_id);
+            let final_proxy_port = services::ssh_proxy::allocate_port(server_id) as i32;
 
-            // Update proxy_port in DB
-            let _ = sqlx::query("UPDATE servers SET proxy_port = ? WHERE id = ?")
-                .bind(proxy_port)
-                .bind(server_id)
-                .execute(pool)
-                .await;
+            // Update proxy_port in DB if different
+            if final_proxy_port != temp_proxy_port {
+                let _ = sqlx::query("UPDATE servers SET proxy_port = ? WHERE id = ?")
+                    .bind(final_proxy_port)
+                    .bind(server_id)
+                    .execute(pool)
+                    .await;
+            }
 
             // Spawn background task to install agent via ssh2
             let ip = form.ip.clone();
@@ -479,6 +481,8 @@ pub async fn contribute_server_submit(
             Ok(Redirect::to("/dashboard"))
         }
         Err(e) => {
+            // Release temp port on failure
+            services::ssh_proxy::release_port(0);
             tracing::error!("Failed to insert server: {}", e);
             Ok(Redirect::to("/servers/contribute"))
         }
@@ -683,9 +687,8 @@ pub async fn create_machine(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    // Task 3.3: Calculate NAT ports
-    let nat_ports = if server.expose_ip {
-        let free_ports = server.nat_port_end - server.nat_port_start;
+    // Task 3.3: Calculate NAT ports based on used machines count
+    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
         let used_ports: (i64,) = sqlx::query_as(
             "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
         )
@@ -693,7 +696,12 @@ pub async fn create_machine(
         .fetch_one(pool)
         .await
         .unwrap_or((0,));
-        (used_ports.0 as i32 - free_ports).max(0)
+        let total_available = (server.nat_port_end - server.nat_port_start) as i64;
+        if used_ports.0 < total_available {
+            used_ports.0 as i32
+        } else {
+            0 // No ports available
+        }
     } else {
         0
     };
@@ -1407,10 +1415,23 @@ pub async fn checkin(
         .unwrap_or_else(|| "30".to_string())
         .parse()
         .unwrap_or(30.0);
-    let bonus_expires_at = chrono::Utc::now() + chrono::Duration::days(expiry_days as i64);
+    
+    // Get existing bonus expiry, extend from existing or current time
+    let existing_expiry: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT bonus_expires_at FROM users WHERE id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+    
+    let now = chrono::Utc::now();
+    let base_time = existing_expiry.filter(|e| e > &now).unwrap_or(now);
+    let bonus_expires_at = base_time + chrono::Duration::days(expiry_days as i64);
 
     let _ = sqlx::query(
-        "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = ?, last_checkin = CURRENT_TIMESTAMP WHERE id = ?"
+        "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = ? WHERE id = ?"
     )
     .bind(reward)
     .bind(bonus_expires_at)

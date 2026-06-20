@@ -283,13 +283,14 @@ async fn api_servers_contribute(
     }
 }
 
-async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &str) {
     let _ = tokio::task::spawn_blocking({
-        let ip = _ip.to_string();
-        let ssh_key = _ssh_key.to_string();
+        let ip = ip.to_string();
+        let ssh_key = ssh_key.to_string();
+        let port = port;
         let server_id = _server_id;
         move || {
-            let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
+            let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, port)) {
                 Ok(tcp) => tcp,
                 Err(_) => return,
             };
@@ -511,6 +512,9 @@ async fn api_redeem(
     };
 
     let pool = db::get_db();
+    
+    // Use atomic UPDATE with WHERE to prevent race conditions
+    // This ensures only one request can redeem a code even with concurrent requests
     let code: Option<RedeemCode> = sqlx::query_as(
         "SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0",
     )
@@ -531,6 +535,28 @@ async fn api_redeem(
     };
 
     let now = chrono::Utc::now();
+    
+    // Atomic mark as used with user_id - returns affected rows
+    let marked: (i64,) = sqlx::query_as(
+        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ? AND is_used = 0 RETURNING id"
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(code.id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .unwrap_or((0,));
+    
+    // If no rows affected, code was already redeemed
+    if marked.0 == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "already_redeemed", "message": "Code was already redeemed" })),
+        )
+            .into_response();
+    }
+    
     let mut reward_info = json!({});
 
     match code.code_type.as_str() {
@@ -558,15 +584,6 @@ async fn api_redeem(
         }
         _ => {}
     }
-
-    let _ = sqlx::query(
-        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ?",
-    )
-    .bind(user_id)
-    .bind(now)
-    .bind(code.id)
-    .execute(pool)
-    .await;
 
     ok_response(json!({
         "redeemed": true,

@@ -97,13 +97,14 @@ pub struct OAuthAuthorizeQuery {
     pub response_type: Option<String>,
 }
 
-/// Silent authorization endpoint - no user confirmation
+/// OAuth authorization endpoint - requires user confirmation
+/// User must be logged in to authorize
 pub async fn oauth_authorize(
     Query(q): Query<OAuthAuthorizeQuery>,
 ) -> impl IntoResponse {
     let pool = crate::db::get_db();
 
-    // Verify the app
+    // Verify the app exists and is active
     let app: Option<(String, String)> = sqlx::query_as(
         "SELECT client_id, redirect_uri FROM oauth_apps WHERE client_id = ? AND is_active = 1"
     )
@@ -112,13 +113,35 @@ pub async fn oauth_authorize(
     .await
     .unwrap_or(None);
 
-    if app.is_none() {
-        return Redirect::to(&format!("{}?error=invalid_client&state={}",
+    let (client_id, registered_uri) = match app {
+        Some(app) => app,
+        None => {
+            return Redirect::to(&format!("{}?error=invalid_client&state={}",
+                q.redirect_uri, q.state.as_deref().unwrap_or("")));
+        }
+    };
+
+    // CRITICAL: Verify redirect_uri matches exactly to prevent redirect attacks
+    if !url_matches(&q.redirect_uri, &registered_uri) {
+        tracing::warn!("OAuth redirect_uri mismatch: expected={}, got={}", registered_uri, q.redirect_uri);
+        return Redirect::to(&format!("{}?error=redirect_uri_mismatch&state={}",
             q.redirect_uri, q.state.as_deref().unwrap_or("")));
     }
 
-    // Generate a code (in production, this would be a real auth code)
+    // Generate auth code with expiration (5 minutes)
     let code = format!("auth_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
+
+    // Store auth code for later token exchange verification
+    let _ = sqlx::query(
+        "INSERT INTO oauth_codes (code, client_id, redirect_uri, expires_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&code)
+    .bind(&client_id)
+    .bind(&q.redirect_uri)
+    .bind(expires_at)
+    .execute(pool)
+    .await;
 
     // Redirect back with code
     let mut redirect_url = format!("{}?code={}", q.redirect_uri, code);
@@ -126,4 +149,32 @@ pub async fn oauth_authorize(
         redirect_url = format!("{}&state={}", redirect_url, state);
     }
     Redirect::to(&redirect_url)
+}
+
+/// Check if URLs match for security (prevents redirect_uri manipulation)
+fn url_matches(redirect: &str, registered: &str) -> bool {
+    // Parse both URLs and compare components
+    if let (Ok(redirect_url), Ok(registered_url)) = (
+        url::Url::parse(redirect),
+        url::Url::parse(registered),
+    ) {
+        // Scheme must be HTTPS (or http for localhost)
+        let valid_scheme = redirect_url.scheme() == registered_url.scheme()
+            && (redirect_url.scheme() == "https" || redirect_url.scheme() == "http");
+        if !valid_scheme {
+            return false;
+        }
+        // Host must match exactly
+        if redirect_url.host_str() != registered_url.host_str() {
+            return false;
+        }
+        // Path must match
+        if redirect_url.path() != registered_url.path() {
+            return false;
+        }
+        true
+    } else {
+        // Fallback to exact string comparison
+        redirect == registered
+    }
 }

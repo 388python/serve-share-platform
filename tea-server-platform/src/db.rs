@@ -201,6 +201,19 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         );
     "#).execute(pool).await?;
 
+    // Create oauth_codes table for authorization codes with expiration
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS oauth_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            client_id TEXT NOT NULL,
+            redirect_uri TEXT NOT NULL,
+            user_id INTEGER,
+            expires_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#).execute(pool).await?;
+
     // Create balance_to_code_logs table
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS balance_to_code_logs (
