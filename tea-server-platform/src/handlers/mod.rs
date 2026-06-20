@@ -2945,7 +2945,7 @@ pub async fn admin_warning_letters(
     let (admin_id, _username) = require_admin(&cookies)?;
     let pool = db::get_db();
 
-    let raw_letters: Vec<(i64, i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+    let raw_letters: Vec<(i64, i64, String, String, String, String, String, bool, bool, bool, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
         r#"
         SELECT w.id, w.user_id, u.username, w.subject, w.content, w.warning_type,
                w.severity, w.is_read, w.requires_action, w.action_taken,

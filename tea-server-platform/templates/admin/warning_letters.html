@@ -1,0 +1,157 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 警告信管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>警告信管理</h2>
+        <p class="text-muted">向用户发送警告信，支持设定严重等级和是否需要用户回应</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">发送警告信</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/admin/warning-letters/send">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">目标用户</label>
+                            <select name="user_id" class="form-select" required>
+                                <option value="">请选择用户...</option>
+                                {% for user in users %}
+                                <option value="{{ user.0 }}">{{ user.1 }} (ID: {{ user.0 }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">警告类型</label>
+                            <select name="warning_type" class="form-select" required>
+                                <option value="general">一般警告</option>
+                                <option value="abuse">滥用行为</option>
+                                <option value="payment">支付相关</option>
+                                <option value="violation">违规行为</option>
+                                <option value="security">安全警告</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">严重等级</label>
+                            <select name="severity" class="form-select" required>
+                                <option value="info">提示</option>
+                                <option value="warning" selected>警告</option>
+                                <option value="critical">严重</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">主题</label>
+                            <input type="text" name="subject" class="form-control" placeholder="简要描述警告主题" required>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">内容</label>
+                            <textarea name="content" class="form-control" rows="5" placeholder="详细描述警告内容..." required></textarea>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">有效期（天，0为永久）</label>
+                            <input type="number" name="expiry_days" class="form-control" value="0" min="0" max="365">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">需要用户回应</label>
+                            <div class="mt-2">
+                                <input type="checkbox" name="requires_action" class="form-check-input" id="requiresAction">
+                                <label class="form-check-label" for="requiresAction">用户需要确认并回应此警告</label>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-warning">发送警告信</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已发送警告信</h5>
+            </div>
+            <div class="card-body">
+                {% if letters %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户</th>
+                                <th>主题</th>
+                                <th>类型</th>
+                                <th>严重等级</th>
+                                <th>已读</th>
+                                <th>需回应</th>
+                                <th>已回应</th>
+                                <th>发送时间</th>
+                                <th>有效期至</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for l in letters %}
+                            <tr>
+                                <td>{{ l.id }}</td>
+                                <td>{{ l.username }}</td>
+                                <td>{{ l.subject }}</td>
+                                <td>{{ l.warning_type }}</td>
+                                <td>
+                                    {% if l.severity == "critical" %}<span class="badge bg-danger">严重</span>
+                                    {% elif l.severity == "warning" %}<span class="badge bg-warning text-dark">警告</span>
+                                    {% else %}<span class="badge bg-info">提示</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if l.is_read %}<span class="badge bg-success">已读</span>
+                                    {% else %}<span class="badge bg-secondary">未读</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if l.requires_action %}<span class="badge bg-primary">需要</span>
+                                    {% else %}<span class="badge bg-secondary">否</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if l.requires_action %}
+                                        {% if l.action_taken %}<span class="badge bg-success">已回应</span>
+                                        {% else %}<span class="badge bg-warning text-dark">待回应</span>
+                                        {% endif %}
+                                    {% else %}-
+                                    {% endif %}
+                                </td>
+                                <td>{{ l.created_at }}</td>
+                                <td>{{ l.expires_at | default(value="永久") }}</td>
+                                <td>
+                                    <form method="post" action="/admin/warning-letters/{{ l.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除此警告信吗？');">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">暂无警告信记录</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}

@@ -1,0 +1,62 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 我的警告信{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>我的警告信</h2>
+        <p class="text-muted">
+            {% if unread_count > 0 %}
+            <span class="badge bg-danger">有 {{ unread_count }} 封未读警告信</span>
+            {% else %}
+            <span class="text-muted">所有警告信均已阅读</span>
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        {% if letters %}
+        <div class="list-group">
+            {% for l in letters %}
+            <a href="/warnings/{{ l.id }}" class="list-group-item list-group-item-action {% if not l.is_read %}bg-light{% endif %}">
+                <div class="d-flex w-100 justify-content-between">
+                    <div class="d-flex align-items-center">
+                        {% if l.severity == "critical" %}<span class="badge bg-danger me-2">严重</span>
+                        {% elif l.severity == "warning" %}<span class="badge bg-warning text-dark me-2">警告</span>
+                        {% else %}<span class="badge bg-info me-2">提示</span>
+                        {% endif %}
+                        <h5 class="mb-1">{{ l.subject }}</h5>
+                        {% if not l.is_read %}<span class="badge bg-primary ms-2">新</span>{% endif %}
+                    </div>
+                    <small class="text-muted">{{ l.created_at }}</small>
+                </div>
+                <p class="mb-1">{{ l.content | truncate(length=100) }}</p>
+                <div class="d-flex align-items-center">
+                    <small class="text-muted">类型: {{ l.warning_type }}</small>
+                    {% if l.requires_action %}
+                        {% if l.action_taken %}
+                        <small class="text-success ms-3">✓ 已回应</small>
+                        {% else %}
+                        <small class="text-warning ms-3">⚠ 需要您的回应</small>
+                        {% endif %}
+                    {% endif %}
+                    {% if l.expires_at %}
+                    <small class="text-muted ms-3">有效期至: {{ l.expires_at }}</small>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <p class="text-muted">暂无警告信记录</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock content %}
