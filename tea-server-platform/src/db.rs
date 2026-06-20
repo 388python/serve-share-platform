@@ -227,6 +227,27 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         );
     "#).execute(pool).await?;
 
+    // Create warning_letters table
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS warning_letters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            content TEXT NOT NULL,
+            warning_type TEXT NOT NULL DEFAULT 'general',
+            severity TEXT NOT NULL DEFAULT 'warning',
+            is_read INTEGER NOT NULL DEFAULT 0,
+            requires_action INTEGER NOT NULL DEFAULT 0,
+            action_taken INTEGER NOT NULL DEFAULT 0,
+            action_note TEXT,
+            action_at DATETIME,
+            sent_by INTEGER,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    "#).execute(pool).await?;
+
     // Create machine_stats table for storing real-time machine stats
     sqlx::query(r#"
         CREATE TABLE IF NOT EXISTS machine_stats (

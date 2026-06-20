@@ -343,6 +343,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
         .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
+        .route("/admin/warning-letters", get(handlers::admin_warning_letters))
+        .route("/admin/warning-letters/send", post(handlers::admin_warning_letters_send))
+        .route("/admin/warning-letters/:id/delete", post(handlers::admin_warning_letter_delete))
+        // User warning letters
+        .route("/warnings", get(handlers::user_warning_letters))
+        .route("/warnings/:id", get(handlers::user_warning_letter_detail))
+        .route("/warnings/:id/action", post(handlers::user_warning_letter_action))
         // API routes (RESTful JSON) - mounted under /api prefix
         .nest("/api", handlers::api::router(app_state.clone()))
         // Static files

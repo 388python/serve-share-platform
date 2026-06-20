@@ -231,6 +231,43 @@ pub struct MachineStats {
     pub last_updated: DateTime<Utc>,
 }
 
+// Table: warning_letters
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct WarningLetter {
+    pub id: i64,
+    pub user_id: i64,
+    pub subject: String,
+    pub content: String,
+    pub warning_type: String,
+    pub severity: String,
+    pub is_read: bool,
+    pub requires_action: bool,
+    pub action_taken: bool,
+    pub action_note: Option<String>,
+    pub action_at: Option<DateTime<Utc>>,
+    pub sent_by: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+// Warning letter view model with username
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WarningLetterView {
+    pub id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub subject: String,
+    pub content: String,
+    pub warning_type: String,
+    pub severity: String,
+    pub is_read: bool,
+    pub requires_action: bool,
+    pub action_taken: bool,
+    pub action_note: Option<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
 // Combined machine info with stats
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineWithStats {

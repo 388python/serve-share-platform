@@ -2919,3 +2919,265 @@ pub async fn buy_premium(
 
     Ok(Redirect::to("/dashboard"))
 }
+
+// ==================== Warning Letters ====================
+
+#[derive(Debug, Deserialize)]
+pub struct SendWarningForm {
+    pub user_id: i64,
+    pub subject: String,
+    pub content: String,
+    pub warning_type: String,
+    pub severity: String,
+    pub requires_action: Option<String>,
+    pub expiry_days: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WarningActionForm {
+    pub note: String,
+}
+
+pub async fn admin_warning_letters(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (admin_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+
+    let raw_letters: Vec<(i64, i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT w.id, w.user_id, u.username, w.subject, w.content, w.warning_type,
+               w.severity, w.is_read, w.requires_action, w.action_taken,
+               w.created_at, w.expires_at
+        FROM warning_letters w
+        JOIN users u ON w.user_id = u.id
+        ORDER BY w.created_at DESC
+        LIMIT 100
+        "#
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let letters: Vec<WarningLetterView> = raw_letters
+        .into_iter()
+        .map(|(id, user_id, username, subject, content, warning_type, severity, is_read, requires_action, action_taken, created_at, expires_at)| {
+            WarningLetterView {
+                id,
+                user_id,
+                username,
+                subject,
+                content,
+                warning_type,
+                severity,
+                is_read,
+                requires_action,
+                action_taken,
+                action_note: None,
+                created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
+                expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+            }
+        })
+        .collect();
+
+    let users: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, username FROM users WHERE is_banned = 0 ORDER BY id"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("letters", &letters);
+    ctx.insert("users", &users);
+
+    let rendered = state.templates.render("admin/warning_letters.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn admin_warning_letters_send(
+    cookies: Cookies,
+    Form(form): Form<SendWarningForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (admin_id, _username) = require_admin(&cookies)?;
+    let pool = db::get_db();
+
+    let requires_action = form.requires_action.as_deref() == Some("on");
+
+    let expires_at = form.expiry_days
+        .filter(|&d| d > 0)
+        .map(|d| Utc::now() + chrono::Duration::days(d as i64));
+
+    let _ = sqlx::query(
+        "INSERT INTO warning_letters (user_id, subject, content, warning_type, severity, requires_action, expires_at, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(form.user_id)
+    .bind(&form.subject)
+    .bind(&form.content)
+    .bind(&form.warning_type)
+    .bind(&form.severity)
+    .bind(requires_action)
+    .bind(&expires_at)
+    .bind(admin_id)
+    .execute(pool)
+    .await;
+
+    Ok(Redirect::to("/admin/warning-letters"))
+}
+
+pub async fn admin_warning_letter_delete(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, Redirect> {
+    let _ = require_admin(&cookies)?;
+    let pool = db::get_db();
+
+    let _ = sqlx::query("DELETE FROM warning_letters WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    Ok(Redirect::to("/admin/warning-letters"))
+}
+
+pub async fn user_warning_letters(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let raw_letters: Vec<(i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT id, subject, content, warning_type, severity, is_read, requires_action,
+               action_taken, action_note, created_at, expires_at
+        FROM warning_letters
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        "#
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let letters: Vec<WarningLetterView> = raw_letters
+        .into_iter()
+        .map(|(id, subject, content, warning_type, severity, is_read, requires_action, action_taken, action_note, created_at, expires_at)| {
+            WarningLetterView {
+                id,
+                user_id,
+                username: String::new(),
+                subject,
+                content,
+                warning_type,
+                severity,
+                is_read,
+                requires_action,
+                action_taken,
+                action_note,
+                created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
+                expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+            }
+        })
+        .collect();
+
+    let unread_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("letters", &letters);
+    ctx.insert("unread_count", &unread_count.0);
+
+    let rendered = state.templates.render("warning_letters.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn user_warning_letter_detail(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let letter: Option<(i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT id, subject, content, warning_type, severity, is_read, requires_action,
+               action_taken, action_note, created_at, expires_at
+        FROM warning_letters
+        WHERE id = ? AND user_id = ?
+        "#
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let letter = match letter {
+        Some(l) => l,
+        None => return Err(Redirect::to("/warnings")),
+    };
+
+    let _ = sqlx::query("UPDATE warning_letters SET is_read = 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    let letter_view = WarningLetterView {
+        id: letter.0,
+        user_id,
+        username: String::new(),
+        subject: letter.1,
+        content: letter.2,
+        warning_type: letter.3,
+        severity: letter.4,
+        is_read: true,
+        requires_action: letter.5,
+        action_taken: letter.6,
+        action_note: letter.8,
+        created_at: letter.9.format("%Y-%m-%d %H:%M").to_string(),
+        expires_at: letter.10.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+    };
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("letter", &letter_view);
+
+    let rendered = state.templates.render("warning_letter_detail.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
+pub async fn user_warning_letter_action(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+    Form(form): Form<WarningActionForm>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let pool = db::get_db();
+
+    let now = Utc::now();
+    let _ = sqlx::query(
+        "UPDATE warning_letters SET action_taken = 1, action_note = ?, action_at = ? WHERE id = ? AND user_id = ? AND requires_action = 1"
+    )
+    .bind(&form.note)
+    .bind(now)
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+
+    Ok(Redirect::to(&format!("/warnings/{}", id)))
+}
