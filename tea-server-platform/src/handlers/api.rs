@@ -116,6 +116,39 @@ async fn authenticate_admin(headers: &HeaderMap) -> Result<i64, (StatusCode, Jso
     Ok(user_id)
 }
 
+// ---- Agent API key helpers ----
+
+/// Get the configured agent API key. This is the key used both for verifying
+/// requests FROM agents, and for sending requests TO agents.
+fn get_agent_api_key() -> String {
+    db::get_config_sync("agent_api_key")
+        .filter(|k| !k.is_empty() && k != "tea-platform-agent-key")
+        .unwrap_or_else(|| {
+            tracing::warn!("Agent API key not configured — using in-memory random key");
+            // Generate a random key for this session so that we don't accidentally
+            // accept a well-known default key.
+            use rand::RngCore;
+            let mut bytes = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            const CHARS: &[u8; 16] = b"0123456789abcdef";
+            let mut out = String::with_capacity(64);
+            for b in bytes.iter() {
+                out.push(CHARS[(b & 0xf) as usize] as char);
+                out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
+            }
+            out
+        })
+}
+
+/// Verify that an agent request carries the correct X-API-Key header.
+fn verify_agent_api_key(headers: &HeaderMap) -> bool {
+    let header_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    header_key == get_agent_api_key()
+}
+
 // ---- Generic response types ----
 
 #[derive(Serialize, Deserialize)]
@@ -538,12 +571,13 @@ async fn api_machines_create(
     let memory = form.memory_gb;
     let disk = form.disk_gb;
 
+    let agent_key = get_agent_api_key();
     tokio::spawn(async move {
         let agent_url = format!("http://{}:19527", server_ip);
         let client = reqwest::Client::new();
         let _ = client
             .post(&format!("{}/create", agent_url))
-            .header("X-API-Key", "tea-platform-agent-key")
+            .header("X-API-Key", agent_key)
             .json(&json!({
                 "name": machine_name,
                 "cpu": cpu,
@@ -1226,10 +1260,7 @@ async fn api_agent_stats(
     Json(stats): Json<MachineStatsReport>,
 ) -> impl IntoResponse {
     // Verify agent API key
-    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
-    let expected_key = db::get_config_sync("agent_api_key").unwrap_or_else(|| "tea-platform-agent-key".to_string());
-    
-    if api_key != Some(expected_key.as_str()) {
+    if !verify_agent_api_key(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     }
 
@@ -1582,6 +1613,7 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
     .unwrap_or_default();
 
     let mut results = Vec::new();
+    let agent_key = get_agent_api_key();
 
     for (server_id, server_ip) in servers {
         // Notify agent to refresh OpenGFW rules
@@ -1590,7 +1622,7 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
 
         match client
             .post(&format!("{}/opengfw/refresh", agent_url))
-            .header("X-API-Key", "tea-platform-agent-key")
+            .header("X-API-Key", &agent_key)
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
@@ -1626,12 +1658,7 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
 
 // GET /api/v1/opengfw/status - Get OpenGFW running status on host
 async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
-    // Verify agent API key
-    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
-    let expected_key = db::get_config_sync("agent_api_key")
-        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
-
-    if api_key != Some(expected_key.as_str()) {
+    if !verify_agent_api_key(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     }
 
@@ -1652,12 +1679,7 @@ async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
 
 // GET /api/v1/opengfw/config - Get OpenGFW rules configuration
 async fn api_opengfw_get_config(headers: HeaderMap) -> impl IntoResponse {
-    // Verify agent API key
-    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
-    let expected_key = db::get_config_sync("agent_api_key")
-        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
-
-    if api_key != Some(expected_key.as_str()) {
+    if !verify_agent_api_key(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     }
 
@@ -1694,12 +1716,7 @@ async fn api_opengfw_block_report(
     headers: HeaderMap,
     Json(report): Json<OpenGFWBlockReport>,
 ) -> impl IntoResponse {
-    // Verify agent API key
-    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
-    let expected_key = db::get_config_sync("agent_api_key")
-        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
-
-    if api_key != Some(expected_key.as_str()) {
+    if !verify_agent_api_key(&headers) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     }
 

@@ -76,10 +76,11 @@ async fn main() -> anyhow::Result<()> {
                 if let Some((ip,)) = server {
                     let machine_name = format!("machine-{}", machine_id);
                     let agent_url = format!("http://{}:19527", ip);
+                    let agent_key = services::session::agent_api_key();
                     let client = reqwest::Client::new();
                     let _ = client
                         .post(&format!("{}/stop/{}", agent_url, machine_name))
-                        .header("X-API-Key", "tea-platform-agent-key")
+                        .header("X-API-Key", agent_key)
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;
@@ -276,7 +277,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
-        .route("/admin-login", get(handlers::admin_login))
+        .route(
+            "/admin-login",
+            post(handlers::admin_login),
+        )
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
@@ -377,27 +381,12 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
 
-    // Try to read user session from cookie
-    if let Some(session_cookie) = cookies.get("session") {
-        let session_value = session_cookie.value().to_string();
-        if let Ok(session) = handlers::parse_session(&session_value) {
-            ctx.insert(
-                "user_name",
-                &session.get("username").unwrap_or(&String::new()),
-            );
-            ctx.insert(
-                "user_balance",
-                &session.get("core_hours").unwrap_or(&"0".to_string()),
-            );
-            ctx.insert(
-                "user_ldc",
-                &session.get("ldc_balance").unwrap_or(&"0".to_string()),
-            );
-            ctx.insert(
-                "is_admin",
-                &session.get("is_admin").unwrap_or(&"false".to_string()),
-            );
-        }
+    // 从签名 cookie 中读取会话 — 无效/篡改的会话将被忽略
+    if let Some(session) = services::session::get_session_checked(&cookies) {
+        ctx.insert("user_name", &session.username);
+        ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
+        ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
+        ctx.insert("is_admin", &session.is_admin.to_string());
     }
 
     let rendered = state
@@ -566,21 +555,15 @@ async fn auth_callback(
         ldc_balance = 0.0;
     }
 
-    // Create session cookie
-    let session_data = format!(
-        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}",
+    // Create session cookie (signed with HMAC-SHA256)
+    let session = crate::services::session::UserSession {
         user_id,
-        user_info.effective_name(),
+        username: user_info.effective_name().to_string(),
         is_admin,
         core_hours,
         ldc_balance,
-    );
-
-    let mut cookie = Cookie::new("session", session_data);
-    cookie.set_path("/");
-    cookie.set_max_age(Duration::hours(24));
-    cookie.set_http_only(true);
-    cookies.add(cookie);
+    };
+    crate::services::session::set_session_cookie(&cookies, &session);
 
     Redirect::to("/").into_response()
 }

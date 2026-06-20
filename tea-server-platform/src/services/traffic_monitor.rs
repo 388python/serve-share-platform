@@ -1,4 +1,5 @@
 use crate::db;
+use crate::services::session::agent_api_key;
 use tracing;
 
 /// Known VPN protocol ports and signatures to detect
@@ -44,9 +45,10 @@ pub async fn detect_vpn_traffic(_machine_id: i64, server_ip: &str) -> Vec<String
     let mut alerts = Vec::new();
 
     // Check listening ports
+    let key = agent_api_key();
     if let Ok(resp) = client
         .get(&format!("{}/ports", agent_url))
-        .header("X-API-Key", "tea-platform-agent-key")
+        .header("X-API-Key", key.clone())
         .send()
         .await
     {
@@ -73,7 +75,7 @@ pub async fn detect_vpn_traffic(_machine_id: i64, server_ip: &str) -> Vec<String
     // Check running processes for VPN signatures
     if let Ok(resp) = client
         .get(&format!("{}/processes", agent_url))
-        .header("X-API-Key", "tea-platform-agent-key")
+        .header("X-API-Key", key.clone())
         .send()
         .await
     {
@@ -117,9 +119,10 @@ pub async fn check_bandwidth_abuse(machine_id: i64, server_ip: &str) -> Option<f
     };
 
     // Query agent for current bandwidth usage
+    let key = agent_api_key();
     if let Ok(resp) = client
         .get(&format!("{}/traffic/{}", agent_url, machine_id))
-        .header("X-API-Key", "tea-platform-agent-key")
+        .header("X-API-Key", key)
         .send()
         .await
     {

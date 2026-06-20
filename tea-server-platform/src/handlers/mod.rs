@@ -17,30 +17,29 @@ use crate::models::*;
 use crate::services;
 use crate::AppState;
 
-// Re-export parse_session so main.rs can share it
-pub(crate) fn parse_session(
-    session: &str,
-) -> anyhow::Result<std::collections::HashMap<String, String>> {
-    let mut map = std::collections::HashMap::new();
-    for part in session.split('|') {
-        let mut kv = part.splitn(2, '=');
-        if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-            map.insert(k.to_string(), v.to_string());
-        }
-    }
-    Ok(map)
-}
-
-// ---- Session Helpers ----
+// ---- Session Helpers (using signed cookies — SESSION_SECRET) ----
 
 fn get_session_user(cookies: &Cookies) -> Option<(i64, String, bool)> {
-    let session_cookie = cookies.get("session")?;
-    let session_value = session_cookie.value();
-    let parsed = parse_session(session_value).ok()?;
-    let user_id = parsed.get("user_id")?.parse::<i64>().ok()?;
-    let username = parsed.get("username")?.clone();
-    let is_admin = parsed.get("is_admin")?.parse::<bool>().unwrap_or(false);
-    Some((user_id, username, is_admin))
+    let session = services::session::get_session_checked(cookies)?;
+    Some((session.user_id, session.username, session.is_admin))
+}
+
+/// 统一的 Agent API Key 获取函数 — 任何与 Agent 通信都应使用此函数
+fn agent_api_key() -> String {
+    db::get_config_sync("agent_api_key")
+        .filter(|k| !k.is_empty() && k != "tea-platform-agent-key")
+        .unwrap_or_else(|| {
+            use rand::RngCore;
+            let mut bytes = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            const CHARS: &[u8; 16] = b"0123456789abcdef";
+            let mut out = String::with_capacity(64);
+            for b in bytes.iter() {
+                out.push(CHARS[(b & 0xf) as usize] as char);
+                out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
+            }
+            out
+        })
 }
 
 fn require_auth(cookies: &Cookies) -> Result<(i64, String, bool), Redirect> {
@@ -59,30 +58,14 @@ fn build_base_context(cookies: &Cookies, ctx: &mut Context) {
     let site_name = db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
     ctx.insert("site_name", &site_name);
 
-    if let Some(session_cookie) = cookies.get("session") {
-        if let Ok(parsed) = parse_session(session_cookie.value()) {
-            let uname = parsed
-                .get("username")
-                .cloned()
-                .unwrap_or_default();
-            let balance = parsed
-                .get("core_hours")
-                .cloned()
-                .unwrap_or_else(|| "0".to_string());
-            let ldc = parsed
-                .get("ldc_balance")
-                .cloned()
-                .unwrap_or_else(|| "0".to_string());
-            let admin = parsed
-                .get("is_admin")
-                .cloned()
-                .unwrap_or_else(|| "false".to_string());
-
-            ctx.insert("user_name", &uname);
-            ctx.insert("user_balance", &balance);
-            ctx.insert("user_ldc", &ldc);
-            ctx.insert("is_admin", &admin);
-        }
+    if let Some(session) = services::session::get_session(cookies) {
+        ctx.insert("user_name", &session.username);
+        ctx.insert(
+            "user_balance",
+            &format!("{:.2}", session.core_hours),
+        );
+        ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
+        ctx.insert("is_admin", &session.is_admin.to_string());
     }
 }
 
@@ -94,15 +77,14 @@ fn set_session_cookie(
     core_hours: f64,
     ldc_balance: f64,
 ) {
-    let session_data = format!(
-        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}",
-        user_id, username, is_admin, core_hours, ldc_balance,
-    );
-    let mut cookie = Cookie::new("session", session_data);
-    cookie.set_path("/");
-    cookie.set_max_age(Duration::hours(24));
-    cookie.set_http_only(true);
-    cookies.add(cookie);
+    let session = services::session::UserSession {
+        user_id,
+        username: username.to_string(),
+        is_admin,
+        core_hours,
+        ldc_balance,
+    };
+    services::session::set_session_cookie(cookies, &session);
 }
 
 // ---- Health Check ----
@@ -114,18 +96,23 @@ pub async fn health_check() -> &'static str {
 // ---- Auth Handlers ----
 
 #[derive(Deserialize)]
-pub struct AdminLoginQuery {
+pub struct AdminLoginForm {
     pub username: String,
     pub password: String,
 }
 
 pub async fn admin_login(
     cookies: Cookies,
-    Query(params): Query<AdminLoginQuery>,
+    Form(params): Form<AdminLoginForm>,
 ) -> impl IntoResponse {
     let cfg = AppConfig::get();
 
-    if params.username != cfg.admin_username || params.password != cfg.admin_password {
+    // 避免时序攻击：使用 constant-time 比较
+    let username_ok = constant_time_eq(params.username.as_bytes(), cfg.admin_username.as_bytes());
+    let password_ok = constant_time_eq(params.password.as_bytes(), cfg.admin_password.as_bytes());
+
+    if !username_ok || !password_ok {
+        tracing::warn!("Failed admin login attempt for username='{}'", params.username);
         return Redirect::to("/").into_response();
     }
 
@@ -171,11 +158,20 @@ pub async fn admin_login(
     Redirect::to("/admin").into_response()
 }
 
+/// 简单的 constant-time 字节比较实现，用于避免时序侧信道攻击。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 pub async fn logout(cookies: Cookies) -> impl IntoResponse {
-    let mut cookie = Cookie::new("session", "");
-    cookie.set_path("/");
-    cookie.set_max_age(Duration::seconds(0));
-    cookies.add(cookie);
+    services::session::clear_session_cookie(&cookies);
     Redirect::to("/")
 }
 
@@ -874,12 +870,15 @@ pub async fn create_machine(
     let memory = form.memory_gb;
     let disk = form.disk_gb;
 
+    // Get configured agent API key (never use hardcoded default)
+    let agent_key = agent_api_key();
+
     tokio::spawn(async move {
         let agent_url = format!("http://{}:19527", server_ip);
         let client = reqwest::Client::new();
         let _ = client
             .post(&format!("{}/create", agent_url))
-            .header("X-API-Key", "tea-platform-agent-key")
+            .header("X-API-Key", agent_key)
             .json(&serde_json::json!({
                 "name": machine_name,
                 "cpu": cpu,
@@ -973,12 +972,14 @@ pub async fn stop_machine(
 
             if let Some(s) = server {
                 let machine_name = format!("machine-{}", path.id);
+                // Use configured agent API key (never hardcoded)
+                let agent_key = agent_api_key();
                 tokio::spawn(async move {
                     let agent_url = format!("http://{}:19527", s.ip);
                     let client = reqwest::Client::new();
                     let _ = client
                         .post(&format!("{}/stop/{}", agent_url, machine_name))
-                        .header("X-API-Key", "tea-platform-agent-key")
+                        .header("X-API-Key", agent_key)
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;
@@ -1040,12 +1041,13 @@ pub async fn delete_machine(
                 .await;
 
             if let Some(s) = server {
+                let agent_key = agent_api_key();
                 tokio::spawn(async move {
                     let agent_url = format!("http://{}:19527", s.ip);
                     let client = reqwest::Client::new();
                     let _ = client
                         .delete(&format!("{}/{}", agent_url, machine_name))
-                        .header("X-API-Key", "tea-platform-agent-key")
+                        .header("X-API-Key", agent_key)
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;

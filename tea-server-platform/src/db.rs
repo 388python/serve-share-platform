@@ -372,7 +372,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("ldc_ed25519_private_key", ""),
         ("ldc_ed25519_public_key", ""),
         ("admin_api_key", ""),
-        ("agent_api_key", "tea-platform-agent-key"),
+        ("agent_api_key", ""),
         ("traffic_monitor_enabled", "true"),
         ("traffic_bandwidth_threshold_mbps", "100"),
         ("settlement_threshold_pct", "80"),
