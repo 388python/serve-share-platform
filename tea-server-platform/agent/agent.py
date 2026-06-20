@@ -7,10 +7,12 @@ import os
 import re
 import threading
 import time
+import urllib.request
 
 API_KEY = os.environ.get("AGENT_API_KEY", "tea-platform-agent-key")
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
 PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
+OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
 
 class AgentHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
@@ -45,6 +47,16 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/traffic/"):
             machine_id = path.split("/")[-1]
             self._handle_get_traffic(machine_id)
+        elif path == "/opengfw/status":
+            self._handle_opengfw_status()
+        elif path == "/opengfw/install":
+            self._handle_opengfw_install()
+        elif path == "/opengfw/config":
+            self._handle_opengfw_config()
+        elif path == "/opengfw/refresh":
+            self._handle_opengfw_refresh()
+        elif path == "/opengfw/uninstall":
+            self._handle_opengfw_uninstall()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -125,6 +137,243 @@ class AgentHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._send_json({"error": str(e), "bandwidth_mbps": 0})
+
+    # ==================== OpenGFW Handlers ====================
+    # OpenGFW runs on the HOST machine, not in user containers
+    # This prevents users from removing or bypassing the firewall
+
+    def _handle_opengfw_status(self):
+        """Get OpenGFW installation and running status on host"""
+        try:
+            # Check if OpenGFW binary exists
+            opengfw_exists = os.path.exists("/usr/local/bin/opengfw")
+
+            # Check if OpenGFW is running
+            result = subprocess.run(
+                ["pgrep", "-f", "opengfw"],
+                capture_output=True, text=True
+            )
+            opengfw_running = result.returncode == 0
+
+            # Check if config exists
+            config_exists = os.path.exists("/etc/opengfw/config.yaml")
+
+            # Check nftables rules
+            nft_result = subprocess.run(
+                ["nft", "list", "table", "opengfw"],
+                capture_output=True, text=True
+            )
+            nft_rules_exist = nft_result.returncode == 0
+
+            self._send_json({
+                "installed": opengfw_exists,
+                "running": opengfw_running,
+                "configured": config_exists,
+                "nft_rules_active": nft_rules_exist,
+                "message": "OpenGFW status on host machine"
+            })
+        except Exception as e:
+            self._send_json({"error": str(e), "installed": False, "running": False})
+
+    def _handle_opengfw_install(self):
+        """Install OpenGFW on the host machine"""
+        try:
+            # Install dependencies
+            subprocess.run(["apt-get", "update", "-qq"], capture_output=True, timeout=120)
+            subprocess.run([
+                "apt-get", "install", "-y", "-qq",
+                "golang-go", "git", "nftables", "kmod"
+            ], capture_output=True, timeout=180)
+
+            # Clone and build OpenGFW
+            work_dir = "/tmp/opengfw-build"
+            os.makedirs(work_dir, exist_ok=True)
+
+            subprocess.run(["rm", "-rf", work_dir], capture_output=True)
+            subprocess.run(
+                ["git", "clone", "https://github.com/chika0801/opengfw.git", work_dir],
+                capture_output=True, timeout=120
+            )
+
+            # Build OpenGFW
+            build_result = subprocess.run(
+                ["go", "build", "-o", "/usr/local/bin/opengfw"],
+                cwd=work_dir,
+                capture_output=True, text=True, timeout=300
+            )
+
+            if build_result.returncode != 0:
+                self._send_json({
+                    "status": "error",
+                    "error": f"Build failed: {build_result.stderr.decode() if isinstance(build_result.stderr, bytes) else build_result.stderr}"
+                })
+                return
+
+            subprocess.run(["chmod", "+x", "/usr/local/bin/opengfw"], capture_output=True)
+
+            # Create OpenGFW config directory
+            os.makedirs("/etc/opengfw", exist_ok=True)
+
+            # Enable nftables
+            subprocess.run(["systemctl", "enable", "nftables"], capture_output=True)
+            subprocess.run(["systemctl", "start", "nftables"], capture_output=True)
+
+            self._send_json({
+                "status": "installed",
+                "message": "OpenGFW installed successfully on host machine"
+            })
+        except Exception as e:
+            self._send_json({"status": "error", "error": str(e)})
+
+    def _handle_opengfw_config(self):
+        """Configure OpenGFW with rules from platform"""
+        try:
+            # Fetch config from platform
+            req = urllib.request.Request(
+                f"{PLATFORM_URL}/api/v1/opengfw/config",
+                headers={"X-API-Key": API_KEY},
+                method="GET"
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                config = json.loads(response.read().decode())
+
+            if not config.get("enabled"):
+                self._send_json({
+                    "status": "disabled",
+                    "message": "OpenGFW is disabled on platform"
+                })
+                return
+
+            # Generate OpenGFW config
+            rules = config.get("rules", [])
+            yaml_content = self._generate_opengfw_yaml(rules)
+
+            with open("/etc/opengfw/config.yaml", "w") as f:
+                f.write(yaml_content)
+
+            # Apply nftables rules for bridge filtering
+            self._apply_nftables_rules(rules)
+
+            # Restart OpenGFW if running
+            subprocess.run(["pkill", "-f", "opengfw"], capture_output=True)
+            subprocess.Popen(
+                ["/usr/local/bin/opengfw", "-c", "/etc/opengfw/config.yaml"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            self._send_json({
+                "status": "configured",
+                "rules_count": len(rules),
+                "message": "OpenGFW configured and restarted"
+            })
+        except Exception as e:
+            self._send_json({"status": "error", "error": str(e)})
+
+    def _generate_opengfw_yaml(self, rules):
+        """Generate OpenGFW YAML configuration"""
+        actions = []
+        for rule in rules:
+            proto = rule.get("protocol", "")
+            action = rule.get("action", "block")
+
+            # Map protocols to OpenGFW action rules
+            if proto == "shadowsocks":
+                actions.append(f'  - id: "block_shadowsocks"\n    match: "payload,56,0,0,0,0,0,0,0,0,6,0xff,0x17"\n    action: {action}')
+            elif proto == "wireguard":
+                actions.append(f'  - id: "block_wireguard"\n    match: "payload,0,0,0,0,0,0,0,0,0,17,0,51820"\n    action: {action}')
+            elif proto == "openvpn":
+                actions.append(f'  - id: "block_openvpn"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,1194"\n    action: {action}')
+            elif proto == "trojan":
+                actions.append(f'  - id: "block_trojan"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,443"\n    action: {action}')
+            elif proto in ["vmess", "vless", "xray"]:
+                actions.append(f'  - id: "block_{proto}"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,80"\n    action: {action}')
+            elif proto == "clash":
+                actions.append(f'  - id: "block_clash"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,7890"\n    action: {action}')
+
+        yaml = f'''listen: ":4480"
+log:
+  level: info
+  file: /var/log/opengfw.log
+actions:
+{chr(10).join(actions)}
+'''
+        return yaml
+
+    def _apply_nftables_rules(self, rules):
+        """Apply nftables rules on host to filter traffic to containers"""
+        try:
+            # Create opengfw table and chain
+            nft_script = '''
+flush ruleset
+table ip opengfw {{
+    chain input {{
+        type filter hook input priority 0; policy accept;
+    }}
+    chain forward {{
+        type filter hook forward priority 0; policy drop;
+        # Allow established connections
+        ct state established,related accept
+        # Allow loopback
+        iif lo accept
+    }}
+}}
+'''
+            # Add container network rules based on LXD bridge
+            result = subprocess.run(
+                ["ip", "addr", "show", "lxdbr0"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                # Get bridge IP for container subnet
+                for line in result.stdout.split("\n"):
+                    if "inet " in line:
+                        match = re.search(r'inet (\S+)', line)
+                        if match:
+                            subnet = match.group(1)
+                            # Block suspicious outbound from containers
+                            nft_script += f'''
+table ip opengfw {{
+    chain outbound {{
+        type filter hook output priority 0; policy accept;
+        # Log and block VPN protocols
+        meta iif-name lxdbr0 tcp dport {{ 1080, 8388, 51820, 1194, 443, 80, 7890 }} counter log prefix "OPENGFW_BLOCK: " drop
+    }}
+}}
+'''
+
+            # Apply nftables rules
+            subprocess.run(["bash", "-c", f"echo '{nft_script}' | nft -f -"], capture_output=True)
+
+        except Exception as e:
+            print(f"NFTables configuration error: {e}")
+
+    def _handle_opengfw_refresh(self):
+        """Refresh OpenGFW configuration from platform"""
+        self._handle_opengfw_config()
+
+    def _handle_opengfw_uninstall(self):
+        """Uninstall OpenGFW from host (admin only)"""
+        try:
+            # Stop OpenGFW
+            subprocess.run(["pkill", "-f", "opengfw"], capture_output=True)
+
+            # Remove binary
+            subprocess.run(["rm", "-f", "/usr/local/bin/opengfw"], capture_output=True)
+
+            # Remove config
+            subprocess.run(["rm", "-rf", "/etc/opengfw"], capture_output=True)
+
+            # Remove nftables rules
+            subprocess.run(["nft", "delete", "table", "ip", "opengfw"], capture_output=True)
+
+            self._send_json({
+                "status": "uninstalled",
+                "message": "OpenGFW removed from host machine"
+            })
+        except Exception as e:
+            self._send_json({"status": "error", "error": str(e)})
 
     def _get_machine_stats(self, machine_name):
         """Get CPU, memory, disk stats for a container"""

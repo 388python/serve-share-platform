@@ -1,0 +1,353 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - OpenGFW 管理{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>OpenGFW 管理</h2>
+        <p class="text-muted">在母机上阻止 VPN 和高危协议流量，用户无法删除此防火墙</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">全局设置</h5>
+            </div>
+            <div class="card-body">
+                <form id="opengfw-config-form">
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="opengfw-enabled" name="enabled">
+                        <label class="form-check-label" for="opengfw-enabled">
+                            <strong>启用 OpenGFW</strong>
+                        </label>
+                    </div>
+                    <hr>
+                    <h6>阻止以下协议:</h6>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-vpn" name="block_vpn">
+                                <label class="form-check-label" for="block-vpn">VPN 通用检测</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-shadowsocks" name="block_shadowsocks">
+                                <label class="form-check-label" for="block-shadowsocks">Shadowsocks</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-wireguard" name="block_wireguard">
+                                <label class="form-check-label" for="block-wireguard">WireGuard</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-openvpn" name="block_openvpn">
+                                <label class="form-check-label" for="block-openvpn">OpenVPN</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-trojan" name="block_trojan">
+                                <label class="form-check-label" for="block-trojan">Trojan</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-vmess" name="block_vmess">
+                                <label class="form-check-label" for="block-vmess">VMess</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-vless" name="block_vless">
+                                <label class="form-check-label" for="block-vless">VLess</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-xray" name="block_xray">
+                                <label class="form-check-label" for="block-xray">Xray</label>
+                            </div>
+                            <div class="mb-2 form-check">
+                                <input type="checkbox" class="form-check-input" id="block-clash" name="block_clash">
+                                <label class="form-check-label" for="block-clash">Clash</label>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary mt-3">保存设置</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">阻止统计</h5>
+            </div>
+            <div class="card-body">
+                <div id="stats-loading" class="text-center">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    加载中...
+                </div>
+                <div id="stats-content" style="display:none;">
+                    <h3 class="text-danger" id="total-blocked">0</h3>
+                    <p class="text-muted">总阻止次数</p>
+                    <hr>
+                    <h6>按协议统计:</h6>
+                    <ul class="list-group" id="protocol-stats">
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0">操作</h5>
+            </div>
+            <div class="card-body">
+                <button class="btn btn-warning" onclick="refreshAllServers()">
+                    刷新所有服务器规则
+                </button>
+                <div id="refresh-status" class="mt-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">阻止日志</h5>
+            </div>
+            <div class="card-body">
+                <div id="logs-loading" class="text-center">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    加载中...
+                </div>
+                <div id="logs-content" style="display:none;">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>用户</th>
+                                    <th>服务器</th>
+                                    <th>协议</th>
+                                    <th>源IP</th>
+                                    <th>目标IP</th>
+                                    <th>目标端口</th>
+                                </tr>
+                            </thead>
+                            <tbody id="logs-table-body">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已启用 OpenGFW 的服务器</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">以下服务器将在母机上启用 OpenGFW 防火墙</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>名称</th>
+                                <th>IP</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="servers-table-body">
+                            <tr><td colspan="4" class="text-center text-muted">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script>
+const API_BASE = '/api/v1';
+
+async function loadConfig() {
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/config`, {
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        document.getElementById('opengfw-enabled').checked = data.enabled;
+        document.getElementById('block-vpn').checked = data.block_vpn;
+        document.getElementById('block-shadowsocks').checked = data.block_shadowsocks;
+        document.getElementById('block-wireguard').checked = data.block_wireguard;
+        document.getElementById('block-openvpn').checked = data.block_openvpn;
+        document.getElementById('block-trojan').checked = data.block_trojan;
+        document.getElementById('block-vmess').checked = data.block_vmess;
+        document.getElementById('block-vless').checked = data.block_vless;
+        document.getElementById('block-xray').checked = data.block_xray;
+        document.getElementById('block-clash').checked = data.block_clash;
+
+        // Render servers
+        const serversBody = document.getElementById('servers-table-body');
+        if (data.servers_with_opengfw && data.servers_with_opengfw.length > 0) {
+            serversBody.innerHTML = data.servers_with_opengfw.map(s => `
+                <tr>
+                    <td>${s[0]}</td>
+                    <td>${s[1]}</td>
+                    <td>${s[2]}</td>
+                    <td><span class="badge bg-success">已启用</span></td>
+                </tr>
+            `).join('');
+        } else {
+            serversBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无启用 OpenGFW 的服务器</td></tr>';
+        }
+    } catch (err) {
+        console.error('Failed to load config:', err);
+    }
+}
+
+async function loadStats() {
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/stats`, {
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        document.getElementById('total-blocked').textContent = data.total_blocked;
+
+        const statsList = document.getElementById('protocol-stats');
+        if (data.by_protocol && data.by_protocol.length > 0) {
+            statsList.innerHTML = data.by_protocol.map(p => `
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    ${p[0]}
+                    <span class="badge bg-danger rounded-pill">${p[1]}</span>
+                </li>
+            `).join('');
+        } else {
+            statsList.innerHTML = '<li class="list-group-item text-muted">暂无阻止记录</li>';
+        }
+
+        document.getElementById('stats-loading').style.display = 'none';
+        document.getElementById('stats-content').style.display = 'block';
+    } catch (err) {
+        console.error('Failed to load stats:', err);
+    }
+}
+
+async function loadLogs() {
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/logs`, {
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        const tbody = document.getElementById('logs-table-body');
+        if (data && data.length > 0) {
+            tbody.innerHTML = data.map(log => `
+                <tr>
+                    <td>${log.blocked_at}</td>
+                    <td>${log.username}</td>
+                    <td>${log.server_name}</td>
+                    <td><span class="badge bg-danger">${log.protocol}</span></td>
+                    <td>${log.src_ip || '-'}</td>
+                    <td>${log.dst_ip || '-'}</td>
+                    <td>${log.dst_port || '-'}</td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无阻止记录</td></tr>';
+        }
+
+        document.getElementById('logs-loading').style.display = 'none';
+        document.getElementById('logs-content').style.display = 'block';
+    } catch (err) {
+        console.error('Failed to load logs:', err);
+    }
+}
+
+document.getElementById('opengfw-config-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const config = {
+        enabled: formData.has('enabled'),
+        block_vpn: formData.has('block_vpn'),
+        block_shadowsocks: formData.has('block_shadowsocks'),
+        block_wireguard: formData.has('block_wireguard'),
+        block_openvpn: formData.has('block_openvpn'),
+        block_trojan: formData.has('block_trojan'),
+        block_vmess: formData.has('block_vmess'),
+        block_vless: formData.has('block_vless'),
+        block_xray: formData.has('block_xray'),
+        block_clash: formData.has('block_clash'),
+    };
+
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/config`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${getApiKey()}`
+            },
+            body: JSON.stringify(config)
+        });
+
+        if (resp.ok) {
+            alert('配置已保存');
+            loadConfig();
+        } else {
+            alert('保存失败');
+        }
+    } catch (err) {
+        alert('保存失败: ' + err.message);
+    }
+});
+
+async function refreshAllServers() {
+    const statusDiv = document.getElementById('refresh-status');
+    statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> 刷新中...';
+
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/refresh-rules`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        let html = `<div class="alert alert-${data.refreshed_servers > 0 ? 'success' : 'warning'}">`;
+        html += `<strong>刷新完成:</strong> ${data.refreshed_servers} 个服务器已更新规则`;
+        html += '</div>';
+
+        if (data.results && data.results.length > 0) {
+            html += '<ul class="list-unstyled small mt-2">';
+            data.results.forEach(r => {
+                html += `<li>${r.server_ip}: ${r.status === 'ok' ? '✅ 成功' : '❌ 失败'}</li>`;
+            });
+            html += '</ul>';
+        }
+
+        statusDiv.innerHTML = html;
+    } catch (err) {
+        statusDiv.innerHTML = `<div class="alert alert-danger">刷新失败: ${err.message}</div>`;
+    }
+}
+
+function getApiKey() {
+    return localStorage.getItem('api_key') || '';
+}
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', () => {
+    loadConfig();
+    loadStats();
+    loadLogs();
+});
+</script>
+{% endblock scripts %}

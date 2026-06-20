@@ -339,6 +339,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
         .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
+        .route("/admin/opengfw", get(handlers::admin_opengfw_page))
         .route("/admin/disputes", get(handlers::admin_disputes))
         .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))

@@ -1404,6 +1404,320 @@ async fn api_buy_premium(
 }
 
 // ==============================
+// OpenGFW Admin API Handlers
+// ==============================
+
+#[derive(Deserialize)]
+pub struct OpenGFWConfigPatch {
+    pub enabled: Option<bool>,
+    pub block_vpn: Option<bool>,
+    pub block_shadowsocks: Option<bool>,
+    pub block_wireguard: Option<bool>,
+    pub block_openvpn: Option<bool>,
+    pub block_trojan: Option<bool>,
+    pub block_vmess: Option<bool>,
+    pub block_vless: Option<bool>,
+    pub block_xray: Option<bool>,
+    pub block_clash: Option<bool>,
+}
+
+// GET /api/v1/admin/opengfw/config - Get OpenGFW configuration
+async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    // Get global settings
+    let enabled = db::get_config("opengfw_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string());
+    let block_vpn = db::get_config("opengfw_block_vpn")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_shadowsocks = db::get_config("opengfw_block_shadowsocks")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_wireguard = db::get_config("opengfw_block_wireguard")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_openvpn = db::get_config("opengfw_block_openvpn")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_trojan = db::get_config("opengfw_block_trojan")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_vmess = db::get_config("opengfw_block_vmess")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_vless = db::get_config("opengfw_block_vless")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_xray = db::get_config("opengfw_block_xray")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    let block_clash = db::get_config("opengfw_block_clash")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+
+    // Get servers with OpenGFW enabled
+    let servers_with_opengfw: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    ok_response(json!({
+        "enabled": enabled == "true",
+        "block_vpn": block_vpn == "true",
+        "block_shadowsocks": block_shadowsocks == "true",
+        "block_wireguard": block_wireguard == "true",
+        "block_openvpn": block_openvpn == "true",
+        "block_trojan": block_trojan == "true",
+        "block_vmess": block_vmess == "true",
+        "block_vless": block_vless == "true",
+        "block_xray": block_xray == "true",
+        "block_clash": block_clash == "true",
+        "servers_with_opengfw": servers_with_opengfw
+    })).into_response()
+}
+
+// PUT /api/v1/admin/opengfw/config - Update OpenGFW configuration
+async fn api_admin_opengfw_config_save(
+    headers: HeaderMap,
+    Json(form): Json<OpenGFWConfigPatch>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    if let Some(enabled) = form.enabled {
+        let _ = db::set_config("opengfw_enabled", if enabled { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_vpn {
+        let _ = db::set_config("opengfw_block_vpn", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_shadowsocks {
+        let _ = db::set_config("opengfw_block_shadowsocks", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_wireguard {
+        let _ = db::set_config("opengfw_block_wireguard", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_openvpn {
+        let _ = db::set_config("opengfw_block_openvpn", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_trojan {
+        let _ = db::set_config("opengfw_block_trojan", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_vmess {
+        let _ = db::set_config("opengfw_block_vmess", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_vless {
+        let _ = db::set_config("opengfw_block_vless", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_xray {
+        let _ = db::set_config("opengfw_block_xray", if v { "true" } else { "false" })
+            .await;
+    }
+    if let Some(v) = form.block_clash {
+        let _ = db::set_config("opengfw_block_clash", if v { "true" } else { "false" })
+            .await;
+    }
+
+    ok_response(json!({"status": "ok", "message": "OpenGFW 配置已更新"})).into_response()
+}
+
+// GET /api/v1/admin/opengfw/logs - Get blocked connection logs
+async fn api_admin_opengfw_logs(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let logs = services::opengfw::get_recent_logs(100).await;
+    ok_response(logs).into_response()
+}
+
+// GET /api/v1/admin/opengfw/stats - Get block statistics
+async fn api_admin_opengfw_stats(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let (total, by_protocol) = services::opengfw::get_block_stats().await;
+    ok_response(json!({
+        "total_blocked": total,
+        "by_protocol": by_protocol
+    })).into_response()
+}
+
+// POST /api/v1/admin/opengfw/refresh-rules - Refresh rules on all servers
+async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    // Get all servers with OpenGFW enabled
+    let servers: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut results = Vec::new();
+
+    for (server_id, server_ip) in servers {
+        // Notify agent to refresh OpenGFW rules
+        let agent_url = format!("http://{}:19527", server_ip);
+        let client = reqwest::Client::new();
+
+        match client
+            .post(&format!("{}/opengfw/refresh", agent_url))
+            .header("X-API-Key", "tea-platform-agent-key")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                results.push(json!({
+                    "server_id": server_id,
+                    "server_ip": server_ip,
+                    "status": "ok",
+                    "response": resp.text().await.unwrap_or_default()
+                }));
+            }
+            Err(e) => {
+                results.push(json!({
+                    "server_id": server_id,
+                    "server_ip": server_ip,
+                    "status": "error",
+                    "error": e.to_string()
+                }));
+            }
+        }
+    }
+
+    ok_response(json!({
+        "refreshed_servers": results.len(),
+        "results": results
+    })).into_response()
+}
+
+// ==============================
+// Agent OpenGFW API Handlers
+// ==============================
+
+// GET /api/v1/opengfw/status - Get OpenGFW running status on host
+async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
+    // Verify agent API key
+    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
+    let expected_key = db::get_config_sync("agent_api_key")
+        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
+
+    if api_key != Some(expected_key.as_str()) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    }
+
+    // Check if OpenGFW binary exists and is running
+    let opengfw_exists = std::path::Path::new("/usr/local/bin/opengfw").exists();
+    let opengfw_running = std::process::Command::new("pgrep")
+        .args(["-f", "opengfw"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    ok_response(json!({
+        "installed": opengfw_exists,
+        "running": opengfw_running,
+        "version": if opengfw_exists { "installed" } else { "not_installed" }
+    })).into_response()
+}
+
+// GET /api/v1/opengfw/config - Get OpenGFW rules configuration
+async fn api_opengfw_get_config(headers: HeaderMap) -> impl IntoResponse {
+    // Verify agent API key
+    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
+    let expected_key = db::get_config_sync("agent_api_key")
+        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
+
+    if api_key != Some(expected_key.as_str()) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    }
+
+    let global_enabled = db::get_config_sync("opengfw_enabled")
+        .unwrap_or_else(|| "false".to_string());
+
+    if global_enabled != "true" {
+        return ok_response(json!({
+            "enabled": false,
+            "rules": []
+        })).into_response();
+    }
+
+    let rules = services::opengfw::get_active_rules().await;
+
+    ok_response(json!({
+        "enabled": true,
+        "rules": rules
+    })).into_response()
+}
+
+// POST /api/v1/opengfw/block-report - Agent reports blocked connections
+#[derive(Deserialize)]
+pub struct OpenGFWBlockReport {
+    pub machine_id: i64,
+    pub server_id: i64,
+    pub protocol: String,
+    pub src_ip: Option<String>,
+    pub dst_ip: Option<String>,
+    pub dst_port: Option<i32>,
+}
+
+async fn api_opengfw_block_report(
+    headers: HeaderMap,
+    Json(report): Json<OpenGFWBlockReport>,
+) -> impl IntoResponse {
+    // Verify agent API key
+    let api_key = headers.get("X-API-Key").and_then(|v| v.to_str().ok());
+    let expected_key = db::get_config_sync("agent_api_key")
+        .unwrap_or_else(|| "tea-platform-agent-key".to_string());
+
+    if api_key != Some(expected_key.as_str()) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+    }
+
+    // Log the blocked connection
+    services::opengfw::log_blocked_connection(
+        report.machine_id,
+        report.server_id,
+        &report.protocol,
+        report.src_ip,
+        report.dst_ip,
+        report.dst_port,
+    )
+    .await;
+
+    ok_response(json!({"status": "ok"})).into_response()
+}
+
+// ==============================
 // Router builder
 // ==============================
 
@@ -1442,4 +1756,14 @@ pub fn router(_state: AppState) -> Router<AppState> {
         )
         .route("/v1/admin/orders", get(api_admin_orders))
         .route("/v1/admin/packages", get(api_admin_packages))
+        // OpenGFW API
+        .route("/v1/admin/opengfw/config", get(api_admin_opengfw_config))
+        .route("/v1/admin/opengfw/config", put(api_admin_opengfw_config_save))
+        .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
+        .route("/v1/admin/opengfw/stats", get(api_admin_opengfw_stats))
+        .route("/v1/admin/opengfw/refresh-rules", post(api_admin_opengfw_refresh_rules))
+        // Agent OpenGFW endpoints
+        .route("/v1/opengfw/status", get(api_opengfw_status))
+        .route("/v1/opengfw/config", get(api_opengfw_get_config))
+        .route("/v1/opengfw/block-report", post(api_opengfw_block_report))
 }

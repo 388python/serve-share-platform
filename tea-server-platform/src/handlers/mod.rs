@@ -3181,3 +3181,21 @@ pub async fn user_warning_letter_action(
 
     Ok(Redirect::to(&format!("/warnings/{}", id)))
 }
+
+// ==================== OpenGFW Admin Page ====================
+
+pub async fn admin_opengfw_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let rendered = state
+        .templates
+        .render("admin/opengfw.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
