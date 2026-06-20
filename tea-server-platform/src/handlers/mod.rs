@@ -24,24 +24,6 @@ fn get_session_user(cookies: &Cookies) -> Option<(i64, String, bool)> {
     Some((session.user_id, session.username, session.is_admin))
 }
 
-/// 统一的 Agent API Key 获取函数 — 任何与 Agent 通信都应使用此函数
-fn agent_api_key() -> String {
-    db::get_config_sync("agent_api_key")
-        .filter(|k| !k.is_empty() && k != "tea-platform-agent-key")
-        .unwrap_or_else(|| {
-            use rand::RngCore;
-            let mut bytes = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            const CHARS: &[u8; 16] = b"0123456789abcdef";
-            let mut out = String::with_capacity(64);
-            for b in bytes.iter() {
-                out.push(CHARS[(b & 0xf) as usize] as char);
-                out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
-            }
-            out
-        })
-}
-
 fn require_auth(cookies: &Cookies) -> Result<(i64, String, bool), Redirect> {
     get_session_user(cookies).ok_or_else(|| Redirect::to("/login"))
 }
@@ -55,15 +37,13 @@ fn require_admin(cookies: &Cookies) -> Result<(i64, String), Redirect> {
 }
 
 fn build_base_context(cookies: &Cookies, ctx: &mut Context) {
-    let site_name = db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
+    let site_name =
+        db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
     ctx.insert("site_name", &site_name);
 
     if let Some(session) = services::session::get_session(cookies) {
         ctx.insert("user_name", &session.username);
-        ctx.insert(
-            "user_balance",
-            &format!("{:.2}", session.core_hours),
-        );
+        ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
         ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
         ctx.insert("is_admin", &session.is_admin.to_string());
     }
@@ -121,8 +101,7 @@ pub async fn admin_login_ui(
     }
 
     let cfg = AppConfig::get();
-    let site_name = db::get_config_sync("site_name")
-        .unwrap_or_else(|| cfg.platform_domain.clone());
+    let site_name = db::get_config_sync("site_name").unwrap_or_else(|| cfg.platform_domain.clone());
 
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
@@ -147,7 +126,10 @@ pub async fn admin_login(
     let password_ok = constant_time_eq(params.password.as_bytes(), cfg.admin_password.as_bytes());
 
     if !username_ok || !password_ok {
-        tracing::warn!("Failed admin login attempt for username='{}'", params.username);
+        tracing::warn!(
+            "Failed admin login attempt for username='{}'",
+            params.username
+        );
         return Redirect::to("/").into_response();
     }
 
@@ -161,17 +143,18 @@ pub async fn admin_login(
     .await
     .unwrap_or(None);
 
-    let (user_id, username, core_hours, ldc_balance) =
-        if let Some((uid, uname, _admin, ch, ldc)) = user {
-            // Ensure admin flag is set
-            let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
-                .bind(uid)
-                .execute(pool)
-                .await;
-            (uid, uname, ch, ldc)
-        } else {
-            // Create admin user with special linuxdo_id = -1
-            let _ = sqlx::query(
+    let (user_id, username, core_hours, ldc_balance) = if let Some((uid, uname, _admin, ch, ldc)) =
+        user
+    {
+        // Ensure admin flag is set
+        let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
+            .bind(uid)
+            .execute(pool)
+            .await;
+        (uid, uname, ch, ldc)
+    } else {
+        // Create admin user with special linuxdo_id = -1
+        let _ = sqlx::query(
                 "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (-1, ?, ?, 0, 0, 1)",
             )
             .bind(&params.username)
@@ -179,15 +162,15 @@ pub async fn admin_login(
             .execute(pool)
             .await;
 
-            let new_user: (i64, String, f64, f64) = sqlx::query_as(
-                "SELECT id, username, core_hours, ldc_balance FROM users WHERE username = ?",
-            )
-            .bind(&params.username)
-            .fetch_one(pool)
-            .await
-            .unwrap_or((0, params.username.clone(), 0.0, 0.0));
-            (new_user.0, new_user.1, new_user.2, new_user.3)
-        };
+        let new_user: (i64, String, f64, f64) = sqlx::query_as(
+            "SELECT id, username, core_hours, ldc_balance FROM users WHERE username = ?",
+        )
+        .bind(&params.username)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0, params.username.clone(), 0.0, 0.0));
+        (new_user.0, new_user.1, new_user.2, new_user.3)
+    };
 
     set_session_cookie(&cookies, user_id, &username, true, core_hours, ldc_balance);
     Redirect::to("/admin").into_response()
@@ -221,14 +204,12 @@ pub async fn user_dashboard(
     let pool = db::get_db();
 
     // Get user info
-    let user: (f64, f64) = sqlx::query_as(
-        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .unwrap_or((0.0, 0.0));
+    let user: (f64, f64) = sqlx::query_as("SELECT core_hours, ldc_balance FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .unwrap_or((0.0, 0.0));
 
     let api_key: Option<String> = sqlx::query_scalar("SELECT api_key FROM users WHERE id = ?")
         .bind(user_id)
@@ -238,13 +219,12 @@ pub async fn user_dashboard(
         .flatten();
 
     // Get user's machines
-    let machines: Vec<Machine> = sqlx::query_as(
-        "SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let machines: Vec<Machine> =
+        sqlx::query_as("SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     // Get user's packages
     let packages: Vec<UserPackage> = sqlx::query_as(
@@ -256,16 +236,17 @@ pub async fn user_dashboard(
     .unwrap_or_default();
 
     // Get user's contributed servers
-    let my_servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let my_servers: Vec<Server> =
+        sqlx::query_as("SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
-    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
-    let premium_ldc_cost = db::get_config_sync("premium_ldc_cost").unwrap_or_else(|| "100".to_string());
+    let premium_enabled =
+        db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
+    let premium_ldc_cost =
+        db::get_config_sync("premium_ldc_cost").unwrap_or_else(|| "100".to_string());
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -285,9 +266,7 @@ pub async fn user_dashboard(
     Ok(Html(rendered))
 }
 
-pub async fn regenerate_api_key(
-    cookies: Cookies,
-) -> Result<impl IntoResponse, Redirect> {
+pub async fn regenerate_api_key(cookies: Cookies) -> Result<impl IntoResponse, Redirect> {
     let (user_id, username, is_admin) = require_auth(&cookies)?;
     let new_key = format!("usr_{}", Uuid::new_v4().to_string().replace('-', ""));
     let pool = db::get_db();
@@ -308,23 +287,20 @@ pub async fn regenerate_api_key(
 }
 
 /// 公开的服务器列表页面
-pub async fn servers_page(
-    State(state): State<AppState>,
-    cookies: Cookies,
-) -> impl IntoResponse {
+pub async fn servers_page(State(state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
     let pool = db::get_db();
 
     // 只查询激活且未过期的服务器
     let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > NOW() ORDER BY is_premium DESC, created_at DESC"
+        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY is_premium DESC, created_at DESC"
     )
+    .bind(Utc::now())
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     let cfg = AppConfig::get();
-    let site_name = db::get_config_sync("site_name")
-        .unwrap_or_else(|| cfg.platform_domain.clone());
+    let site_name = db::get_config_sync("site_name").unwrap_or_else(|| cfg.platform_domain.clone());
 
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
@@ -355,21 +331,24 @@ pub async fn contribute_server_page(
 
     // If admin, pass available virt types based on config
     if is_admin {
-        let virt_type =
-            db::get_config_sync("virt_type").unwrap_or_else(|| "lxd".to_string());
+        let virt_type = db::get_config_sync("virt_type").unwrap_or_else(|| "lxd".to_string());
         let types: Vec<&str> = virt_type.split(',').collect();
         ctx.insert("available_virt_types", &types);
     }
 
-    let select_mode =
-        db::get_config_sync("select_mode").unwrap_or_else(|| "market".to_string());
+    let select_mode = db::get_config_sync("select_mode").unwrap_or_else(|| "market".to_string());
     ctx.insert("select_mode", &select_mode);
 
-    let lock_bonus = db::get_config("lock_bonus").await.unwrap_or_else(|| "unlocked".to_string());
+    let lock_bonus = db::get_config("lock_bonus")
+        .await
+        .unwrap_or_else(|| "unlocked".to_string());
     ctx.insert("lock_bonus", &lock_bonus);
 
-    let premium_enabled = db::get_config("premium_enabled").await.unwrap_or_else(|| "false".to_string());
-    let premium_ldc_cost: f64 = db::get_config("premium_ldc_cost").await
+    let premium_enabled = db::get_config("premium_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string());
+    let premium_ldc_cost: f64 = db::get_config("premium_ldc_cost")
+        .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(100.0);
     ctx.insert("premium_enabled", &premium_enabled);
@@ -482,7 +461,9 @@ pub async fn contribute_server_submit(
     // Validate description length
     if let Some(ref desc) = form.description {
         if desc.len() > 1000 {
-            return Ok(Redirect::to("/servers/contribute?error=description_too_long").into_response());
+            return Ok(
+                Redirect::to("/servers/contribute?error=description_too_long").into_response(),
+            );
         }
     }
 
@@ -511,13 +492,17 @@ pub async fn contribute_server_submit(
 
     // ---- Premium logic ----
     let premium_days = form.premium_days.unwrap_or(0).max(0);
-    let premium_enabled_cfg = db::get_config("premium_enabled").await
+    let premium_enabled_cfg = db::get_config("premium_enabled")
+        .await
         .unwrap_or_else(|| "false".to_string());
-    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost").await
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost")
+        .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(100.0);
 
-    let (is_premium, premium_expires_at, premium_cost) = if premium_days > 0 && premium_enabled_cfg == "true" {
+    let (is_premium, premium_expires_at, premium_cost) = if premium_days > 0
+        && premium_enabled_cfg == "true"
+    {
         let total_cost = premium_daily_cost * premium_days as f64;
         // Check user balance
         let balance: Option<f64> = sqlx::query_scalar("SELECT ldc_balance FROM users WHERE id = ?")
@@ -633,10 +618,7 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &st
             if session.handshake().is_err() {
                 return;
             }
-            if session
-                .userauth_pubkey_memory("root", None, &ssh_key, None)
-                .is_err()
-            {
+            if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
                 return;
             }
             // Run agent install command
@@ -681,25 +663,24 @@ pub async fn machine_market(
     let (_user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ?",
-    )
-    .bind(Utc::now())
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let servers: Vec<Server> =
+        sqlx::query_as("SELECT * FROM servers WHERE is_active = 1 AND expires_at > ?")
+            .bind(Utc::now())
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     // Get used capacity for each server
     let mut server_capacities: Vec<(Server, bool)> = Vec::new();
     for s in servers {
         let used: Option<(f64, f64, f64)> = sqlx::query_as(
-            "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0), COALESCE(SUM(disk_gb), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+            "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0), COALESCE(SUM(disk_gb), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
         )
         .bind(s.id)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
-        
+
         let has_capacity = if let Some((used_cpu, used_mem, used_disk)) = used {
             (s.cpu_cores as f64) > used_cpu && s.memory_gb > used_mem && s.disk_gb > used_disk
         } else {
@@ -709,12 +690,14 @@ pub async fn machine_market(
     }
 
     // Sort: premium first (if enabled), then has capacity, then by created_at DESC
-    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
+    let premium_enabled =
+        db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string()) == "true";
     server_capacities.sort_by(|a, b| {
         let a_premium = premium_enabled && a.0.is_premium;
         let b_premium = premium_enabled && b.0.is_premium;
-        b_premium.cmp(&a_premium)  // premium first
-            .then_with(|| b.1.cmp(&a.1))  // true (has capacity) comes first
+        b_premium
+            .cmp(&a_premium) // premium first
+            .then_with(|| b.1.cmp(&a.1)) // true (has capacity) comes first
             .then_with(|| b.0.created_at.cmp(&a.0.created_at))
     });
 
@@ -768,18 +751,16 @@ pub async fn create_machine(
     let now = Utc::now();
 
     // Get user info (including bonus)
-    let user: Option<User> =
-        sqlx::query_as("SELECT * FROM users WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
 
     let user = user.ok_or_else(|| Redirect::to("/login"))?;
     let core_hours = user.core_hours;
     let bonus_core_hours = user.bonus_core_hours;
     let total_available = core_hours + bonus_core_hours;
-    let ldc_balance = user.ldc_balance;
 
     // Get server info
     let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
@@ -825,7 +806,7 @@ pub async fn create_machine(
     // NAT port allocation: each running machine uses 1 NAT port
     let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
         let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
         )
         .bind(server.id)
         .fetch_one(pool)
@@ -872,35 +853,59 @@ pub async fn create_machine(
     };
     let regular_used = total_cost - bonus_used;
 
-    let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ?")
-        .bind(bonus_used)
-        .bind(regular_used)
-        .bind(user_id)
-        .execute(pool)
-        .await;
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin machine create transaction: {}", err);
+            return Ok(Redirect::to("/machines"));
+        }
+    };
 
-    let new_core_hours = core_hours - regular_used;
+    let debit_result = sqlx::query(
+        "UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ? AND bonus_core_hours >= ? AND core_hours >= ?",
+    )
+    .bind(bonus_used)
+    .bind(regular_used)
+    .bind(user_id)
+    .bind(bonus_used)
+    .bind(regular_used)
+    .execute(&mut *tx)
+    .await;
 
-    // Update session cookie
-    set_session_cookie(&cookies, user_id, &username, is_admin, new_core_hours, ldc_balance);
+    match debit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/recharge")),
+        Err(err) => {
+            tracing::error!("failed to debit machine create cost: {}", err);
+            return Ok(Redirect::to("/machines"));
+        }
+    }
 
     // Task 5.3: Credit merchant - bonus used goes to merchant's bonus_core_hours with expiry
     if bonus_used > 0.0 {
-        let _ = sqlx::query(
+        if let Err(err) = sqlx::query(
             "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = COALESCE(bonus_expires_at, ?) WHERE id = ?"
         )
         .bind(bonus_used)
         .bind(user.bonus_expires_at)
         .bind(server.owner_id)
-        .execute(pool)
-        .await;
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!("failed to credit merchant bonus balance: {}", err);
+            return Ok(Redirect::to("/machines"));
+        }
     }
     if regular_used > 0.0 {
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+        if let Err(err) = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
             .bind(regular_used)
             .bind(server.owner_id)
-            .execute(pool)
-            .await;
+            .execute(&mut *tx)
+            .await
+        {
+            tracing::error!("failed to credit merchant balance: {}", err);
+            return Ok(Redirect::to("/machines"));
+        }
     }
 
     // Get proxy port from server
@@ -909,7 +914,7 @@ pub async fn create_machine(
     // Task 1.1: Include used_hours in machine insert
     let used_hours = hours as f64;
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -921,77 +926,43 @@ pub async fn create_machine(
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
-    .execute(pool)
-    .await
-    .unwrap();
+    .execute(&mut *tx)
+    .await;
+
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::error!("failed to insert pending machine: {}", err);
+            return Ok(Redirect::to("/machines"));
+        }
+    };
 
     let machine_id = result.last_insert_rowid();
 
-    // Update total_usage_hours
-    let _ = sqlx::query(
-        "UPDATE users SET total_usage_hours = total_usage_hours + ? WHERE id = ?",
-    )
-    .bind(hours as f64)
-    .bind(user_id)
-    .execute(pool)
-    .await;
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit machine create transaction: {}", err);
+        return Ok(Redirect::to("/machines"));
+    }
 
-    // Check cumulative packages for auto-grant
-    let total_usage: Option<f64> = sqlx::query_scalar(
-        "SELECT total_usage_hours FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-
-    if let Some(total_hours) = total_usage {
-        let cumulative_packages: Vec<RechargePackage> = sqlx::query_as(
-            "SELECT * FROM recharge_packages WHERE is_cumulative = 1 AND is_active = 1 AND cumulative_hours IS NOT NULL",
-        )
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        for pkg in cumulative_packages {
-            if let Some(threshold) = pkg.cumulative_hours {
-                if total_hours >= threshold {
-                    // Check if already granted
-                    let already_granted: Option<i64> = sqlx::query_scalar(
-                        "SELECT id FROM user_packages WHERE user_id = ? AND package_id = ?",
-                    )
-                    .bind(user_id)
-                    .bind(pkg.id)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap_or(None);
-
-                    if already_granted.is_none() {
-                        let _ = sqlx::query(
-                            "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, ?, 1)",
-                        )
-                        .bind(user_id)
-                        .bind(pkg.id)
-                        .bind(pkg.core_hours)
-                        .execute(pool)
-                        .await;
-
-                        // Grant core hours
-                        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-                            .bind(pkg.core_hours)
-                            .bind(user_id)
-                            .execute(pool)
-                            .await;
-                    }
-                }
-            }
-        }
+    if let Some((fresh_core_hours, fresh_ldc_balance)) =
+        sqlx::query_as::<_, (f64, f64)>("SELECT core_hours, ldc_balance FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+    {
+        set_session_cookie(
+            &cookies,
+            user_id,
+            &username,
+            is_admin,
+            fresh_core_hours,
+            fresh_ldc_balance,
+        );
     }
 
     // Trigger agent to create VM on the server
     let server_ip = server.ip.clone();
-    let server_ssh_port = server.ssh_port;
-    let server_ssh_key = server.ssh_key.clone();
     let machine_name = format!("machine-{}", machine_id);
     let virt_type = server.virt_type.clone();
     let cpu = form.cpu_cores;
@@ -999,25 +970,25 @@ pub async fn create_machine(
     let disk = form.disk_gb;
 
     // Get configured agent API key (never use hardcoded default)
-    let agent_key = agent_api_key();
+    let agent_key = services::session::agent_api_key();
 
-    tokio::spawn(async move {
-        let agent_url = format!("http://{}:19527", server_ip);
-        let client = reqwest::Client::new();
-        let _ = client
-            .post(&format!("{}/create", agent_url))
-            .header("X-API-Key", agent_key)
-            .json(&serde_json::json!({
-                "name": machine_name,
-                "cpu": cpu,
-                "memory": (memory * 1024.0) as i64,
-                "disk": disk,
-                "virt_type": virt_type,
-            }))
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await;
-    });
+    services::machine_lifecycle::spawn_agent_create_job(
+        services::machine_lifecycle::MachineProvisioningJob {
+            machine_id,
+            user_id,
+            owner_id: server.owner_id,
+            server_ip,
+            machine_name,
+            virt_type,
+            cpu,
+            memory_gb: memory,
+            disk_gb: disk,
+            agent_key,
+            regular_used,
+            bonus_used,
+            used_hours,
+        },
+    );
 
     Ok(Redirect::to("/machines"))
 }
@@ -1029,13 +1000,12 @@ pub async fn my_machines(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let machines: Vec<Machine> = sqlx::query_as(
-        "SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let machines: Vec<Machine> =
+        sqlx::query_as("SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -1071,13 +1041,12 @@ pub async fn stop_machine(
     match machine {
         Some((owner_id, server_id, virt_type)) if owner_id == user_id => {
             // Check if machine is already stopped
-            let current_status: Option<(String,)> = sqlx::query_as(
-                "SELECT status FROM machines WHERE id = ?"
-            )
-            .bind(path.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+            let current_status: Option<(String,)> =
+                sqlx::query_as("SELECT status FROM machines WHERE id = ?")
+                    .bind(path.id)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
 
             if let Some((status,)) = current_status {
                 if status == "stopped" || status == "deleted" {
@@ -1101,7 +1070,7 @@ pub async fn stop_machine(
             if let Some(s) = server {
                 let machine_name = format!("machine-{}", path.id);
                 // Use configured agent API key (never hardcoded)
-                let agent_key = agent_api_key();
+                let agent_key = services::session::agent_api_key();
                 tokio::spawn(async move {
                     let agent_url = format!("http://{}:19527", s.ip);
                     let client = reqwest::Client::new();
@@ -1138,13 +1107,12 @@ pub async fn delete_machine(
     match machine {
         Some((owner_id, server_id)) if owner_id == user_id => {
             // Check if machine already deleted
-            let current_status: Option<(String,)> = sqlx::query_as(
-                "SELECT status FROM machines WHERE id = ?"
-            )
-            .bind(path.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+            let current_status: Option<(String,)> =
+                sqlx::query_as("SELECT status FROM machines WHERE id = ?")
+                    .bind(path.id)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
 
             if let Some((status,)) = current_status {
                 if status == "deleted" {
@@ -1169,7 +1137,7 @@ pub async fn delete_machine(
                 .await;
 
             if let Some(s) = server {
-                let agent_key = agent_api_key();
+                let agent_key = services::session::agent_api_key();
                 tokio::spawn(async move {
                     let agent_url = format!("http://{}:19527", s.ip);
                     let client = reqwest::Client::new();
@@ -1196,12 +1164,13 @@ pub async fn machine_connect(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
-        .bind(path.id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+    let machine: Option<Machine> =
+        sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
+            .bind(path.id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let machine = match machine {
         Some(m) => m,
@@ -1252,12 +1221,11 @@ pub async fn delete_server(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let server: Option<(i64,)> =
-        sqlx::query_as("SELECT owner_id FROM servers WHERE id = ?")
-            .bind(path.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let server: Option<(i64,)> = sqlx::query_as("SELECT owner_id FROM servers WHERE id = ?")
+        .bind(path.id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
 
     match server {
         Some((owner_id,)) if owner_id == user_id => {
@@ -1341,7 +1309,8 @@ pub async fn create_recharge_order(
     .await;
 
     // Create payment via LDC
-    match services::ldc_payment::create_payment(cfg, &out_trade_no, form.money, "充值订单").await {
+    match services::ldc_payment::create_payment(cfg, &out_trade_no, form.money, "充值订单").await
+    {
         Ok(url) => Ok(Redirect::to(&url)),
         Err(_) => Ok(Redirect::to("/recharge")),
     }
@@ -1371,10 +1340,14 @@ pub async fn recharge_callback(
     let trade_no = params.get("trade_no").cloned().unwrap_or_default();
     let status = params.get("status").cloned().unwrap_or_default();
     let sign = params.get("sign").cloned().unwrap_or_default();
-    let sign_type = params.get("sign_type").cloned().unwrap_or_else(|| "MD5".to_string());
-    
+    let sign_type = params
+        .get("sign_type")
+        .cloned()
+        .unwrap_or_else(|| "MD5".to_string());
+
     // Get amount from callback for verification (optional but recommended)
-    let callback_money: f64 = params.get("money")
+    let callback_money: f64 = params
+        .get("money")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
 
@@ -1396,7 +1369,10 @@ pub async fn recharge_callback(
         let sign_str = format!("{}{}", payload, client_secret);
         let expected = format!("{:x}", md5::compute(sign_str.as_bytes()));
         if sign != expected {
-            tracing::warn!("Payment callback sign verification failed for order: {}", out_trade_no);
+            tracing::warn!(
+                "Payment callback sign verification failed for order: {}",
+                out_trade_no
+            );
             return "sign error".to_string();
         }
     }
@@ -1412,7 +1388,7 @@ pub async fn recharge_callback(
     .await
     .unwrap_or(None);
 
-    let (order_user_id, order_status, order_ldc_amount, order_created_at) = match order {
+    let (order_user_id, order_status, order_ldc_amount, _order_created_at) = match order {
         Some(o) => o,
         None => {
             tracing::warn!("Payment callback: order not found: {}", out_trade_no);
@@ -1422,7 +1398,10 @@ pub async fn recharge_callback(
 
     // Check order status - prevent double processing
     if order_status != "pending" {
-        tracing::debug!("Payment callback: order already processed: {}", out_trade_no);
+        tracing::debug!(
+            "Payment callback: order already processed: {}",
+            out_trade_no
+        );
         return "success".to_string();
     }
 
@@ -1431,36 +1410,62 @@ pub async fn recharge_callback(
         // CRITICAL: Verify amount matches to prevent fraud
         // If callback includes money, verify it matches the order
         if callback_money > 0.0 && (callback_money - order_ldc_amount).abs() > 0.01 {
-            tracing::warn!("Payment callback: amount mismatch for order {}: expected={}, got={}", 
-                out_trade_no, order_ldc_amount, callback_money);
+            tracing::warn!(
+                "Payment callback: amount mismatch for order {}: expected={}, got={}",
+                out_trade_no,
+                order_ldc_amount,
+                callback_money
+            );
             return "amount mismatch".to_string();
         }
 
-        // Update order status atomically with balance update
-        // Use a single transaction to prevent race conditions
+        let mut tx = match pool.begin().await {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::error!("Payment callback: failed to begin transaction: {}", err);
+                return "db error".to_string();
+            }
+        };
+
         let update_result = sqlx::query(
             "UPDATE orders SET status = 'paid', trade_no = ?, updated_at = CURRENT_TIMESTAMP WHERE out_trade_no = ? AND status = 'pending'"
         )
         .bind(&trade_no)
         .bind(&out_trade_no)
-        .execute(pool)
+        .execute(&mut *tx)
         .await;
 
         match update_result {
             Ok(res) if res.rows_affected() > 0 => {
-                // Update user balance
-                let _ = sqlx::query(
-                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?"
-                )
-                .bind(order_ldc_amount)
-                .bind(order_user_id)
-                .execute(pool)
-                .await;
-                tracing::info!("Payment successful: order={}, user={}, amount={}", 
-                    out_trade_no, order_user_id, order_ldc_amount);
+                if let Err(err) =
+                    sqlx::query("UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?")
+                        .bind(order_ldc_amount)
+                        .bind(order_user_id)
+                        .execute(&mut *tx)
+                        .await
+                {
+                    tracing::error!("Payment callback: failed to credit user balance: {}", err);
+                    return "db error".to_string();
+                }
+
+                if let Err(err) = tx.commit().await {
+                    tracing::error!("Payment callback: failed to commit transaction: {}", err);
+                    return "db error".to_string();
+                }
+
+                tracing::info!(
+                    "Payment successful: order={}, user={}, amount={}",
+                    out_trade_no,
+                    order_user_id,
+                    order_ldc_amount
+                );
             }
-            _ => {
+            Ok(_) => {
                 tracing::warn!("Payment callback: failed to update order status (possibly already processed): {}", out_trade_no);
+            }
+            Err(err) => {
+                tracing::error!("Payment callback: failed to update order status: {}", err);
+                return "db error".to_string();
             }
         }
     } else {
@@ -1538,7 +1543,8 @@ pub async fn withdraw_submit(
         actual_amount,
         &out_trade_no,
     )
-    .await {
+    .await
+    {
         Ok(true) => true,
         Ok(false) => {
             tracing::warn!("LDC distribute returned false for user {}", user_id);
@@ -1555,18 +1561,27 @@ pub async fn withdraw_submit(
     }
 
     // Only deduct after LDC API success
-    let deduct_result = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?")
-        .bind(form.amount)
-        .bind(user_id)
-        .bind(form.amount)
-        .execute(pool)
-        .await;
+    let deduct_result = sqlx::query(
+        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+    )
+    .bind(form.amount)
+    .bind(user_id)
+    .bind(form.amount)
+    .execute(pool)
+    .await;
 
     match deduct_result {
         Ok(res) if res.rows_affected() > 0 => {
             // Success - update session
             let new_balance = ldc_balance - form.amount;
-            set_session_cookie(&cookies, user_id, &username, is_admin, core_hours, new_balance);
+            set_session_cookie(
+                &cookies,
+                user_id,
+                &username,
+                is_admin,
+                core_hours,
+                new_balance,
+            );
 
             // Create withdraw order record
             let _ = sqlx::query(
@@ -1579,7 +1594,12 @@ pub async fn withdraw_submit(
             .execute(pool)
             .await;
 
-            tracing::info!("Withdraw successful: user={}, amount={}, actual={}", user_id, form.amount, actual_amount);
+            tracing::info!(
+                "Withdraw successful: user={}, amount={}, actual={}",
+                user_id,
+                form.amount,
+                actual_amount
+            );
             Ok(Redirect::to("/dashboard"))
         }
         _ => {
@@ -1594,13 +1614,11 @@ pub async fn withdraw_submit(
 
 // ---- Checkin Handler ----
 
-pub async fn checkin(
-    cookies: Cookies,
-) -> Result<impl IntoResponse, Redirect> {
+pub async fn checkin(cookies: Cookies) -> Result<impl IntoResponse, Redirect> {
     let (user_id, username, is_admin) = require_auth(&cookies)?;
 
-    let checkin_enabled = db::get_config_sync("checkin_enabled")
-        .unwrap_or_else(|| "true".to_string());
+    let checkin_enabled =
+        db::get_config_sync("checkin_enabled").unwrap_or_else(|| "true".to_string());
     if checkin_enabled != "true" {
         return Ok(Redirect::to("/dashboard"));
     }
@@ -1610,14 +1628,13 @@ pub async fn checkin(
     let today = now.date_naive();
 
     // Check if already checked in today
-    let last_checkin: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT last_checkin FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
+    let last_checkin: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT last_checkin FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
 
     if let Some(last) = last_checkin {
         if last.date_naive() == today {
@@ -1629,21 +1646,21 @@ pub async fn checkin(
         .and_then(|v| v.parse().ok())
         .unwrap_or(10.0);
 
-    let expiry_days: f64 = db::get_config("checkin_bonus_expiry_days").await
+    let expiry_days: f64 = db::get_config("checkin_bonus_expiry_days")
+        .await
         .unwrap_or_else(|| "30".to_string())
         .parse()
         .unwrap_or(30.0);
-    
+
     // Get existing bonus expiry, extend from existing or current time
-    let existing_expiry: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT bonus_expires_at FROM users WHERE id = ?"
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
-    
+    let existing_expiry: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT bonus_expires_at FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
+
     let now = chrono::Utc::now();
     let base_time = existing_expiry.filter(|e| e > &now).unwrap_or(now);
     let bonus_expires_at = base_time + chrono::Duration::days(expiry_days as i64);
@@ -1658,37 +1675,34 @@ pub async fn checkin(
     .execute(pool)
     .await;
 
-    let user_row: (f64, f64) = sqlx::query_as(
-        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .unwrap_or((reward, 0.0));
+    let user_row: (f64, f64) =
+        sqlx::query_as("SELECT core_hours, ldc_balance FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .unwrap_or((reward, 0.0));
 
     // Record checkin
-    let _ = sqlx::query(
-        "INSERT INTO checkins (user_id, reward_core_hours) VALUES (?, ?)",
-    )
-    .bind(user_id)
-    .bind(reward)
-    .execute(pool)
-    .await;
+    let _ = sqlx::query("INSERT INTO checkins (user_id, reward_core_hours) VALUES (?, ?)")
+        .bind(user_id)
+        .bind(reward)
+        .execute(pool)
+        .await;
 
-    set_session_cookie(&cookies, user_id, &username, is_admin, user_row.0, user_row.1);
+    set_session_cookie(
+        &cookies, user_id, &username, is_admin, user_row.0, user_row.1,
+    );
     Ok(Redirect::to("/dashboard"))
 }
 
 // ---- Free Plan Handler ----
 
-pub async fn free_plan(
-    cookies: Cookies,
-) -> Result<impl IntoResponse, Redirect> {
+pub async fn free_plan(cookies: Cookies) -> Result<impl IntoResponse, Redirect> {
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
-    let free_enabled = db::get_config_sync("free_plan_enabled")
-        .unwrap_or_else(|| "true".to_string());
+    let free_enabled =
+        db::get_config_sync("free_plan_enabled").unwrap_or_else(|| "true".to_string());
     if free_enabled != "true" {
         return Ok(Redirect::to("/dashboard"));
     }
@@ -1793,13 +1807,12 @@ pub async fn redeem_submit(
     let (user_id, username, is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let code: Option<RedeemCode> = sqlx::query_as(
-        "SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0",
-    )
-    .bind(&form.code)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let code: Option<RedeemCode> =
+        sqlx::query_as("SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0")
+            .bind(&form.code)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let code = match code {
         Some(c) => c,
@@ -1807,45 +1820,79 @@ pub async fn redeem_submit(
     };
 
     let now = Utc::now();
-
-    match code.code_type.as_str() {
-        "core_hours" => {
-            let reward = code.core_hours.unwrap_or(0.0);
-            let user_row: (f64, f64) = sqlx::query_as(
-                "UPDATE users SET core_hours = core_hours + ? WHERE id = ? RETURNING core_hours, ldc_balance",
-            )
-            .bind(reward)
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
-            .unwrap_or((reward, 0.0));
-
-            set_session_cookie(&cookies, user_id, &username, is_admin, user_row.0, user_row.1);
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin redeem transaction: {}", err);
+            return Ok(Redirect::to("/redeem"));
         }
-        "subscription" => {
-            let pkg_id = code.package_id;
-            // Create user package
-            let _ = sqlx::query(
-                "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, 0, 1)",
-            )
-            .bind(user_id)
-            .bind(pkg_id)
-            .execute(pool)
-            .await;
-        }
-        _ => {}
-    }
+    };
 
-    // Mark code as used
-    let _ = sqlx::query(
-        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ?",
+    let marked: Option<(i64,)> = sqlx::query_as(
+        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ? AND is_used = 0 RETURNING id",
     )
     .bind(user_id)
     .bind(now)
     .bind(code.id)
-    .execute(pool)
-    .await;
+    .fetch_optional(&mut *tx)
+    .await
+    .unwrap_or(None);
+
+    if marked.is_none() {
+        return Ok(Redirect::to("/redeem"));
+    }
+
+    let mut user_row: Option<(f64, f64)> = None;
+
+    match code.code_type.as_str() {
+        "core_hours" => {
+            let reward = code.core_hours.unwrap_or(0.0);
+            user_row = sqlx::query_as(
+                "UPDATE users SET core_hours = core_hours + ? WHERE id = ? RETURNING core_hours, ldc_balance",
+            )
+            .bind(reward)
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap_or(None);
+
+            if user_row.is_none() {
+                tracing::error!("failed to grant redeem core hours");
+                return Ok(Redirect::to("/redeem"));
+            }
+        }
+        "subscription" => {
+            let pkg_id = code.package_id;
+            if let Err(err) = sqlx::query(
+                "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, 0, 1)",
+            )
+            .bind(user_id)
+            .bind(pkg_id)
+            .execute(&mut *tx)
+            .await
+            {
+                tracing::error!("failed to grant redeem subscription: {}", err);
+                return Ok(Redirect::to("/redeem"));
+            }
+        }
+        _ => {}
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit redeem transaction: {}", err);
+        return Ok(Redirect::to("/redeem"));
+    }
+
+    if let Some((core_hours, ldc_balance)) = user_row {
+        set_session_cookie(
+            &cookies,
+            user_id,
+            &username,
+            is_admin,
+            core_hours,
+            ldc_balance,
+        );
+    }
 
     Ok(Redirect::to("/dashboard"))
 }
@@ -1890,13 +1937,12 @@ pub async fn buy_package(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
-    let pkg: Option<RechargePackage> = sqlx::query_as(
-        "SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1",
-    )
-    .bind(form.package_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let pkg: Option<RechargePackage> =
+        sqlx::query_as("SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1")
+            .bind(form.package_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let pkg = match pkg {
         Some(p) => p,
@@ -1919,7 +1965,8 @@ pub async fn buy_package(
     .await;
 
     // Create payment
-    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await {
+    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await
+    {
         Ok(url) => Ok(Redirect::to(&url)),
         Err(_) => Ok(Redirect::to("/packages")),
     }
@@ -1999,13 +2046,11 @@ pub async fn admin_config_save(
 
     let pool = db::get_db();
     for (key, value) in &form {
-        let _ = sqlx::query(
-            "INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)",
-        )
-        .bind(key)
-        .bind(value)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(pool)
+            .await;
     }
 
     Ok(Redirect::to("/admin/config"))
@@ -2127,12 +2172,11 @@ pub async fn admin_servers_toggle(
 
     let pool = db::get_db();
     // Toggle is_active
-    let server: Option<(bool,)> =
-        sqlx::query_as("SELECT is_active FROM servers WHERE id = ?")
-            .bind(path.id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let server: Option<(bool,)> = sqlx::query_as("SELECT is_active FROM servers WHERE id = ?")
+        .bind(path.id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
 
     if let Some((current,)) = server {
         let _ = sqlx::query("UPDATE servers SET is_active = ? WHERE id = ?")
@@ -2152,11 +2196,10 @@ pub async fn admin_machines(
     let (_user_id, _username) = require_admin(&cookies)?;
 
     let pool = db::get_db();
-    let machines: Vec<Machine> =
-        sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let machines: Vec<Machine> = sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -2177,7 +2220,7 @@ pub async fn admin_machines_stats(
     let (_user_id, _username) = require_admin(&cookies)?;
 
     let pool = db::get_db();
-    
+
     // Get all machines with their server info
     #[derive(Debug, sqlx::FromRow)]
     struct MachineWithServer {
@@ -2194,7 +2237,7 @@ pub async fn admin_machines_stats(
         server_name: String,
         server_ip: String,
     }
-    
+
     let machines: Vec<MachineWithServer> = sqlx::query_as(
         r#"
         SELECT 
@@ -2204,12 +2247,12 @@ pub async fn admin_machines_stats(
         FROM machines m
         JOIN servers s ON m.server_id = s.id
         ORDER BY m.created_at DESC
-        "#
+        "#,
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default();
-    
+
     // Get stats and usernames for each machine
     #[derive(Debug, Serialize, Deserialize)]
     struct MachineStatsView {
@@ -2235,7 +2278,7 @@ pub async fn admin_machines_stats(
         bandwidth_tx: f64,
         last_updated: String,
     }
-    
+
     let mut machines_with_stats = Vec::new();
     for m in &machines {
         let username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
@@ -2244,23 +2287,23 @@ pub async fn admin_machines_stats(
             .await
             .unwrap_or(None)
             .unwrap_or_else(|| "Unknown".to_string());
-        
+
         let stats: Option<(f64, f64, f64, f64, f64, f64, String)> = sqlx::query_as(
             r#"
             SELECT cpu_usage_percent, memory_used_mb, memory_total_mb, 
                    disk_used_gb, disk_total_gb, bandwidth_rx_mbps, 
                    strftime('%Y-%m-%d %H:%M', last_updated) as updated
             FROM machine_stats WHERE machine_id = ?
-            "#
+            "#,
         )
         .bind(m.id)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
-        
-        let (cpu_usage, memory_used, memory_total, disk_used, disk_total, bw_rx, last_updated) = 
+
+        let (cpu_usage, memory_used, memory_total, disk_used, disk_total, bw_rx, last_updated) =
             stats.unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, "N/A".to_string()));
-        
+
         machines_with_stats.push(MachineStatsView {
             id: m.id,
             user_id: m.user_id,
@@ -2510,26 +2553,40 @@ pub async fn admin_orders(
     Ok(Html(rendered))
 }
 
-pub async fn stats_page(
-    State(state): State<AppState>,
-    cookies: Cookies,
-) -> Html<String> {
+pub async fn stats_page(State(state): State<AppState>, cookies: Cookies) -> Html<String> {
     let pool = db::get_db();
-    
+
     let user_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
-        .fetch_one(pool).await.unwrap_or((0,));
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
     let server_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM servers")
-        .fetch_one(pool).await.unwrap_or((0,));
-    let running_machines: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM machines WHERE status = 'running'")
-        .fetch_one(pool).await.unwrap_or((0,));
-    let total_core_hours: (Option<f64>,) = sqlx::query_as("SELECT SUM(total_usage_hours) FROM users")
-        .fetch_one(pool).await.unwrap_or((Some(0.0),));
-    
-    let recent_users: Vec<User> = sqlx::query_as("SELECT * FROM users ORDER BY created_at DESC LIMIT 10")
-        .fetch_all(pool).await.unwrap_or_default();
-    let recent_servers: Vec<Server> = sqlx::query_as("SELECT * FROM servers WHERE is_active = 1 ORDER BY created_at DESC LIMIT 10")
-        .fetch_all(pool).await.unwrap_or_default();
-    
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+    let running_machines: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE status = 'running'")
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+    let total_core_hours: (Option<f64>,) =
+        sqlx::query_as("SELECT SUM(total_usage_hours) FROM users")
+            .fetch_one(pool)
+            .await
+            .unwrap_or((Some(0.0),));
+
+    let recent_users: Vec<User> =
+        sqlx::query_as("SELECT * FROM users ORDER BY created_at DESC LIMIT 10")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+    let recent_servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE is_active = 1 ORDER BY created_at DESC LIMIT 10",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("user_count", &user_count.0);
@@ -2538,8 +2595,10 @@ pub async fn stats_page(
     ctx.insert("total_core_hours", &total_core_hours.0.unwrap_or(0.0));
     ctx.insert("recent_users", &recent_users);
     ctx.insert("recent_servers", &recent_servers);
-    
-    let rendered = state.templates.render("user/stats.html", &ctx)
+
+    let rendered = state
+        .templates
+        .render("user/stats.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Html(rendered)
 }
@@ -2551,12 +2610,11 @@ pub async fn admin_traffic_alerts(
     let (_user_id, _username) = require_admin(&cookies)?;
 
     let pool = db::get_db();
-    let alerts: Vec<TrafficAlert> = sqlx::query_as(
-        "SELECT * FROM traffic_alerts ORDER BY created_at DESC LIMIT 200",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let alerts: Vec<TrafficAlert> =
+        sqlx::query_as("SELECT * FROM traffic_alerts ORDER BY created_at DESC LIMIT 200")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -2591,7 +2649,9 @@ pub async fn dispute_new_page(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("machine_id", &form.machine_id);
-    let rendered = state.templates.render("user/dispute.html", &ctx)
+    let rendered = state
+        .templates
+        .render("user/dispute.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -2605,12 +2665,13 @@ pub async fn dispute_create(
     let pool = db::get_db();
 
     // Get machine info
-    let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
-        .bind(form.machine_id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+    let machine: Option<Machine> =
+        sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
+            .bind(form.machine_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let machine = machine.ok_or_else(|| Redirect::to("/machines"))?;
 
@@ -2624,7 +2685,8 @@ pub async fn dispute_create(
         .execute(pool)
         .await;
 
-    let auto_hours: f64 = db::get_config("dispute_auto_resolve_hours").await
+    let auto_hours: f64 = db::get_config("dispute_auto_resolve_hours")
+        .await
         .unwrap_or_else(|| "72".to_string())
         .parse()
         .unwrap_or(72.0);
@@ -2658,7 +2720,9 @@ pub async fn admin_disputes(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("disputes", &disputes);
-    let rendered = state.templates.render("admin/disputes.html", &ctx)
+    let rendered = state
+        .templates
+        .render("admin/disputes.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -2787,7 +2851,9 @@ pub async fn admin_oauth_apps(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("apps", &apps);
-    let rendered = state.templates.render("admin/oauth_apps.html", &ctx)
+    let rendered = state
+        .templates
+        .render("admin/oauth_apps.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -2830,16 +2896,26 @@ pub async fn balance_to_code_page(
 
     let user = user.ok_or_else(|| Redirect::to("/login"))?;
 
-    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
-        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
-    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
-        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
-    let enabled = db::get_config("balance_to_code_enabled").await
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit")
+        .await
+        .unwrap_or_else(|| "5".to_string())
+        .parse()
+        .unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee")
+        .await
+        .unwrap_or_else(|| "0.05".to_string())
+        .parse()
+        .unwrap_or(0.05);
+    let enabled = db::get_config("balance_to_code_enabled")
+        .await
         .unwrap_or_else(|| "true".to_string());
 
-    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_start = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     let today_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?",
     )
     .bind(user_id)
     .bind(today_start)
@@ -2848,7 +2924,7 @@ pub async fn balance_to_code_page(
     .unwrap_or((0,));
 
     let logs: Vec<BalanceToCodeLog> = sqlx::query_as(
-        "SELECT * FROM balance_to_code_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
+        "SELECT * FROM balance_to_code_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -2868,7 +2944,9 @@ pub async fn balance_to_code_page(
     ctx.insert("can_convert", &can_convert);
     ctx.insert("logs", &logs);
 
-    let rendered = state.templates.render("user/balance_to_code.html", &ctx)
+    let rendered = state
+        .templates
+        .render("user/balance_to_code.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -2886,14 +2964,34 @@ pub async fn balance_to_code_submit(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
 
-    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
-        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
-    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
-        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
+    if form.amount <= 0.0 || !form.amount.is_finite() {
+        return Ok(Redirect::to("/balance-to-code"));
+    }
 
-    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let enabled = db::get_config("balance_to_code_enabled")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    if enabled != "true" {
+        return Ok(Redirect::to("/balance-to-code"));
+    }
+
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit")
+        .await
+        .unwrap_or_else(|| "5".to_string())
+        .parse()
+        .unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee")
+        .await
+        .unwrap_or_else(|| "0.05".to_string())
+        .parse()
+        .unwrap_or(0.05);
+
+    let today_start = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     let today_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?",
     )
     .bind(user_id)
     .bind(today_start)
@@ -2916,39 +3014,59 @@ pub async fn balance_to_code_submit(
     let total_deduct = form.amount + fee;
     let is_bonus = form.use_bonus.as_deref() == Some("on");
 
-    if is_bonus {
+    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin balance-to-code transaction: {}", err);
+            return Ok(Redirect::to("/balance-to-code"));
+        }
+    };
+
+    let debit_result = if is_bonus {
         if user.bonus_core_hours < total_deduct {
             return Ok(Redirect::to("/balance-to-code"));
         }
-        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
+        sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?")
             .bind(total_deduct)
             .bind(user_id)
-            .execute(pool)
-            .await;
+            .bind(total_deduct)
+            .execute(&mut *tx)
+            .await
     } else {
         if user.core_hours < total_deduct {
             return Ok(Redirect::to("/balance-to-code"));
         }
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+        sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?")
             .bind(total_deduct)
             .bind(user_id)
-            .execute(pool)
-            .await;
+            .bind(total_deduct)
+            .execute(&mut *tx)
+            .await
+    };
+
+    match debit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/balance-to-code")),
+        Err(err) => {
+            tracing::error!("failed to debit balance-to-code amount: {}", err);
+            return Ok(Redirect::to("/balance-to-code"));
+        }
     }
 
-    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
-
-    // Create redeem code
-    let _ = sqlx::query(
-        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)"
+    if let Err(err) = sqlx::query(
+        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)",
     )
     .bind(&code)
     .bind(form.amount)
-    .execute(pool)
-    .await;
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::error!("failed to create balance redeem code: {}", err);
+        return Ok(Redirect::to("/balance-to-code"));
+    }
 
-    // Log
-    let _ = sqlx::query(
+    if let Err(err) = sqlx::query(
         "INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)"
     )
     .bind(user_id)
@@ -2956,8 +3074,17 @@ pub async fn balance_to_code_submit(
     .bind(fee)
     .bind(is_bonus)
     .bind(&code)
-    .execute(pool)
-    .await;
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::error!("failed to log balance-to-code conversion: {}", err);
+        return Ok(Redirect::to("/balance-to-code"));
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit balance-to-code transaction: {}", err);
+        return Ok(Redirect::to("/balance-to-code"));
+    }
 
     Ok(Redirect::to("/balance-to-code"))
 }
@@ -2974,23 +3101,25 @@ pub async fn buy_premium(
     Path(server_id): Path<i64>,
     Form(form): Form<BuyPremiumForm>,
 ) -> Result<impl IntoResponse, Redirect> {
-    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let (user_id, username, is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
     let days = form.premium_days.max(0);
 
     // Check if premium is enabled
-    let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string());
+    let premium_enabled =
+        db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string());
     if premium_enabled != "true" || days <= 0 {
         return Ok(Redirect::to("/dashboard"));
     }
 
     // Check server ownership
-    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
-        .bind(server_id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+    let server: Option<Server> =
+        sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
+            .bind(server_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let server = match server {
         Some(s) => s,
@@ -3020,32 +3149,72 @@ pub async fn buy_premium(
         return Ok(Redirect::to("/dashboard"));
     }
 
-    // Deduct LDC
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(total_cost)
-        .bind(user_id)
-        .execute(pool)
-        .await;
-
     // Calculate new premium expiry (extend from now or existing expiry)
     let now = Utc::now();
-    let existing_expiry: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT premium_expires_at FROM servers WHERE id = ?"
-    )
-    .bind(server_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
-    let base = existing_expiry.filter(|e| e > &now).unwrap_or(now);
+    let base = server
+        .premium_expires_at
+        .filter(|e| e > &now)
+        .unwrap_or(now);
     let new_expiry = base + chrono::Duration::days(days as i64);
 
-    // Update server
-    let _ = sqlx::query("UPDATE servers SET is_premium = 1, premium_expires_at = ? WHERE id = ?")
-        .bind(new_expiry)
-        .bind(server_id)
-        .execute(pool)
-        .await;
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin premium transaction: {}", err);
+            return Ok(Redirect::to("/dashboard"));
+        }
+    };
+
+    let debit = sqlx::query(
+        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+    )
+    .bind(total_cost)
+    .bind(user_id)
+    .bind(total_cost)
+    .execute(&mut *tx)
+    .await;
+
+    match debit {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/dashboard")),
+        Err(err) => {
+            tracing::error!("failed to debit premium cost: {}", err);
+            return Ok(Redirect::to("/dashboard"));
+        }
+    }
+
+    let premium_update = sqlx::query(
+        "UPDATE servers SET is_premium = 1, premium_expires_at = ? WHERE id = ? AND owner_id = ?",
+    )
+    .bind(new_expiry)
+    .bind(server_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await;
+
+    match premium_update {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/dashboard")),
+        Err(err) => {
+            tracing::error!("failed to update premium server: {}", err);
+            return Ok(Redirect::to("/dashboard"));
+        }
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit premium transaction: {}", err);
+        return Ok(Redirect::to("/dashboard"));
+    }
+
+    let new_ldc_balance = user.ldc_balance - total_cost;
+    set_session_cookie(
+        &cookies,
+        user_id,
+        &username,
+        is_admin,
+        user.core_hours,
+        new_ldc_balance,
+    );
 
     Ok(Redirect::to("/dashboard"))
 }
@@ -3075,7 +3244,20 @@ pub async fn admin_warning_letters(
     let (admin_id, _username) = require_admin(&cookies)?;
     let pool = db::get_db();
 
-    let raw_letters: Vec<(i64, i64, String, String, String, String, String, bool, bool, bool, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+    let raw_letters: Vec<(
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        String,
+        String,
+        bool,
+        bool,
+        bool,
+        chrono::DateTime<Utc>,
+        Option<chrono::DateTime<Utc>>,
+    )> = sqlx::query_as(
         r#"
         SELECT w.id, w.user_id, u.username, w.subject, w.content, w.warning_type,
                w.severity, w.is_read, w.requires_action, w.action_taken,
@@ -3084,7 +3266,7 @@ pub async fn admin_warning_letters(
         JOIN users u ON w.user_id = u.id
         ORDER BY w.created_at DESC
         LIMIT 100
-        "#
+        "#,
     )
     .fetch_all(pool)
     .await
@@ -3092,8 +3274,8 @@ pub async fn admin_warning_letters(
 
     let letters: Vec<WarningLetterView> = raw_letters
         .into_iter()
-        .map(|(id, user_id, username, subject, content, warning_type, severity, is_read, requires_action, action_taken, created_at, expires_at)| {
-            WarningLetterView {
+        .map(
+            |(
                 id,
                 user_id,
                 username,
@@ -3104,26 +3286,42 @@ pub async fn admin_warning_letters(
                 is_read,
                 requires_action,
                 action_taken,
-                action_note: None,
-                created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
-                expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
-            }
-        })
+                created_at,
+                expires_at,
+            )| {
+                WarningLetterView {
+                    id,
+                    user_id,
+                    username,
+                    subject,
+                    content,
+                    warning_type,
+                    severity,
+                    is_read,
+                    requires_action,
+                    action_taken,
+                    action_note: None,
+                    created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
+                    expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+                }
+            },
+        )
         .collect();
 
-    let users: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, username FROM users WHERE is_banned = 0 ORDER BY id"
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let users: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, username FROM users WHERE is_banned = 0 ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("letters", &letters);
     ctx.insert("users", &users);
 
-    let rendered = state.templates.render("admin/warning_letters.html", &ctx)
+    let rendered = state
+        .templates
+        .render("admin/warning_letters.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -3137,7 +3335,8 @@ pub async fn admin_warning_letters_send(
 
     let requires_action = form.requires_action.as_deref() == Some("on");
 
-    let expires_at = form.expiry_days
+    let expires_at = form
+        .expiry_days
         .filter(|&d| d > 0)
         .map(|d| Utc::now() + chrono::Duration::days(d as i64));
 
@@ -3180,14 +3379,26 @@ pub async fn user_warning_letters(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
 
-    let raw_letters: Vec<(i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+    let raw_letters: Vec<(
+        i64,
+        String,
+        String,
+        String,
+        String,
+        bool,
+        bool,
+        bool,
+        Option<String>,
+        chrono::DateTime<Utc>,
+        Option<chrono::DateTime<Utc>>,
+    )> = sqlx::query_as(
         r#"
         SELECT id, subject, content, warning_type, severity, is_read, requires_action,
                action_taken, action_note, created_at, expires_at
         FROM warning_letters
         WHERE user_id = ?
         ORDER BY created_at DESC
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -3196,11 +3407,9 @@ pub async fn user_warning_letters(
 
     let letters: Vec<WarningLetterView> = raw_letters
         .into_iter()
-        .map(|(id, subject, content, warning_type, severity, is_read, requires_action, action_taken, action_note, created_at, expires_at)| {
-            WarningLetterView {
+        .map(
+            |(
                 id,
-                user_id,
-                username: String::new(),
                 subject,
                 content,
                 warning_type,
@@ -3209,26 +3418,43 @@ pub async fn user_warning_letters(
                 requires_action,
                 action_taken,
                 action_note,
-                created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
-                expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
-            }
-        })
+                created_at,
+                expires_at,
+            )| {
+                WarningLetterView {
+                    id,
+                    user_id,
+                    username: String::new(),
+                    subject,
+                    content,
+                    warning_type,
+                    severity,
+                    is_read,
+                    requires_action,
+                    action_taken,
+                    action_note,
+                    created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
+                    expires_at: expires_at.map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+                }
+            },
+        )
         .collect();
 
-    let unread_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0"
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or((0,));
+    let unread_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("letters", &letters);
     ctx.insert("unread_count", &unread_count.0);
 
-    let rendered = state.templates.render("warning_letters.html", &ctx)
+    let rendered = state
+        .templates
+        .render("warning_letters.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }
@@ -3241,13 +3467,25 @@ pub async fn user_warning_letter_detail(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
 
-    let letter: Option<(i64, String, String, String, String, bool, bool, bool, Option<String>, chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+    let letter: Option<(
+        i64,
+        String,
+        String,
+        String,
+        String,
+        bool,
+        bool,
+        bool,
+        Option<String>,
+        chrono::DateTime<Utc>,
+        Option<chrono::DateTime<Utc>>,
+    )> = sqlx::query_as(
         r#"
         SELECT id, subject, content, warning_type, severity, is_read, requires_action,
                action_taken, action_note, created_at, expires_at
         FROM warning_letters
         WHERE id = ? AND user_id = ?
-        "#
+        "#,
     )
     .bind(id)
     .bind(user_id)
@@ -3285,7 +3523,9 @@ pub async fn user_warning_letter_detail(
     build_base_context(&cookies, &mut ctx);
     ctx.insert("letter", &letter_view);
 
-    let rendered = state.templates.render("warning_letter_detail.html", &ctx)
+    let rendered = state
+        .templates
+        .render("warning_letter_detail.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Ok(Html(rendered))
 }

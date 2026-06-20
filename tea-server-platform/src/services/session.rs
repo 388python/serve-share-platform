@@ -1,9 +1,10 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::sync::OnceLock;
+use tower_cookies::cookie::time::Duration;
 use tower_cookies::Cookie;
 use tower_cookies::Cookies;
-use tower_cookies::cookie::time::Duration;
 
 use crate::db;
 
@@ -29,9 +30,7 @@ fn get_secret() -> Vec<u8> {
     // in-memory key (which means sessions will reset on restart —
     // acceptable for unconfigured deployments).
     if let Some(db_secret) = db::get_config_sync("session_secret") {
-        if !db_secret.is_empty()
-            && db_secret != "change-me-in-production-super-secret-key"
-        {
+        if !db_secret.is_empty() && db_secret != "change-me-in-production-super-secret-key" {
             return db_secret.into_bytes();
         }
     }
@@ -118,10 +117,7 @@ pub fn decode_session(value: &str) -> Option<UserSession> {
     }
 
     // Verify session age (replay protection)
-    let ts: u64 = map
-        .get("ts")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let ts: u64 = map.get("ts").and_then(|v| v.parse().ok()).unwrap_or(0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -196,13 +192,11 @@ pub fn get_session_checked(cookies: &Cookies) -> Option<UserSession> {
     // sync callers (e.g., handlers mod.rs) this is fine.
     let row: Option<(i64, i64)> = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            sqlx::query_as::<_, (i64, i64)>(
-                "SELECT is_banned, is_admin FROM users WHERE id = ?",
-            )
-            .bind(session.user_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
+            sqlx::query_as::<_, (i64, i64)>("SELECT is_banned, is_admin FROM users WHERE id = ?")
+                .bind(session.user_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None)
         })
     });
 
@@ -214,10 +208,7 @@ pub fn get_session_checked(cookies: &Cookies) -> Option<UserSession> {
     let db_is_admin = admin_int != 0;
 
     if banned {
-        tracing::warn!(
-            "Session rejected for banned user_id={}",
-            session.user_id
-        );
+        tracing::warn!("Session rejected for banned user_id={}", session.user_id);
         return None;
     }
 
@@ -236,24 +227,45 @@ pub fn get_session_checked(cookies: &Cookies) -> Option<UserSession> {
     })
 }
 
-/// 获取 Agent API Key（由站点配置驱动；未配置则退化为随机字符串，
-/// 以避免使用公开已知的硬编码密钥）。
+static GENERATED_AGENT_API_KEY: OnceLock<String> = OnceLock::new();
+
+fn is_valid_agent_api_key(key: &str) -> bool {
+    !key.is_empty() && key != "tea-platform-agent-key"
+}
+
+fn generate_hex_key() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    const CHARS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(64);
+    for b in bytes.iter() {
+        out.push(CHARS[(b & 0xf) as usize] as char);
+        out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
+    }
+    out
+}
+
+/// 获取 Agent API Key。管理员配置优先生效；未配置时生成一次并写回配置表。
 pub fn agent_api_key() -> String {
-    db::get_config_sync("agent_api_key")
-        .filter(|k| !k.is_empty() && k != "tea-platform-agent-key")
-        .unwrap_or_else(|| {
-            tracing::warn!(
-                "Agent API key not configured — using in-memory random key"
-            );
-            use rand::RngCore;
-            let mut bytes = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            const CHARS: &[u8; 16] = b"0123456789abcdef";
-            let mut out = String::with_capacity(64);
-            for b in bytes.iter() {
-                out.push(CHARS[(b & 0xf) as usize] as char);
-                out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
+    if let Some(configured) = db::get_config_sync("agent_api_key") {
+        if is_valid_agent_api_key(&configured) {
+            return configured;
+        }
+    }
+
+    GENERATED_AGENT_API_KEY
+        .get_or_init(|| {
+            let generated = generate_hex_key();
+            if let Err(err) = db::set_config_sync("agent_api_key", &generated) {
+                tracing::warn!("failed to persist generated Agent API key: {}", err);
+            } else {
+                tracing::warn!(
+                    "Agent API key was not configured; generated and persisted a new key"
+                );
             }
-            out
+            generated
         })
+        .clone()
 }

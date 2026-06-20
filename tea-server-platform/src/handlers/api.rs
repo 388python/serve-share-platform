@@ -95,9 +95,7 @@ async fn authenticate_user(headers: &HeaderMap) -> Result<i64, (StatusCode, Json
 async fn authenticate_admin(headers: &HeaderMap) -> Result<i64, (StatusCode, Json<ApiError>)> {
     // First try the dedicated admin API key
     if let Some(token) = extract_bearer_token(headers) {
-        let admin_key = db::get_config("admin_api_key")
-            .await
-            .unwrap_or_default();
+        let admin_key = db::get_config("admin_api_key").await.unwrap_or_default();
         if !admin_key.is_empty() && token == admin_key {
             return Ok(-1);
         }
@@ -124,37 +122,13 @@ async fn authenticate_admin(headers: &HeaderMap) -> Result<i64, (StatusCode, Jso
     Ok(user_id)
 }
 
-// ---- Agent API key helpers ----
-
-/// Get the configured agent API key. This is the key used both for verifying
-/// requests FROM agents, and for sending requests TO agents.
-fn get_agent_api_key() -> String {
-    db::get_config_sync("agent_api_key")
-        .filter(|k| !k.is_empty() && k != "tea-platform-agent-key")
-        .unwrap_or_else(|| {
-            tracing::warn!("Agent API key not configured — using in-memory random key");
-            // Generate a random key for this session so that we don't accidentally
-            // accept a well-known default key.
-            use rand::RngCore;
-            let mut bytes = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            const CHARS: &[u8; 16] = b"0123456789abcdef";
-            let mut out = String::with_capacity(64);
-            for b in bytes.iter() {
-                out.push(CHARS[(b & 0xf) as usize] as char);
-                out.push(CHARS[((b >> 4) & 0xf) as usize] as char);
-            }
-            out
-        })
-}
-
 /// Verify that an agent request carries the correct X-API-Key header.
 fn verify_agent_api_key(headers: &HeaderMap) -> bool {
     let header_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    header_key == get_agent_api_key()
+    header_key == services::session::agent_api_key()
 }
 
 // ---- Generic response types ----
@@ -172,7 +146,10 @@ pub struct ApiSuccess<T> {
 }
 
 fn ok_response<T: Serialize>(data: T) -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({ "success": true, "data": data })))
+    (
+        StatusCode::OK,
+        Json(json!({ "success": true, "data": data })),
+    )
 }
 
 // ==============================
@@ -188,11 +165,14 @@ async fn api_health() -> impl IntoResponse {
         .get()
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
-    (StatusCode::OK, Json(json!({
-        "platform": platform,
-        "version": "0.1.0",
-        "started_at": started_at,
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "platform": platform,
+            "version": "0.1.0",
+            "started_at": started_at,
+        })),
+    )
         .into_response()
 }
 
@@ -243,40 +223,74 @@ async fn api_servers_contribute(
     let ssh_key = form.ssh_key.trim();
 
     if name.is_empty() || ip.is_empty() || ssh_key.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "empty_fields", "message": "Name, IP, and SSH key are required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "empty_fields", "message": "Name, IP, and SSH key are required" }),
+            ),
+        )
+            .into_response();
     }
 
     if name.len() > 100 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name_too_long" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "name_too_long" })),
+        )
+            .into_response();
     }
 
     if !is_valid_ip(ip) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_ip", "message": "Invalid IP address format" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_ip", "message": "Invalid IP address format" })),
+        )
+            .into_response();
     }
 
     let ssh_port = form.ssh_port.unwrap_or(22);
     if ssh_port < 1 || ssh_port > 65535 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_ssh_port" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_ssh_port" })),
+        )
+            .into_response();
     }
 
     let cpu_cores = form.cpu_cores;
     if cpu_cores < 1 || cpu_cores > 256 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_cpu" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_cpu" })),
+        )
+            .into_response();
     }
 
     let memory_gb = form.memory_gb;
     if memory_gb < 0.1 || memory_gb > 1000.0 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_memory" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_memory" })),
+        )
+            .into_response();
     }
 
     let disk_gb = form.disk_gb;
     if disk_gb < 1.0 || disk_gb > 100000.0 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_disk" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_disk" })),
+        )
+            .into_response();
     }
 
     let expires_days = form.expires_days.unwrap_or(30);
     if expires_days < 1 || expires_days > 3650 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_expires" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_expires" })),
+        )
+            .into_response();
     }
 
     let pool = db::get_db();
@@ -383,10 +397,7 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
             if session.handshake().is_err() {
                 return;
             }
-            if session
-                .userauth_pubkey_memory("root", None, &ssh_key, None)
-                .is_err()
-            {
+            if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
                 return;
             }
             if let Ok(mut channel) = session.channel_session() {
@@ -397,11 +408,9 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
                     let _ = channel.wait_close();
                     if channel.exit_status().unwrap_or(1) == 0 {
                         let pool = db::get_db();
-                        let _ = sqlx::query(
-                            "UPDATE servers SET agent_installed = 1 WHERE id = ?",
-                        )
-                        .bind(server_id)
-                        .execute(pool);
+                        let _ = sqlx::query("UPDATE servers SET agent_installed = 1 WHERE id = ?")
+                            .bind(server_id)
+                            .execute(pool);
                     }
                 }
             }
@@ -442,10 +451,16 @@ async fn api_machines_create(
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
-    
+
     let user = match user {
         Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "user_not_found" }))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "user_not_found" })),
+            )
+                .into_response()
+        }
     };
     let core_hours = user.core_hours;
     let bonus_core_hours = user.bonus_core_hours;
@@ -483,7 +498,11 @@ async fn api_machines_create(
 
     // Check max machine hours limit
     if server.max_machine_hours > 0.0 && hours as f64 > server.max_machine_hours {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "exceeds_max_hours" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "exceeds_max_hours" })),
+        )
+            .into_response();
     }
 
     let mut expires_at = now + chrono::Duration::hours(hours);
@@ -504,7 +523,7 @@ async fn api_machines_create(
     // NAT port allocation: each running machine uses 1 NAT port
     let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
         let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status = 'running'"
+            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
         )
         .bind(server.id)
         .fetch_one(pool)
@@ -553,39 +572,88 @@ async fn api_machines_create(
     };
     let regular_used = total_cost - bonus_used;
 
-    let new_core_hours = core_hours - regular_used;
-    sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = ? WHERE id = ?")
-        .bind(bonus_used)
-        .bind(new_core_hours)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .unwrap();
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin machine create transaction: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to start transaction" })),
+            )
+                .into_response();
+        }
+    };
+
+    let debit_result = sqlx::query(
+        "UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ? AND bonus_core_hours >= ? AND core_hours >= ?",
+    )
+    .bind(bonus_used)
+    .bind(regular_used)
+    .bind(user_id)
+    .bind(bonus_used)
+    .bind(regular_used)
+    .execute(&mut *tx)
+    .await;
+
+    match debit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({ "error": "insufficient_balance", "message": "Balance changed, please try again" })),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            tracing::error!("failed to debit machine create cost: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to debit balance" })),
+            )
+                .into_response();
+        }
+    };
 
     // Credit server owner (merchant)
     if bonus_used > 0.0 {
-        let _ = sqlx::query(
+        if let Err(err) = sqlx::query(
             "UPDATE users SET bonus_core_hours = bonus_core_hours + ?, bonus_expires_at = COALESCE(bonus_expires_at, ?) WHERE id = ?"
         )
         .bind(bonus_used)
         .bind(user.bonus_expires_at)
         .bind(server.owner_id)
-        .execute(pool)
-        .await;
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!("failed to credit merchant bonus balance: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to credit merchant" })),
+            )
+                .into_response();
+        }
     }
     if regular_used > 0.0 {
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+        if let Err(err) = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
             .bind(regular_used)
             .bind(server.owner_id)
-            .execute(pool)
-            .await;
+            .execute(&mut *tx)
+            .await
+        {
+            tracing::error!("failed to credit merchant balance: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to credit merchant" })),
+            )
+                .into_response();
+        }
     }
 
     let proxy_port = server.proxy_port;
     let used_hours = hours as f64;
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -597,19 +665,31 @@ async fn api_machines_create(
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
-    .execute(pool)
-    .await
-    .unwrap();
+    .execute(&mut *tx)
+    .await;
+
+    let result = match result {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::error!("failed to insert pending machine: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "insert_failed", "message": "Failed to create machine record" })),
+            )
+                .into_response();
+        }
+    };
 
     let machine_id = result.last_insert_rowid();
 
-    let _ = sqlx::query(
-        "UPDATE users SET total_usage_hours = total_usage_hours + ? WHERE id = ?",
-    )
-    .bind(hours as f64)
-    .bind(user_id)
-    .execute(pool)
-    .await;
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit machine create transaction: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db_error", "message": "Failed to commit machine creation" })),
+        )
+            .into_response();
+    }
 
     // Trigger agent to create VM
     let server_ip = server.ip.clone();
@@ -619,24 +699,24 @@ async fn api_machines_create(
     let memory = form.memory_gb;
     let disk = form.disk_gb;
 
-    let agent_key = get_agent_api_key();
-    tokio::spawn(async move {
-        let agent_url = format!("http://{}:19527", server_ip);
-        let client = reqwest::Client::new();
-        let _ = client
-            .post(&format!("{}/create", agent_url))
-            .header("X-API-Key", agent_key)
-            .json(&json!({
-                "name": machine_name,
-                "cpu": cpu,
-                "memory": (memory * 1024.0) as i64,
-                "disk": disk,
-                "virt_type": virt_type,
-            }))
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await;
-    });
+    let agent_key = services::session::agent_api_key();
+    services::machine_lifecycle::spawn_agent_create_job(
+        services::machine_lifecycle::MachineProvisioningJob {
+            machine_id,
+            user_id,
+            owner_id: server.owner_id,
+            server_ip,
+            machine_name,
+            virt_type,
+            cpu,
+            memory_gb: memory,
+            disk_gb: disk,
+            agent_key,
+            regular_used,
+            bonus_used,
+            used_hours,
+        },
+    );
 
     let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ?")
         .bind(machine_id)
@@ -657,26 +737,22 @@ pub struct RedeemRequest {
 }
 
 // POST /api/v1/redeem
-async fn api_redeem(
-    headers: HeaderMap,
-    Json(form): Json<RedeemRequest>,
-) -> impl IntoResponse {
+async fn api_redeem(headers: HeaderMap, Json(form): Json<RedeemRequest>) -> impl IntoResponse {
     let user_id = match authenticate_user(&headers).await {
         Ok(id) => id,
         Err(err) => return err.into_response(),
     };
 
     let pool = db::get_db();
-    
+
     // Use atomic UPDATE with WHERE to prevent race conditions
     // This ensures only one request can redeem a code even with concurrent requests
-    let code: Option<RedeemCode> = sqlx::query_as(
-        "SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0",
-    )
-    .bind(&form.code)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let code: Option<RedeemCode> =
+        sqlx::query_as("SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0")
+            .bind(&form.code)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let code = match code {
         Some(c) => c,
@@ -690,54 +766,97 @@ async fn api_redeem(
     };
 
     let now = chrono::Utc::now();
-    
-    // Atomic mark as used with user_id - returns affected rows
-    let marked: (i64,) = sqlx::query_as(
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin redeem transaction: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to start transaction" })),
+            )
+                .into_response();
+        }
+    };
+
+    let marked: Option<(i64,)> = match sqlx::query_as(
         "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ? AND is_used = 0 RETURNING id"
     )
     .bind(user_id)
     .bind(now)
     .bind(code.id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(None)
-    .unwrap_or((0,));
-    
-    // If no rows affected, code was already redeemed
-    if marked.0 == 0 {
+    {
+        Ok(marked) => marked,
+        Err(err) => {
+            tracing::error!("failed to mark redeem code as used: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to redeem code" })),
+            )
+                .into_response();
+        }
+    };
+
+    if marked.is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "already_redeemed", "message": "Code was already redeemed" })),
         )
             .into_response();
     }
-    
+
     let mut reward_info = json!({});
 
     match code.code_type.as_str() {
         "core_hours" => {
             let reward = code.core_hours.unwrap_or(0.0);
-            let _ = sqlx::query(
-                "UPDATE users SET core_hours = core_hours + ? WHERE id = ?",
-            )
-            .bind(reward)
-            .bind(user_id)
-            .execute(pool)
-            .await;
+            if let Err(err) =
+                sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                    .bind(reward)
+                    .bind(user_id)
+                    .execute(&mut *tx)
+                    .await
+            {
+                tracing::error!("failed to grant redeem core hours: {}", err);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "db_error", "message": "Failed to grant reward" })),
+                )
+                    .into_response();
+            }
             reward_info = json!({ "type": "core_hours", "core_hours": reward });
         }
         "subscription" => {
             let pkg_id = code.package_id;
-            let _ = sqlx::query(
+            if let Err(err) = sqlx::query(
                 "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, 0, 1)",
             )
             .bind(user_id)
             .bind(pkg_id)
-            .execute(pool)
-            .await;
+            .execute(&mut *tx)
+            .await
+            {
+                tracing::error!("failed to grant redeem subscription: {}", err);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "db_error", "message": "Failed to grant reward" })),
+                )
+                    .into_response();
+            }
             reward_info = json!({ "type": "subscription", "package_id": pkg_id });
         }
         _ => {}
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit redeem transaction: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "db_error", "message": "Failed to commit redemption" })),
+        )
+            .into_response();
     }
 
     ok_response(json!({
@@ -767,23 +886,22 @@ async fn api_packages_buy(
     };
 
     let pool = db::get_db();
-    let pkg: Option<RechargePackage> = sqlx::query_as(
-        "SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1",
-    )
-    .bind(form.package_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let pkg: Option<RechargePackage> =
+        sqlx::query_as("SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1")
+            .bind(form.package_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let pkg = match pkg {
         Some(p) => p,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "package_not_found", "message": "Package not found or inactive" })),
-            )
-                .into_response()
-        }
+        None => return (
+            StatusCode::NOT_FOUND,
+            Json(
+                json!({ "error": "package_not_found", "message": "Package not found or inactive" }),
+            ),
+        )
+            .into_response(),
     };
 
     let cfg = crate::config::AppConfig::get();
@@ -800,8 +918,11 @@ async fn api_packages_buy(
     .execute(pool)
     .await;
 
-    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await {
-        Ok(url) => ok_response(json!({ "payment_url": url, "order_id": out_trade_no })).into_response(),
+    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await
+    {
+        Ok(url) => {
+            ok_response(json!({ "payment_url": url, "order_id": out_trade_no })).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "payment_failed", "message": format!("{}", e) })),
@@ -868,13 +989,12 @@ async fn api_my_servers(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let servers: Vec<Server> =
+        sqlx::query_as("SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     ok_response(servers).into_response()
 }
@@ -887,13 +1007,12 @@ async fn api_my_machines(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let machines: Vec<Machine> = sqlx::query_as(
-        "SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let machines: Vec<Machine> =
+        sqlx::query_as("SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     ok_response(machines).into_response()
 }
@@ -921,13 +1040,12 @@ async fn api_my_orders(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let orders: Vec<Order> = sqlx::query_as(
-        "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let orders: Vec<Order> =
+        sqlx::query_as("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     ok_response(orders).into_response()
 }
@@ -1083,11 +1201,10 @@ async fn api_admin_servers(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let servers: Vec<Server> =
-        sqlx::query_as("SELECT * FROM servers ORDER BY created_at DESC")
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let servers: Vec<Server> = sqlx::query_as("SELECT * FROM servers ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     ok_response(servers).into_response()
 }
@@ -1132,11 +1249,10 @@ async fn api_admin_machines(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let machines: Vec<Machine> =
-        sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let machines: Vec<Machine> = sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     ok_response(machines).into_response()
 }
@@ -1236,50 +1352,177 @@ async fn api_balance_to_code(
     };
 
     let pool = db::get_db();
-    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
-        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
-    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
-        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
+    if req.amount <= 0.0 || !req.amount.is_finite() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_amount"})),
+        )
+            .into_response();
+    }
 
-    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let enabled = db::get_config("balance_to_code_enabled")
+        .await
+        .unwrap_or_else(|| "true".to_string());
+    if enabled != "true" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"disabled","message":"余额转码功能未开放"})),
+        )
+            .into_response();
+    }
+
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit")
+        .await
+        .unwrap_or_else(|| "5".to_string())
+        .parse()
+        .unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee")
+        .await
+        .unwrap_or_else(|| "0.05".to_string())
+        .parse()
+        .unwrap_or(0.05);
+
+    let today_start = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
     let today_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
-    ).bind(user_id).bind(today_start).fetch_one(pool).await.unwrap_or((0,));
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?",
+    )
+    .bind(user_id)
+    .bind(today_start)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0,));
 
     if today_count.0 >= daily_limit {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"daily_limit","message":"每日兑换次数已达上限"}))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error":"daily_limit","message":"每日兑换次数已达上限"})),
+        )
+            .into_response();
     }
 
     let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
     let user = match user {
         Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"user_not_found"})),
+            )
+                .into_response()
+        }
     };
 
     let fee = req.amount * fee_pct;
     let total_deduct = req.amount + fee;
     let is_bonus = req.use_bonus.unwrap_or(false);
 
-    if is_bonus {
-        if user.bonus_core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_bonus"}))).into_response();
+    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin balance-to-code transaction: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db_error"})),
+            )
+                .into_response();
         }
-        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
-            .bind(total_deduct).bind(user_id).execute(pool).await;
+    };
+
+    let debit_result = if is_bonus {
+        if user.bonus_core_hours < total_deduct {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"insufficient_bonus"})),
+            )
+                .into_response();
+        }
+        sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?")
+            .bind(total_deduct)
+            .bind(user_id)
+            .bind(total_deduct)
+            .execute(&mut *tx)
+            .await
     } else {
         if user.core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_balance"}))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"insufficient_balance"})),
+            )
+                .into_response();
         }
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
-            .bind(total_deduct).bind(user_id).execute(pool).await;
+        sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?")
+            .bind(total_deduct)
+            .bind(user_id)
+            .bind(total_deduct)
+            .execute(&mut *tx)
+            .await
+    };
+
+    match debit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"insufficient_balance"})),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            tracing::error!("failed to debit balance-to-code amount: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db_error"})),
+            )
+                .into_response();
+        }
     }
 
-    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
-    let _ = sqlx::query("INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)")
-        .bind(&code).bind(req.amount).execute(pool).await;
-    let _ = sqlx::query("INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)")
-        .bind(user_id).bind(req.amount).bind(fee).bind(is_bonus).bind(&code).execute(pool).await;
+    if let Err(err) = sqlx::query(
+        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)",
+    )
+    .bind(&code)
+    .bind(req.amount)
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::error!("failed to create balance redeem code: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"code_create_failed"})),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = sqlx::query("INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)")
+        .bind(user_id)
+        .bind(req.amount)
+        .bind(fee)
+        .bind(is_bonus)
+        .bind(&code)
+        .execute(&mut *tx)
+        .await
+    {
+        tracing::error!("failed to log balance-to-code conversion: {}", err);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"log_failed"}))).into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit balance-to-code transaction: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"db_error"})),
+        )
+            .into_response();
+    }
 
     ok_response(json!({"code": code, "amount": req.amount, "fee": fee})).into_response()
 }
@@ -1309,17 +1552,28 @@ async fn api_agent_stats(
 ) -> impl IntoResponse {
     // Verify agent API key
     if !verify_agent_api_key(&headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     // Extract machine_id from machine_name (format: machine-{id})
-    let machine_id = stats.machine_name
+    let machine_id = stats
+        .machine_name
         .strip_prefix("machine-")
         .and_then(|s| s.parse::<i64>().ok());
 
     let machine_id = match machine_id {
         Some(id) => id,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_machine_name"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_machine_name"})),
+            )
+                .into_response()
+        }
     };
 
     let pool = db::get_db();
@@ -1344,7 +1598,7 @@ async fn api_agent_stats(
             uptime_seconds = excluded.uptime_seconds,
             process_count = excluded.process_count,
             last_updated = excluded.last_updated
-        "#
+        "#,
     )
     .bind(machine_id)
     .bind(stats.cpu_usage_percent.unwrap_or(0.0))
@@ -1371,9 +1625,21 @@ async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    
+
     // Get all machines with their stats
-    let machines: Vec<(i64, i64, String, String, String, i32, f64, f64, i64, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let machines: Vec<(
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        i32,
+        f64,
+        f64,
+        i64,
+        String,
+        chrono::DateTime<chrono::Utc>,
+    )> = sqlx::query_as(
         r#"
         SELECT 
             m.id, m.user_id, m.server_id, s.name as server_name, s.ip as server_ip,
@@ -1381,31 +1647,42 @@ async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
         FROM machines m
         JOIN servers s ON m.server_id = s.id
         ORDER BY m.created_at DESC
-        "#
+        "#,
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     let mut result = Vec::new();
-    for (id, user_id, server_id, server_name, server_ip, cpu_cores, memory_gb, disk_gb, status, virt_type, expires_at) in machines {
+    for (
+        id,
+        user_id,
+        server_id,
+        server_name,
+        server_ip,
+        cpu_cores,
+        memory_gb,
+        disk_gb,
+        status,
+        virt_type,
+        expires_at,
+    ) in machines
+    {
         // Get stats for this machine
-        let stats: Option<MachineStats> = sqlx::query_as(
-            "SELECT * FROM machine_stats WHERE machine_id = ?"
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        let stats: Option<MachineStats> =
+            sqlx::query_as("SELECT * FROM machine_stats WHERE machine_id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
 
         // Get user info
-        let username: Option<String> = sqlx::query_scalar(
-            "SELECT username FROM users WHERE id = ?"
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        let username: Option<String> =
+            sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
 
         result.push(json!({
             "id": id,
@@ -1432,10 +1709,7 @@ async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
 // ==============================
 
 // POST /api/v1/servers/:id/buy-premium
-async fn api_buy_premium(
-    headers: HeaderMap,
-    Path(server_id): Path<i64>,
-) -> impl IntoResponse {
+async fn api_buy_premium(headers: HeaderMap, Path(server_id): Path<i64>) -> impl IntoResponse {
     let user_id = match authenticate_user(&headers).await {
         Ok(id) => id,
         Err(err) => return err.into_response(),
@@ -1443,43 +1717,157 @@ async fn api_buy_premium(
 
     let pool = db::get_db();
 
-    let premium_enabled = db::get_config("premium_enabled").await.unwrap_or_else(|| "false".to_string());
+    let premium_enabled = db::get_config("premium_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string());
     if premium_enabled != "true" {
-        return (StatusCode::FORBIDDEN, Json(json!({"error":"premium_disabled","message":"优选功能未开放"}))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"premium_disabled","message":"优选功能未开放"})),
+        )
+            .into_response();
     }
 
-    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
-        .bind(server_id).bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+    let server: Option<Server> =
+        sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
+            .bind(server_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
 
     let server = match server {
         Some(s) => s,
-        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"server_not_found"}))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"server_not_found"})),
+            )
+                .into_response()
+        }
     };
 
     if server.is_premium {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error":"already_premium"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"already_premium"})),
+        )
+            .into_response();
     }
 
-    let cost: f64 = db::get_config("premium_ldc_cost").await
-        .unwrap_or_else(|| "100".to_string()).parse().unwrap_or(100.0);
+    let cost: f64 = db::get_config("premium_ldc_cost")
+        .await
+        .unwrap_or_else(|| "100".to_string())
+        .parse()
+        .unwrap_or(100.0);
 
     let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
     let user = match user {
         Some(u) => u,
-        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"user_not_found"})),
+            )
+                .into_response()
+        }
     };
 
     if user.ldc_balance < cost {
-        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"}))).into_response();
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"})),
+        )
+            .into_response();
     }
 
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(cost).bind(user_id).execute(pool).await;
-    let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
-        .bind(server_id).execute(pool).await;
+    let premium_expires_at = chrono::Utc::now() + chrono::Duration::days(1);
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin premium transaction: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db_error"})),
+            )
+                .into_response();
+        }
+    };
 
-    ok_response(json!({"server_id": server_id, "is_premium": true, "cost_ldc": cost})).into_response()
+    let debit = sqlx::query(
+        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+    )
+    .bind(cost)
+    .bind(user_id)
+    .bind(cost)
+    .execute(&mut *tx)
+    .await;
+
+    match debit {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"})),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            tracing::error!("failed to debit premium cost: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db_error"})),
+            )
+                .into_response();
+        }
+    }
+
+    let premium_update = sqlx::query("UPDATE servers SET is_premium = 1, premium_expires_at = ? WHERE id = ? AND owner_id = ? AND is_premium = 0")
+        .bind(premium_expires_at)
+        .bind(server_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await;
+
+    match premium_update {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"already_premium"})),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            tracing::error!("failed to update premium server: {}", err);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error":"db_error"})),
+            )
+                .into_response();
+        }
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit premium transaction: {}", err);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"db_error"})),
+        )
+            .into_response();
+    }
+
+    ok_response(json!({
+        "server_id": server_id,
+        "is_premium": true,
+        "cost_ldc": cost,
+        "premium_expires_at": premium_expires_at
+    }))
+    .into_response()
 }
 
 // ==============================
@@ -1543,7 +1931,7 @@ async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
 
     // Get servers with OpenGFW enabled
     let servers_with_opengfw: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
+        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1",
     )
     .fetch_all(pool)
     .await
@@ -1561,7 +1949,8 @@ async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
         "block_xray": block_xray == "true",
         "block_clash": block_clash == "true",
         "servers_with_opengfw": servers_with_opengfw
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // PUT /api/v1/admin/opengfw/config - Update OpenGFW configuration
@@ -1575,44 +1964,38 @@ async fn api_admin_opengfw_config_save(
     };
 
     if let Some(enabled) = form.enabled {
-        let _ = db::set_config("opengfw_enabled", if enabled { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_enabled", if enabled { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_vpn {
-        let _ = db::set_config("opengfw_block_vpn", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_vpn", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_shadowsocks {
-        let _ = db::set_config("opengfw_block_shadowsocks", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config(
+            "opengfw_block_shadowsocks",
+            if v { "true" } else { "false" },
+        )
+        .await;
     }
     if let Some(v) = form.block_wireguard {
-        let _ = db::set_config("opengfw_block_wireguard", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_wireguard", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_openvpn {
-        let _ = db::set_config("opengfw_block_openvpn", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_openvpn", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_trojan {
-        let _ = db::set_config("opengfw_block_trojan", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_trojan", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_vmess {
-        let _ = db::set_config("opengfw_block_vmess", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_vmess", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_vless {
-        let _ = db::set_config("opengfw_block_vless", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_vless", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_xray {
-        let _ = db::set_config("opengfw_block_xray", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_xray", if v { "true" } else { "false" }).await;
     }
     if let Some(v) = form.block_clash {
-        let _ = db::set_config("opengfw_block_clash", if v { "true" } else { "false" })
-            .await;
+        let _ = db::set_config("opengfw_block_clash", if v { "true" } else { "false" }).await;
     }
 
     ok_response(json!({"status": "ok", "message": "OpenGFW 配置已更新"})).into_response()
@@ -1640,7 +2023,8 @@ async fn api_admin_opengfw_stats(headers: HeaderMap) -> impl IntoResponse {
     ok_response(json!({
         "total_blocked": total,
         "by_protocol": by_protocol
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // POST /api/v1/admin/opengfw/refresh-rules - Refresh rules on all servers
@@ -1653,15 +2037,14 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
     let pool = db::get_db();
 
     // Get all servers with OpenGFW enabled
-    let servers: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let servers: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     let mut results = Vec::new();
-    let agent_key = get_agent_api_key();
+    let agent_key = services::session::agent_api_key();
 
     for (server_id, server_ip) in servers {
         // Notify agent to refresh OpenGFW rules
@@ -1697,7 +2080,8 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
     ok_response(json!({
         "refreshed_servers": results.len(),
         "results": results
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // ==============================
@@ -1707,7 +2091,11 @@ async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoRespons
 // GET /api/v1/opengfw/status - Get OpenGFW running status on host
 async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
     if !verify_agent_api_key(&headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     // Check if OpenGFW binary exists and is running
@@ -1722,23 +2110,29 @@ async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
         "installed": opengfw_exists,
         "running": opengfw_running,
         "version": if opengfw_exists { "installed" } else { "not_installed" }
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // GET /api/v1/opengfw/config - Get OpenGFW rules configuration
 async fn api_opengfw_get_config(headers: HeaderMap) -> impl IntoResponse {
     if !verify_agent_api_key(&headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
-    let global_enabled = db::get_config_sync("opengfw_enabled")
-        .unwrap_or_else(|| "false".to_string());
+    let global_enabled =
+        db::get_config_sync("opengfw_enabled").unwrap_or_else(|| "false".to_string());
 
     if global_enabled != "true" {
         return ok_response(json!({
             "enabled": false,
             "rules": []
-        })).into_response();
+        }))
+        .into_response();
     }
 
     let rules = services::opengfw::get_active_rules().await;
@@ -1746,7 +2140,8 @@ async fn api_opengfw_get_config(headers: HeaderMap) -> impl IntoResponse {
     ok_response(json!({
         "enabled": true,
         "rules": rules
-    })).into_response()
+    }))
+    .into_response()
 }
 
 // POST /api/v1/opengfw/block-report - Agent reports blocked connections
@@ -1765,7 +2160,11 @@ async fn api_opengfw_block_report(
     Json(report): Json<OpenGFWBlockReport>,
 ) -> impl IntoResponse {
     if !verify_agent_api_key(&headers) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     // Log the blocked connection
@@ -1823,10 +2222,16 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/admin/packages", get(api_admin_packages))
         // OpenGFW API
         .route("/v1/admin/opengfw/config", get(api_admin_opengfw_config))
-        .route("/v1/admin/opengfw/config", put(api_admin_opengfw_config_save))
+        .route(
+            "/v1/admin/opengfw/config",
+            put(api_admin_opengfw_config_save),
+        )
         .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
         .route("/v1/admin/opengfw/stats", get(api_admin_opengfw_stats))
-        .route("/v1/admin/opengfw/refresh-rules", post(api_admin_opengfw_refresh_rules))
+        .route(
+            "/v1/admin/opengfw/refresh-rules",
+            post(api_admin_opengfw_refresh_rules),
+        )
         // Agent OpenGFW endpoints
         .route("/v1/opengfw/status", get(api_opengfw_status))
         .route("/v1/opengfw/config", get(api_opengfw_get_config))

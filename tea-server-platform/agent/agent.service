@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /opt/tea-agent/agent.py
-Environment=AGENT_API_KEY=tea-platform-agent-key
+Environment=AGENT_API_KEY=
 Environment=VIRT_TYPE={{VIRT_TYPE}}
 Restart=always
 RestartSec=10

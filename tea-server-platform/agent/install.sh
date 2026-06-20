@@ -2,8 +2,13 @@
 set -euo pipefail
 
 VIRT_TYPE="${1:-lxd}"
-AGENT_API_KEY="${2:-tea-platform-agent-key}"
+AGENT_API_KEY="${2:-}"
 INSTALL_DIR="/opt/tea-agent"
+
+if [ -z "${AGENT_API_KEY}" ]; then
+    echo "[tea-agent] AGENT_API_KEY is required. Usage: install.sh <lxd|kvm> <agent_api_key>" >&2
+    exit 1
+fi
 
 echo "[tea-agent] Installing with virt_type=${VIRT_TYPE}"
 
@@ -39,7 +44,9 @@ import subprocess
 import os
 import sys
 
-API_KEY = os.environ.get("AGENT_API_KEY", "tea-platform-agent-key")
+API_KEY = os.environ.get("AGENT_API_KEY")
+if not API_KEY:
+    raise SystemExit("AGENT_API_KEY is required")
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
 
 class AgentHandler(BaseHTTPRequestHandler):

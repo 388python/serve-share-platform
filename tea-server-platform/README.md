@@ -65,6 +65,17 @@ Authorization: Bearer {api_key}
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | POST | `/api/v1/redeem` | 是 | 使用兑换码兑换奖励 |
+| POST | `/api/v1/balance-to-code` | 是 | 将核时余额转换为兑换码 |
+
+### Agent
+
+Agent 请求使用 `X-API-Key` 认证。平台会从站点配置 `agent_api_key` 读取密钥；如果未配置，会生成一次并持久化到配置表。安装 Agent 时必须显式传入同一个密钥，避免使用公开默认值。
+
+```bash
+sudo bash agent/install.sh lxd {agent_api_key}
+```
+
+虚拟机创建会先进入 `pending` 状态。Agent 确认创建成功后变为 `running`；Agent 创建失败时变为 `failed`，平台会退回本次扣除的核时并回滚机主入账。
 
 ### 管理员
 
