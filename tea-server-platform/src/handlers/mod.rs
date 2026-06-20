@@ -280,7 +280,7 @@ pub async fn contribute_server_page(
     State(state): State<AppState>,
     cookies: Cookies,
 ) -> Result<Html<String>, Redirect> {
-    let (_user_id, _username, is_admin) = require_auth(&cookies)?;
+    let (user_id, _username, is_admin) = require_auth(&cookies)?;
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -299,6 +299,23 @@ pub async fn contribute_server_page(
 
     let lock_bonus = db::get_config("lock_bonus").await.unwrap_or_else(|| "unlocked".to_string());
     ctx.insert("lock_bonus", &lock_bonus);
+
+    let premium_enabled = db::get_config("premium_enabled").await.unwrap_or_else(|| "false".to_string());
+    let premium_ldc_cost: f64 = db::get_config("premium_ldc_cost").await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100.0);
+    ctx.insert("premium_enabled", &premium_enabled);
+    ctx.insert("premium_ldc_cost", &premium_ldc_cost);
+
+    // Pass user's ldc balance to the template
+    let pool2 = db::get_db();
+    let user_ldc: Option<f64> = sqlx::query_scalar("SELECT ldc_balance FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool2)
+        .await
+        .unwrap_or(None)
+        .flatten();
+    ctx.insert("user_ldc", &user_ldc.unwrap_or(0.0));
 
     let rendered = state
         .templates
@@ -332,6 +349,7 @@ pub struct ContributeServerForm {
     pub linux_version: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
+    pub premium_days: Option<i32>,
 }
 
 pub async fn contribute_server_submit(
@@ -366,11 +384,45 @@ pub async fn contribute_server_submit(
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
     let linux_version = form.linux_version.unwrap_or_default();
 
+    // ---- Premium logic ----
+    let premium_days = form.premium_days.unwrap_or(0).max(0);
+    let premium_enabled_cfg = db::get_config("premium_enabled").await
+        .unwrap_or_else(|| "false".to_string());
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost").await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100.0);
+
+    let (is_premium, premium_expires_at, premium_cost) = if premium_days > 0 && premium_enabled_cfg == "true" {
+        let total_cost = premium_daily_cost * premium_days as f64;
+        // Check user balance
+        let balance: Option<f64> = sqlx::query_scalar("SELECT ldc_balance FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
+        if balance.unwrap_or(0.0) >= total_cost {
+            // Deduct from user's ldc_balance
+            let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+                .bind(total_cost)
+                .bind(user_id)
+                .execute(pool)
+                .await;
+            let expires = now + chrono::Duration::days(premium_days as i64);
+            (true, Some(expires), total_cost)
+        } else {
+            (false, None, 0.0)
+        }
+    } else {
+        (false, None, 0.0)
+    };
+    let _ = premium_cost; // suppress unused warning
+
     // Allocate proxy port
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary, will update after insert
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -397,6 +449,8 @@ pub async fn contribute_server_submit(
     .bind(&linux_version)
     .bind(form.description.as_deref().unwrap_or(""))
     .bind(form.provider.as_deref().unwrap_or(""))
+    .bind(is_premium)
+    .bind(premium_expires_at)
     .execute(pool)
     .await;
 
@@ -2542,16 +2596,23 @@ pub async fn balance_to_code_submit(
 
 // ---- Buy Premium Handler ----
 
+#[derive(Deserialize)]
+pub struct BuyPremiumForm {
+    pub premium_days: i32,
+}
+
 pub async fn buy_premium(
     cookies: Cookies,
     Path(server_id): Path<i64>,
+    Form(form): Form<BuyPremiumForm>,
 ) -> Result<impl IntoResponse, Redirect> {
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
+    let days = form.premium_days.max(0);
 
     // Check if premium is enabled
     let premium_enabled = db::get_config_sync("premium_enabled").unwrap_or_else(|| "false".to_string());
-    if premium_enabled != "true" {
+    if premium_enabled != "true" || days <= 0 {
         return Ok(Redirect::to("/dashboard"));
     }
 
@@ -2568,16 +2629,14 @@ pub async fn buy_premium(
         None => return Ok(Redirect::to("/dashboard")),
     };
 
-    if server.is_premium {
-        return Ok(Redirect::to("/dashboard"));
-    }
-
-    // Check LDC balance
-    let cost: f64 = db::get_config_sync("premium_ldc_cost")
+    // Calculate cost
+    let daily_cost: f64 = db::get_config_sync("premium_ldc_cost")
         .unwrap_or_else(|| "100".to_string())
         .parse()
         .unwrap_or(100.0);
+    let total_cost = daily_cost * days as f64;
 
+    // Check LDC balance
     let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_optional(pool)
@@ -2589,18 +2648,33 @@ pub async fn buy_premium(
         None => return Ok(Redirect::to("/login")),
     };
 
-    if user.ldc_balance < cost {
+    if user.ldc_balance < total_cost {
         return Ok(Redirect::to("/dashboard"));
     }
 
-    // Deduct LDC and set premium
+    // Deduct LDC
     let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(cost)
+        .bind(total_cost)
         .bind(user_id)
         .execute(pool)
         .await;
 
-    let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
+    // Calculate new premium expiry (extend from now or existing expiry)
+    let now = Utc::now();
+    let existing_expiry: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT premium_expires_at FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+    let base = existing_expiry.filter(|e| e > &now).unwrap_or(now);
+    let new_expiry = base + chrono::Duration::days(days as i64);
+
+    // Update server
+    let _ = sqlx::query("UPDATE servers SET is_premium = 1, premium_expires_at = ? WHERE id = ?")
+        .bind(new_expiry)
         .bind(server_id)
         .execute(pool)
         .await;

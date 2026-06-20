@@ -51,6 +51,7 @@ pub struct Server {
     pub nat_multiplier: f64,
     pub max_machine_hours: f64,
     pub is_premium: bool,
+    pub premium_expires_at: Option<DateTime<Utc>>,
     pub linux_version: String,
     pub description: String,
     pub provider: String,

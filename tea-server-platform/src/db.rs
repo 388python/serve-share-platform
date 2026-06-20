@@ -253,6 +253,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         .execute(pool).await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN linux_version TEXT NOT NULL DEFAULT ''")
         .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN premium_expires_at DATETIME")
+        .execute(pool).await;
 
     // Description and provider: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''")

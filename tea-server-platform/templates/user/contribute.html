@@ -152,22 +152,41 @@
                         <input type="number" class="form-control" id="max_machine_hours" name="max_machine_hours" value="0" min="0" step="1">
                     </div>
 
+                    <!-- 优选套餐 -->
+                    {% if premium_enabled == "true" %}
+                    <div class="mb-3">
+                        <label for="premium_days" class="form-label">茶的优选天数（0 = 不开启）</label>
+                        <input type="number" class="form-control" id="premium_days" name="premium_days" value="0" min="0" step="1">
+                        <small class="text-muted">当前费用：<span id="premium_cost_display">{{ premium_ldc_cost }}</span> LDC/天 · 总计：<span id="premium_total_display">0</span> LDC · 你的余额：{{ user_ldc }} LDC</small>
+                    </div>
+                    {% endif %}
+
                     <button type="submit" class="btn btn-primary w-100">提交贡献</button>
                 </form>
             </div>
         </div>
     </div>
-</div>
 
-<script>
+    <script>
 function toggleNatConfig() {
     var nat = document.getElementById('nat_config');
     var ip = document.getElementById('expose_ip');
     nat.style.display = ip.checked ? 'block' : 'none';
 }
-// 页面加载时检查
+function updatePremiumTotal() {
+    var daysInput = document.getElementById('premium_days');
+    if (!daysInput) return;
+    var days = parseInt(daysInput.value) || 0;
+    var daily = parseFloat("{{ premium_ldc_cost }}") || 0;
+    var total = (days * daily).toFixed(2);
+    var el = document.getElementById('premium_total_display');
+    if (el) el.textContent = total;
+}
+var premiumDaysInput = document.getElementById('premium_days');
+if (premiumDaysInput) premiumDaysInput.addEventListener('input', updatePremiumTotal);
 document.addEventListener('DOMContentLoaded', function() {
     toggleNatConfig();
+    updatePremiumTotal();
 });
 </script>
 {% endblock content %}

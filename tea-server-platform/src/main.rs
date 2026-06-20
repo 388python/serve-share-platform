@@ -254,6 +254,21 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Background task: Expire premium on servers
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let pool = db::get_db();
+            let now = chrono::Utc::now();
+            let _ = sqlx::query(
+                "UPDATE servers SET is_premium = 0, premium_expires_at = NULL WHERE is_premium = 1 AND premium_expires_at IS NOT NULL AND premium_expires_at <= ?"
+            )
+            .bind(now)
+            .execute(pool)
+            .await;
+        }
+    });
+
     // Build router
     let app = Router::new()
         // Public routes
