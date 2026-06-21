@@ -20,10 +20,10 @@ pub struct AppConfig {
 pub struct LinuxDoOAuthConfig {
     pub client_id: String,
     pub client_secret: String,
-    pub redirect_uri: String,
     pub auth_url: String,
     pub token_url: String,
     pub user_info_url: String,
+    pub redirect_uri: String,
 }
 
 impl Default for LinuxDoOAuthConfig {
@@ -31,10 +31,10 @@ impl Default for LinuxDoOAuthConfig {
         Self {
             client_id: String::new(),
             client_secret: String::new(),
-            redirect_uri: String::from("https://example.com/auth/callback"),
             auth_url: String::from("https://connect.linux.do/oauth2/authorize"),
             token_url: String::from("https://connect.linux.do/oauth2/token"),
             user_info_url: String::from("https://connect.linux.do/api/user"),
+            redirect_uri: String::new(), // 由 AppConfig 从 platform_domain 派生
         }
     }
 }
@@ -48,7 +48,7 @@ impl Default for AppConfig {
             linuxdo_oauth: LinuxDoOAuthConfig::default(),
             admin_username: String::from("admin"),
             admin_password: String::from("admin"),
-            platform_domain: String::from("https://example.com"),
+            platform_domain: String::from("http://localhost:3000"),
             ssh_proxy_port_start: 22000,
             ssh_proxy_port_count: 100,
         }
@@ -58,6 +58,15 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn from_env() -> anyhow::Result<&'static AppConfig> {
         dotenvy::dotenv().ok();
+
+        // 先读 platform_domain — redirect_uri 需要基于它
+        let platform_domain = std::env::var("PLATFORM_DOMAIN")
+            .unwrap_or_else(|_| AppConfig::default().platform_domain);
+
+        // redirect_uri: 优先从 LINUXDO_REDIRECT_URI 环境变量，
+        // 否则从 platform_domain 派生: {platform_domain}/auth/callback
+        let redirect_uri = std::env::var("LINUXDO_REDIRECT_URI")
+            .unwrap_or_else(|_| format!("{}/auth/callback", platform_domain.trim_end_matches('/')));
 
         let cfg = AppConfig {
             database_url: std::env::var("DATABASE_URL")
@@ -71,21 +80,19 @@ impl AppConfig {
                     .unwrap_or_default(),
                 client_secret: std::env::var("LINUXDO_CLIENT_SECRET")
                     .unwrap_or_default(),
-                redirect_uri: std::env::var("LINUXDO_REDIRECT_URI")
-                    .unwrap_or_else(|_| LinuxDoOAuthConfig::default().redirect_uri),
                 auth_url: std::env::var("LINUXDO_AUTH_URL")
                     .unwrap_or_else(|_| LinuxDoOAuthConfig::default().auth_url),
                 token_url: std::env::var("LINUXDO_TOKEN_URL")
                     .unwrap_or_else(|_| LinuxDoOAuthConfig::default().token_url),
                 user_info_url: std::env::var("LINUXDO_USER_INFO_URL")
                     .unwrap_or_else(|_| LinuxDoOAuthConfig::default().user_info_url),
+                redirect_uri,
             },
             admin_username: std::env::var("ADMIN_USERNAME")
                 .unwrap_or_else(|_| AppConfig::default().admin_username),
             admin_password: std::env::var("ADMIN_PASSWORD")
                 .unwrap_or_else(|_| AppConfig::default().admin_password),
-            platform_domain: std::env::var("PLATFORM_DOMAIN")
-                .unwrap_or_else(|_| AppConfig::default().platform_domain),
+            platform_domain,
             ssh_proxy_port_start: std::env::var("SSH_PROXY_PORT_START")
                 .ok()
                 .and_then(|v| v.parse().ok())

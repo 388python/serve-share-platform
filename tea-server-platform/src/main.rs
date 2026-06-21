@@ -407,10 +407,29 @@ async fn auth_callback(
         None => return Redirect::to("/").into_response(),
     };
 
-    if let Some(expected_state) = cookies.get("oauth_state").map(|c| c.value().to_string()) {
+    // 双重校验：
+    // 1) 验证 cookie 中的 state 与回调参数中的 state 一致（防 CSRF）
+    // 2) 使用 HMAC-SHA256 签名验证 state 的完整性和有效期（防篡改/重放）
+    let cookie_state = cookies.get("oauth_state").map(|c| c.value().to_string());
+    if let Some(expected_state) = cookie_state {
         if let Some(incoming_state) = params.get("state") {
             if incoming_state != &expected_state {
                 tracing::warn!("OAuth state mismatch — possible CSRF");
+                return Redirect::to("/").into_response();
+            }
+            if !services::auth::verify_state(incoming_state) {
+                tracing::warn!("OAuth state signature invalid or expired — possible tampering");
+                return Redirect::to("/").into_response();
+            }
+        } else {
+            tracing::warn!("OAuth callback missing state parameter");
+            return Redirect::to("/").into_response();
+        }
+    } else {
+        // 没有 cookie state，仍然尝试自验证签名（允许非严格模式）
+        if let Some(incoming_state) = params.get("state") {
+            if !services::auth::verify_state(incoming_state) {
+                tracing::warn!("OAuth state signature invalid or expired");
                 return Redirect::to("/").into_response();
             }
         }
