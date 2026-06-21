@@ -261,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(handlers::health_check))
         .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
+        .route("/invite", post(invite_submit))
         .route("/auth/callback", get(auth_callback))
         .route("/admin-login", post(handlers::admin_login))
         .route("/admin-login/ui", get(handlers::admin_login_ui))
@@ -384,6 +385,71 @@ async fn login_page(
             .into_response();
     }
 
+    // 检查是否需要邀请码：如果 require_invite=true 且 URL 和 cookie 都没有邀请码，显示邀请码输入页面
+    let require_invite = db::get_config("require_invite")
+        .await
+        .unwrap_or_default()
+        .parse::<bool>()
+        .unwrap_or(false);
+
+    let has_invite_from_url = params
+        .get("invite_code")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    let has_invite_from_cookie = cookies
+        .get("invite_code")
+        .map(|c| !c.value().trim().is_empty())
+        .unwrap_or(false);
+
+    if require_invite && !has_invite_from_url && !has_invite_from_cookie {
+        let error_msg = params.get("error").cloned().unwrap_or_default();
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>输入邀请码</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body {{ background: #f8f9fa; }}
+        .invite-card {{ max-width: 420px; margin: 80px auto; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card shadow invite-card">
+            <div class="card-body p-5">
+                <h3 class="card-title text-center mb-4">需要邀请码</h3>
+                <p class="text-muted text-center mb-4">请输入邀请码后继续登录</p>
+                {}
+                <form method="post" action="/invite">
+                    <div class="mb-3">
+                        <label for="invite_code" class="form-label">邀请码</label>
+                        <input type="text" class="form-control form-control-lg" id="invite_code" name="invite_code" placeholder="请输入邀请码" required autocomplete="off">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 btn-lg">继续登录</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>"#,
+            if !error_msg.is_empty() {
+                format!(
+                    r#"<div class="alert alert-danger" role="alert">{}</div>"#,
+                    match error_msg.as_str() {
+                        "invalid_invite" => "邀请码无效或已被使用",
+                        _ => "请输入有效的邀请码",
+                    }
+                )
+            } else {
+                String::new()
+            }
+        );
+        return axum::response::Html(html).into_response();
+    }
+
     let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
 
     // state cookie: 用于 CSRF 校验，包含 HMAC-SHA256 签名
@@ -408,6 +474,43 @@ async fn login_page(
     }
 
     Redirect::to(&oauth_url).into_response()
+}
+
+async fn invite_submit(
+    cookies: Cookies,
+    axum::extract::Form(form): axum::extract::Form<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let invite_code = form
+        .get("invite_code")
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+
+    if invite_code.is_empty() {
+        return Redirect::to("/login?error=invalid_invite").into_response();
+    }
+
+    // 快速校验：检查邀请码是否存在且未被使用
+    let invite_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM invites WHERE code = ? AND is_used = 0",
+    )
+    .bind(&invite_code)
+    .fetch_optional(db::get_db())
+    .await
+    .unwrap_or(None);
+
+    if invite_exists.is_none() {
+        return Redirect::to("/login?error=invalid_invite").into_response();
+    }
+
+    // 保存邀请码到 cookie
+    let mut invite_cookie = Cookie::new("invite_code", invite_code);
+    invite_cookie.set_path("/");
+    invite_cookie.set_max_age(cookie::time::Duration::minutes(10));
+    invite_cookie.set_http_only(true);
+    invite_cookie.set_same_site(SameSite::Lax);
+    cookies.add(invite_cookie);
+
+    Redirect::to("/login").into_response()
 }
 
 async fn auth_callback(
