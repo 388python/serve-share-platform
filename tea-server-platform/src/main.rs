@@ -38,6 +38,9 @@ async fn main() -> anyhow::Result<()> {
     // Init database
     db::init_db(&cfg.database_url).await?;
 
+    // Initialize OpenGFW default rules
+    services::opengfw::init_default_rules().await;
+
     // Init Tera templates
     let mut tera = Tera::new("templates/**/*")?;
     tera.autoescape_on(vec!["html", ".tera"]);
