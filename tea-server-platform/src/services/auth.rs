@@ -112,12 +112,12 @@ pub fn verify_state(state: &str) -> bool {
 pub fn create_oauth_url(config: &AppConfig) -> (String, String) {
     let state = generate_state();
 
-    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id);
-    let redirect_uri_enc = urlencoding::encode(&config.linuxdo_oauth.redirect_uri);
-    let state_enc = urlencoding::encode(&state);
+    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id).to_string();
+    let redirect_uri_enc = urlencoding::encode(&config.linuxdo_oauth.redirect_uri).to_string();
+    let state_enc = urlencoding::encode(&state).to_string();
 
     let url = format!(
-        "{}?client_id={}&response_type=code&redirect_uri={}&state={}&scope=read",
+        "{}?client_id={}&response_type=code&redirect_uri={}&state={}",
         config.linuxdo_oauth.auth_url, client_id_enc, redirect_uri_enc, state_enc
     );
     (url, state)
@@ -127,7 +127,10 @@ pub async fn exchange_code_for_token(
     config: &AppConfig,
     code: &str,
 ) -> anyhow::Result<LinuxDoTokenResponse> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
     let resp = client
         .post(&config.linuxdo_oauth.token_url)
         .form(&[
@@ -138,27 +141,80 @@ pub async fn exchange_code_for_token(
             ("redirect_uri", config.linuxdo_oauth.redirect_uri.as_str()),
         ])
         .send()
-        .await?
-        .error_for_status()?
-        .json::<LinuxDoTokenResponse>()
-        .await?;
-    Ok(resp)
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("LinuxDo token exchange request failed: {}", e);
+            return Err(anyhow::anyhow!("token exchange request failed: {}", e));
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(
+            "LinuxDo token exchange failed: status={}, body={}",
+            status,
+            body
+        );
+        return Err(anyhow::anyhow!(
+            "token exchange failed (status={}): {}",
+            status,
+            body
+        ));
+    }
+
+    let token = resp.json::<LinuxDoTokenResponse>().await.map_err(|e| {
+        tracing::error!("LinuxDo token response parse failed: {}", e);
+        anyhow::anyhow!("token response parse failed: {}", e)
+    })?;
+    Ok(token)
 }
 
 pub async fn get_user_info(
     config: &AppConfig,
     access_token: &str,
 ) -> anyhow::Result<LinuxDoUserInfo> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
     let resp = client
         .get(&config.linuxdo_oauth.user_info_url)
         .bearer_auth(access_token)
         .send()
-        .await?
-        .error_for_status()?
-        .json::<LinuxDoUserInfo>()
-        .await?;
-    Ok(resp)
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("LinuxDo user info request failed: {}", e);
+            return Err(anyhow::anyhow!("user info request failed: {}", e));
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(
+            "LinuxDo user info failed: status={}, body={}",
+            status,
+            body
+        );
+        return Err(anyhow::anyhow!(
+            "user info failed (status={}): {}",
+            status,
+            body
+        ));
+    }
+
+    let user = resp.json::<LinuxDoUserInfo>().await.map_err(|e| {
+        tracing::error!("LinuxDo user info response parse failed: {}", e);
+        anyhow::anyhow!("user info response parse failed: {}", e)
+    })?;
+    Ok(user)
 }
 
 use axum::{
