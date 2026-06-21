@@ -106,20 +106,43 @@ pub fn verify_state(state: &str) -> bool {
 
 // ---- OAuth URL & Token Exchange ----
 
-/// 生成 OAuth 授权 URL（包含签名 state、URL 编码参数）
-/// 返回 (oauth_url, signed_state_value)，签名 state 包含时间戳和 HMAC-SHA256 签名，
-/// 可在回调时自验证，避免 CSRF 和 state 篡改。
+/// 生成 LinuxDo OAuth 授权 URL（包含签名 state、URL 编码参数）
+/// 参考标准 OAuth 2.0 顺序：client_id → redirect_uri → response_type → scope → state
+/// 返回 (oauth_url, signed_state_value)，签名 state 包含时间戳和 HMAC-SHA256 签名
 pub fn create_oauth_url(config: &AppConfig) -> (String, String) {
     let state = generate_state();
 
-    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id).to_string();
-    let redirect_uri_enc = urlencoding::encode(&config.linuxdo_oauth.redirect_uri).to_string();
-    let state_enc = urlencoding::encode(&state).to_string();
+    // 校验关键配置
+    if config.linuxdo_oauth.client_id.is_empty() {
+        tracing::warn!("LINUXDO_CLIENT_ID is empty — OAuth will fail");
+    }
+    if config.linuxdo_oauth.redirect_uri.is_empty() {
+        tracing::warn!("LINUXDO_REDIRECT_URI / PLATFORM_DOMAIN produced empty redirect_uri");
+    }
 
+    // URL 编码所有参数值（特别是 redirect_uri 中的 :// 和 / 必须编码）
+    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id).to_string();
+    let redirect_uri_enc =
+        urlencoding::encode(&config.linuxdo_oauth.redirect_uri).to_string();
+    let state_enc = urlencoding::encode(&state).to_string();
+    let scope_enc = urlencoding::encode("read").to_string();
+
+    // 按标准 OAuth 顺序组装（与 LinuxDo / Discourse 规范一致）
     let url = format!(
-        "{}?client_id={}&response_type=code&redirect_uri={}&state={}",
-        config.linuxdo_oauth.auth_url, client_id_enc, redirect_uri_enc, state_enc
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}",
+        config.linuxdo_oauth.auth_url,
+        client_id_enc,
+        redirect_uri_enc,
+        scope_enc,
+        state_enc
     );
+
+    tracing::debug!(
+        "Generated OAuth URL: {} (redirect_uri raw={})",
+        config.linuxdo_oauth.auth_url,
+        config.linuxdo_oauth.redirect_uri
+    );
+
     (url, state)
 }
 
