@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tera::Context;
-use tower_cookies::{cookie::time::Duration, Cookie, Cookies};
+use tower_cookies::Cookies;
 use uuid::Uuid;
 
 pub mod api;
@@ -46,6 +46,71 @@ fn build_base_context(cookies: &Cookies, ctx: &mut Context) {
         ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
         ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
         ctx.insert("is_admin", &session.is_admin.to_string());
+    }
+}
+
+pub(crate) async fn machine_nat_ports_for_create(
+    pool: &sqlx::SqlitePool,
+    server: &Server,
+) -> Result<i32, &'static str> {
+    if !server.expose_ip || server.nat_port_start <= 0 {
+        return Ok(0);
+    }
+
+    if server.nat_port_end < server.nat_port_start {
+        return Err("nat_range_invalid");
+    }
+
+    let total_available_nat = i64::from(server.nat_port_end) - i64::from(server.nat_port_start) + 1;
+    if total_available_nat <= 0 {
+        return Err("nat_range_invalid");
+    }
+
+    let used_ports: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')",
+    )
+    .bind(server.id)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| {
+        tracing::error!("failed to check NAT port capacity: {}", err);
+        "nat_capacity_check_failed"
+    })?;
+
+    if used_ports.0 >= total_available_nat {
+        return Err("nat_ports_exhausted");
+    }
+
+    Ok(1)
+}
+
+pub(crate) async fn update_server_agent_hardware(
+    server_id: i64,
+    detected_cpu: i32,
+    detected_memory: f64,
+    detected_disk: f64,
+    detected_linux: String,
+) {
+    if let Err(err) = sqlx::query(
+        "UPDATE servers SET \
+            cpu_cores = ?, \
+            memory_gb = ?, \
+            disk_gb = ?, \
+            bandwidth_mbps = COALESCE(NULLIF(bandwidth_mbps, 0), ?), \
+            agent_installed = 1, \
+            linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END \
+            WHERE id = ?",
+    )
+    .bind(detected_cpu)
+    .bind(detected_memory)
+    .bind(detected_disk)
+    .bind(100.0_f64)
+    .bind(&detected_linux)
+    .bind(server_id)
+    .execute(db::get_db())
+    .await
+    {
+        tracing::error!("failed to persist detected server hardware: {}", err);
     }
 }
 
@@ -218,27 +283,25 @@ pub async fn user_center(
         .flatten();
 
     // Get machines summary
-    let total_machines: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE owner_id = ?")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or((0,));
+    let total_machines: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM machines WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
 
     let active_machines: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE owner_id = ? AND status = 'running'")
+        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE user_id = ? AND status = 'running'")
             .bind(user_id)
             .fetch_one(pool)
             .await
             .unwrap_or((0,));
 
     // Get servers summary
-    let total_servers: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM servers WHERE owner_id = ?")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or((0,));
+    let total_servers: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM servers WHERE owner_id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
 
     // Warning letters
     let unread_warnings: (i64,) =
@@ -256,12 +319,11 @@ pub async fn user_center(
             .unwrap_or((0,));
 
     // Orders summary
-    let total_orders: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM orders WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or((0,));
+    let total_orders: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM orders WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
 
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
@@ -407,8 +469,8 @@ pub async fn servers_page(State(state): State<AppState>, cookies: Cookies) -> im
 }
 
 pub async fn ssh_key_setup_page(State(_state): State<AppState>) -> impl IntoResponse {
-    let site_name = db::get_config_sync("site_name")
-        .unwrap_or_else(|| "茶的服务器公益站".to_string());
+    let site_name =
+        db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
 
     // Generate or get the platform's SSH public key
     let ssh_public_key = services::session::get_ssh_public_key();
@@ -493,9 +555,7 @@ sudo iptables -L -n | grep 22  # CentOS/RHEL</pre>
     </div>
 </body>
 </html>"#,
-        site_name,
-        ssh_public_key,
-        ssh_public_key
+        site_name, ssh_public_key, ssh_public_key
     );
 
     Html(html)
@@ -771,14 +831,13 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
         .unwrap_or_else(|| "http://localhost:3000".to_string());
     let install_url = format!("{}/agent/install.sh", platform_domain.trim_end_matches('/'));
     let agent_api_key = services::session::agent_api_key();
-    let virt_type = db::get_config_sync("default_virt_type")
-        .unwrap_or_else(|| "lxd".to_string());
+    let virt_type = db::get_config_sync("default_virt_type").unwrap_or_else(|| "lxd".to_string());
     // Use the platform's own SSH key for connecting to contributed servers
     let ssh_private_key = services::session::get_ssh_private_key();
 
     // Attempt to connect via SSH and run agent installation
     // This runs in the background
-    let _ = tokio::task::spawn_blocking({
+    let install_result = tokio::task::spawn_blocking({
         let ip = _ip.to_string();
         let ssh_private_key = ssh_private_key.clone();
         let server_id = _server_id;
@@ -803,19 +862,19 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
 
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
-                Err(_) => return,
+                Err(_) => return None,
             };
             let mut session = match ssh2::Session::new() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(_) => return None,
             };
             session.set_tcp_stream(tcp);
             if session.handshake().is_err() {
-                return;
+                return None;
             }
             // Use platform's SSH private key for authentication
             if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_private_key).is_err() {
-                return;
+                return None;
             }
 
             // ---- Phase 1: Detect server hardware ----
@@ -864,30 +923,29 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
                 false
             };
 
-            if install_success {
-                // Update servers row with detected hardware specs
-                let pool = db::get_db();
-                let _ = sqlx::query(
-                    "UPDATE servers SET \
-                        cpu_cores = ?, \
-                        memory_gb = ?, \
-                        disk_gb = ?, \
-                        bandwidth_mbps = COALESCE(NULLIF(bandwidth_mbps, 0), ?), \
-                        agent_installed = 1, \
-                        linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END \
-                        WHERE id = ?",
-                )
-                .bind(detected_cpu)
-                .bind(detected_memory)
-                .bind(detected_disk)
-                .bind(100.0_f64) // default bandwidth placeholder if none was set
-                .bind(&detected_linux)
-                .bind(server_id)
-                .execute(pool);
-            }
+            install_success.then_some((
+                server_id,
+                detected_cpu,
+                detected_memory,
+                detected_disk,
+                detected_linux,
+            ))
         }
     })
     .await;
+
+    if let Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) =
+        install_result
+    {
+        update_server_agent_hardware(
+            server_id,
+            detected_cpu,
+            detected_memory,
+            detected_disk,
+            detected_linux,
+        )
+        .await;
+    }
 }
 
 pub async fn machine_market(
@@ -1020,6 +1078,10 @@ pub async fn create_machine(
     }
 
     let mut hours = form.hours.unwrap_or(24) as i64;
+    if hours <= 0 {
+        return Ok(Redirect::to("/market?error=invalid_hours"));
+    }
+
     let mut expires_at = now + chrono::Duration::hours(hours);
 
     // Task 6.2: Check max machine hours
@@ -1037,24 +1099,13 @@ pub async fn create_machine(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    // NAT port allocation: each running machine uses 1 NAT port
-    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
-        let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
-        )
-        .bind(server.id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or((0,));
-        let total_available = (server.nat_port_end - server.nat_port_start) as i64;
-        // Each machine uses 1 NAT port, check if there's capacity for this new machine
-        if used_ports.0 < total_available {
-            1 // This new machine uses 1 NAT port
-        } else {
-            0 // No ports available, won't charge for NAT
+    let nat_ports = match machine_nat_ports_for_create(pool, &server).await {
+        Ok(nat_ports) => nat_ports,
+        Err("nat_ports_exhausted") => {
+            return Ok(Redirect::to("/market?error=nat_ports_exhausted"));
         }
-    } else {
-        0
+        Err("nat_range_invalid") => return Ok(Redirect::to("/market?error=nat_range_invalid")),
+        Err(_) => return Ok(Redirect::to("/market?error=nat_capacity_check_failed")),
     };
 
     // Calculate core hours per hour
@@ -2428,31 +2479,91 @@ pub async fn admin_user_delete(
 
     let pool = db::get_db();
 
-    // Delete related records first (cascade-like), then user
-    let _ = sqlx::query("DELETE FROM machines WHERE owner_id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM servers WHERE owner_id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM orders WHERE user_id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM warning_letters WHERE user_id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM oauth_codes WHERE user_id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM users WHERE id = ?")
-        .bind(path.id)
-        .execute(pool)
-        .await;
+    let active_owned_machines: (i64,) = match sqlx::query_as(
+        "SELECT COUNT(*) FROM machines WHERE user_id = ? AND status IN ('pending', 'running')",
+    )
+    .bind(path.id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::error!("failed to count active machines for user delete: {}", err);
+            return Ok(Redirect::to("/admin/users?error=db_error"));
+        }
+    };
+    if active_owned_machines.0 > 0 {
+        return Ok(Redirect::to("/admin/users?error=user_has_active_machines"));
+    }
+
+    let hosted_machines: (i64,) = match sqlx::query_as(
+        "SELECT COUNT(*) FROM machines m JOIN servers s ON m.server_id = s.id WHERE s.owner_id = ?",
+    )
+    .bind(path.id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::error!("failed to count hosted machines for user delete: {}", err);
+            return Ok(Redirect::to("/admin/users?error=db_error"));
+        }
+    };
+    if hosted_machines.0 > 0 {
+        return Ok(Redirect::to("/admin/users?error=user_has_hosted_machines"));
+    }
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin admin user delete transaction: {}", err);
+            return Ok(Redirect::to("/admin/users?error=db_error"));
+        }
+    };
+
+    let delete_result = async {
+        sqlx::query("DELETE FROM orders WHERE user_id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM warning_letters WHERE user_id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM oauth_codes WHERE user_id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM disputes WHERE user_id = ? OR server_id IN (SELECT id FROM servers WHERE owner_id = ?)")
+            .bind(path.id)
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM machines WHERE user_id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM servers WHERE owner_id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(path.id)
+            .execute(&mut *tx)
+            .await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    if let Err(err) = delete_result {
+        tracing::error!("failed to delete user {}: {}", path.id, err);
+        return Ok(Redirect::to("/admin/users?error=db_error"));
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit user delete transaction: {}", err);
+        return Ok(Redirect::to("/admin/users?error=db_error"));
+    }
 
     Ok(Redirect::to("/admin/users"))
 }
@@ -2981,26 +3092,78 @@ pub async fn dispute_create(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
 
-    // Get machine info
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin dispute create transaction: {}", err);
+            return Ok(Redirect::to("/machines?error=db_error"));
+        }
+    };
+
     let machine: Option<Machine> =
-        sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
+        match sqlx::query_as("SELECT * FROM machines WHERE id = ? AND user_id = ?")
             .bind(form.machine_id)
             .bind(user_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await
-            .unwrap_or(None);
+        {
+            Ok(machine) => machine,
+            Err(err) => {
+                tracing::error!("failed to fetch machine for dispute: {}", err);
+                return Ok(Redirect::to("/machines?error=db_error"));
+            }
+        };
 
-    let machine = machine.ok_or_else(|| Redirect::to("/machines"))?;
+    let machine = match machine {
+        Some(machine) if machine.status == "running" => machine,
+        Some(_) => {
+            return Ok(Redirect::to(
+                "/machines?error=invalid_dispute_machine_status",
+            ))
+        }
+        None => return Ok(Redirect::to("/machines")),
+    };
+
+    let existing_pending: (i64,) = match sqlx::query_as(
+        "SELECT COUNT(*) FROM disputes WHERE machine_id = ? AND status IN ('pending', 'platform')",
+    )
+    .bind(machine.id)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::error!("failed to check existing pending dispute: {}", err);
+            return Ok(Redirect::to("/machines?error=db_error"));
+        }
+    };
+    if existing_pending.0 > 0 {
+        return Ok(Redirect::to("/machines?error=dispute_exists"));
+    }
 
     // Calculate amount to freeze (core hours)
     let amount_frozen = machine.core_hours_per_hour * machine.used_hours;
 
     // Freeze the core hours (deduct from contributor)
-    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
+    let freeze_result = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?) AND core_hours >= ?")
         .bind(amount_frozen)
         .bind(machine.server_id)
-        .execute(pool)
+        .bind(amount_frozen)
+        .execute(&mut *tx)
         .await;
+
+    match freeze_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return Ok(Redirect::to(
+                "/machines?error=merchant_balance_insufficient",
+            ))
+        }
+        Err(err) => {
+            tracing::error!("failed to freeze merchant balance for dispute: {}", err);
+            return Ok(Redirect::to("/machines?error=db_error"));
+        }
+    }
 
     let auto_hours: f64 = db::get_config("dispute_auto_resolve_hours")
         .await
@@ -3009,7 +3172,7 @@ pub async fn dispute_create(
         .unwrap_or(72.0);
     let auto_resolve_at = chrono::Utc::now() + chrono::Duration::hours(auto_hours as i64);
 
-    let _ = sqlx::query(
+    let insert_result = sqlx::query(
         "INSERT INTO disputes (machine_id, user_id, server_id, reason, amount_frozen, auto_resolve_at) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(form.machine_id)
@@ -3018,8 +3181,18 @@ pub async fn dispute_create(
     .bind(&form.reason)
     .bind(amount_frozen)
     .bind(auto_resolve_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
+
+    if let Err(err) = insert_result {
+        tracing::error!("failed to insert dispute: {}", err);
+        return Ok(Redirect::to("/machines?error=db_error"));
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit dispute create transaction: {}", err);
+        return Ok(Redirect::to("/machines?error=db_error"));
+    }
 
     Ok(Redirect::to("/machines"))
 }
@@ -3058,33 +3231,84 @@ pub async fn admin_dispute_resolve(
     let (_user_id, _username) = require_admin(&cookies)?;
     let pool = db::get_db();
 
-    let dispute: Option<Dispute> = sqlx::query_as("SELECT * FROM disputes WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+    if form.resolution != "refund" && form.resolution != "reject" {
+        return Ok(Redirect::to("/admin/disputes?error=invalid_resolution"));
+    }
 
-    if let Some(d) = dispute {
-        if form.resolution == "refund" {
-            // Refund to user
-            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-                .bind(d.amount_frozen)
-                .bind(d.user_id)
-                .execute(pool)
-                .await;
-        } else {
-            // Reject: restore to server owner
-            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
-                .bind(d.amount_frozen)
-                .bind(d.server_id)
-                .execute(pool)
-                .await;
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin dispute resolve transaction: {}", err);
+            return Ok(Redirect::to("/admin/disputes?error=db_error"));
         }
-        let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
-            .bind(&form.resolution)
-            .bind(id)
-            .execute(pool)
-            .await;
+    };
+
+    let dispute: Option<Dispute> = match sqlx::query_as(
+        "SELECT * FROM disputes WHERE id = ? AND status IN ('pending', 'platform')",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(dispute) => dispute,
+        Err(err) => {
+            tracing::error!("failed to fetch pending dispute {}: {}", id, err);
+            return Ok(Redirect::to("/admin/disputes?error=db_error"));
+        }
+    };
+
+    let d = match dispute {
+        Some(dispute) => dispute,
+        None => return Ok(Redirect::to("/admin/disputes?error=dispute_not_resolvable")),
+    };
+
+    let settle_result = sqlx::query(
+        "UPDATE disputes SET status = 'resolved', resolution = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('pending', 'platform')",
+    )
+    .bind(&form.resolution)
+    .bind(id)
+    .execute(&mut *tx)
+    .await;
+
+    match settle_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/admin/disputes?error=dispute_not_resolvable")),
+        Err(err) => {
+            tracing::error!("failed to mark dispute {} resolved: {}", id, err);
+            return Ok(Redirect::to("/admin/disputes?error=db_error"));
+        }
+    }
+
+    let credit_result = if form.resolution == "refund" {
+        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(d.amount_frozen)
+            .bind(d.user_id)
+            .execute(&mut *tx)
+            .await
+    } else {
+        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
+            .bind(d.amount_frozen)
+            .bind(d.server_id)
+            .execute(&mut *tx)
+            .await
+    };
+
+    match credit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => {
+            return Ok(Redirect::to(
+                "/admin/disputes?error=settlement_target_missing",
+            ))
+        }
+        Err(err) => {
+            tracing::error!("failed to credit dispute settlement {}: {}", id, err);
+            return Ok(Redirect::to("/admin/disputes?error=db_error"));
+        }
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit dispute resolution {}: {}", id, err);
+        return Ok(Redirect::to("/admin/disputes?error=db_error"));
     }
 
     Ok(Redirect::to("/admin/disputes"))
@@ -3105,43 +3329,82 @@ pub async fn merchant_dispute_reply(
     let (user_id, _username, _is_admin) = require_auth(&cookies)?;
     let pool = db::get_db();
 
-    let dispute: Option<Dispute> = sqlx::query_as(
-        "SELECT d.* FROM disputes d JOIN servers s ON d.server_id = s.id WHERE d.id = ? AND s.owner_id = ?"
+    if form.action != "refund" && form.action != "reject" {
+        return Ok(Redirect::to("/dashboard?error=invalid_dispute_action"));
+    }
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!("failed to begin merchant dispute transaction: {}", err);
+            return Ok(Redirect::to("/dashboard?error=db_error"));
+        }
+    };
+
+    let dispute: Option<Dispute> = match sqlx::query_as(
+        "SELECT d.* FROM disputes d JOIN servers s ON d.server_id = s.id WHERE d.id = ? AND s.owner_id = ? AND d.status = 'pending'",
     )
     .bind(id)
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await
-    .unwrap_or(None);
-
-    if let Some(d) = dispute {
-        let _ = sqlx::query("UPDATE disputes SET reply = ? WHERE id = ?")
-            .bind(&form.reply)
-            .bind(id)
-            .execute(pool)
-            .await;
-
-        if form.action == "refund" {
-            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-                .bind(d.amount_frozen)
-                .bind(d.user_id)
-                .execute(pool)
-                .await;
-            let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = 'refund', resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(id)
-                .execute(pool)
-                .await;
-        } else if form.action == "reject" {
-            let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-                .bind(d.amount_frozen)
-                .bind(user_id)
-                .execute(pool)
-                .await;
-            let _ = sqlx::query("UPDATE disputes SET status = 'resolved', resolution = 'reject', resolved_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(id)
-                .execute(pool)
-                .await;
+    {
+        Ok(dispute) => dispute,
+        Err(err) => {
+            tracing::error!("failed to fetch merchant dispute {}: {}", id, err);
+            return Ok(Redirect::to("/dashboard?error=db_error"));
         }
+    };
+
+    let d = match dispute {
+        Some(dispute) => dispute,
+        None => return Ok(Redirect::to("/dashboard?error=dispute_not_pending")),
+    };
+
+    let settle_result = sqlx::query(
+        "UPDATE disputes SET reply = ?, status = 'resolved', resolution = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+    )
+    .bind(&form.reply)
+    .bind(&form.action)
+    .bind(id)
+    .execute(&mut *tx)
+    .await;
+
+    match settle_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/dashboard?error=dispute_not_pending")),
+        Err(err) => {
+            tracing::error!("failed to settle merchant dispute {}: {}", id, err);
+            return Ok(Redirect::to("/dashboard?error=db_error"));
+        }
+    }
+
+    let credit_result = if form.action == "refund" {
+        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(d.amount_frozen)
+            .bind(d.user_id)
+            .execute(&mut *tx)
+            .await
+    } else {
+        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(d.amount_frozen)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+    };
+
+    match credit_result {
+        Ok(result) if result.rows_affected() > 0 => {}
+        Ok(_) => return Ok(Redirect::to("/dashboard?error=settlement_target_missing")),
+        Err(err) => {
+            tracing::error!("failed to credit merchant dispute {}: {}", id, err);
+            return Ok(Redirect::to("/dashboard?error=db_error"));
+        }
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!("failed to commit merchant dispute {}: {}", id, err);
+        return Ok(Redirect::to("/dashboard?error=db_error"));
     }
 
     Ok(Redirect::to("/dashboard"))
