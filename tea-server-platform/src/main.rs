@@ -285,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin-login/ui", get(handlers::admin_login_ui))
         .route("/logout", get(handlers::logout))
         // User dashboard
+        .route("/user", get(handlers::user_center))
         .route("/dashboard", get(handlers::user_dashboard))
         .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution

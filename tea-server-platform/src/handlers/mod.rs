@@ -195,6 +195,92 @@ pub async fn logout(cookies: Cookies) -> impl IntoResponse {
 
 // ---- User Page Handlers ----
 
+pub async fn user_center(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+
+    // Get full user info
+    let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    let api_key: Option<String> = sqlx::query_scalar("SELECT api_key FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .flatten();
+
+    // Get machines summary
+    let total_machines: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE owner_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    let active_machines: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM machines WHERE owner_id = ? AND status = 'running'")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    // Get servers summary
+    let total_servers: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM servers WHERE owner_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    // Warning letters
+    let unread_warnings: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    let total_warnings: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM warning_letters WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    // Orders summary
+    let total_orders: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM orders WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0,));
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("profile", &user);
+    ctx.insert("api_key", &api_key);
+    ctx.insert("total_machines", &total_machines.0);
+    ctx.insert("active_machines", &active_machines.0);
+    ctx.insert("total_servers", &total_servers.0);
+    ctx.insert("unread_warnings", &unread_warnings.0);
+    ctx.insert("total_warnings", &total_warnings.0);
+    ctx.insert("total_orders", &total_orders.0);
+
+    let rendered = state
+        .templates
+        .render("user/index.html", &ctx)
+        .unwrap_or_else(|e| e.to_string());
+    Ok(Html(rendered))
+}
+
 pub async fn user_dashboard(
     State(state): State<AppState>,
     cookies: Cookies,
