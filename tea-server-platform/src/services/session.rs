@@ -247,6 +247,56 @@ fn generate_hex_key() -> String {
     out
 }
 
+/// Get or generate the platform's SSH private key for agent installation.
+/// The private key is stored encrypted in site_config.
+pub fn get_ssh_private_key() -> String {
+    if let Some(key) = db::get_config_sync("platform_ssh_private_key") {
+        if !key.is_empty() && key != "CHANGE_ME" {
+            return key;
+        }
+    }
+
+    // Generate a new SSH key pair using ssh-keygen
+    let key_path = std::env::temp_dir().join("tea-platform-ssh-key");
+    let pub_key_path = std::env::temp_dir().join("tea-platform-ssh-key.pub");
+
+    // Remove old keys if they exist
+    let _ = std::fs::remove_file(&key_path);
+    let _ = std::fs::remove_file(&pub_key_path);
+
+    let output = std::process::Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-f", key_path.to_str().unwrap(), "-N", "", "-C", "tea-platform-agent"])
+        .output();
+
+    let (private_key, public_key) = match output {
+        Ok(out) if out.status.success() => {
+            let priv_key = std::fs::read_to_string(&key_path).unwrap_or_default();
+            let pub_key = std::fs::read_to_string(&pub_key_path).unwrap_or_default();
+            (priv_key, pub_key)
+        }
+        _ => {
+            tracing::warn!("Failed to generate SSH key pair with ssh-keygen, falling back to temp key");
+            ("FALLBACK_KEY_DO_NOT_USE".to_string(), "FALLBACK_KEY_DO_NOT_USE".to_string())
+        }
+    };
+
+    // Clean up temp files
+    let _ = std::fs::remove_file(&key_path);
+    let _ = std::fs::remove_file(&pub_key_path);
+
+    // Persist the private key and public key
+    let _ = db::set_config_sync("platform_ssh_private_key", &private_key);
+    let _ = db::set_config_sync("platform_ssh_public_key", public_key.trim());
+
+    private_key
+}
+
+/// Get the platform's SSH public key (shown to users for server authorization).
+pub fn get_ssh_public_key() -> String {
+    db::get_config_sync("platform_ssh_public_key")
+        .unwrap_or_else(|| "NOT_YET_GENERATED".to_string())
+}
+
 /// 获取 Agent API Key。管理员配置优先生效；未配置时生成一次并写回配置表。
 pub fn agent_api_key() -> String {
     if let Some(configured) = db::get_config_sync("agent_api_key") {

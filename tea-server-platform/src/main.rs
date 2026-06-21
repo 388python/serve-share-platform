@@ -292,6 +292,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard", get(handlers::user_dashboard))
         .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
+        .route("/servers/ssh-key-setup", get(handlers::ssh_key_setup_page))
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
         .route("/servers/:id/delete", post(handlers::delete_server))

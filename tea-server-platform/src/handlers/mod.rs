@@ -406,6 +406,101 @@ pub async fn servers_page(State(state): State<AppState>, cookies: Cookies) -> im
     }
 }
 
+pub async fn ssh_key_setup_page(State(_state): State<AppState>) -> impl IntoResponse {
+    let site_name = db::get_config_sync("site_name")
+        .unwrap_or_else(|| "茶的服务器公益站".to_string());
+
+    // Generate or get the platform's SSH public key
+    let ssh_public_key = services::session::get_ssh_public_key();
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH 公钥配置 - {}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }}
+        .container {{ max-width: 800px; margin: 0 auto; background: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; }}
+        .key-box {{ background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 15px; font-family: monospace; word-break: break-all; margin: 15px 0; }}
+        .step {{ margin: 20px 0; padding: 15px; background: #f8f9fa; border-left: 4px solid #007bff; }}
+        .step h3 {{ margin-top: 0; color: #007bff; }}
+        code {{ background: #e9ecef; padding: 2px 6px; border-radius: 3px; }}
+        .btn {{ display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; margin-top: 20px; }}
+        .btn:hover {{ background: #0056b3; }}
+        .warning {{ background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SSH 公钥配置</h1>
+        <p>贡献服务器前，你需要将平台的 SSH 公钥添加到你的服务器上，以便平台能够远程连接并安装 Agent。</p>
+
+        <div class="warning">
+            <strong>⚠️ 重要：</strong>添加公钥后，你的服务器将允许平台通过 SSH 无密码登录。请确保只添加到可信的服务器。
+        </div>
+
+        <div class="step">
+            <h3>第一步：复制以下公钥</h3>
+            <div class="key-box" id="pubkey">{}</div>
+            <button onclick="copyKey()" class="btn" style="background:#28a745;">复制公钥</button>
+        </div>
+
+        <div class="step">
+            <h3>第二步：登录你的服务器，执行以下命令</h3>
+            <pre style="background:#f8f9fa;padding:15px;border-radius:4px;overflow-x:auto;"># 创建 .ssh 目录（如果不存在）
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+# 添加公钥到 authorized_keys
+echo "{}" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys</pre>
+        </div>
+
+        <div class="step">
+            <h3>第三步：验证配置</h3>
+            <p>确保你的服务器 SSH 服务允许公钥认证：</p>
+            <pre style="background:#f8f9fa;padding:15px;border-radius:4px;overflow-x:auto;"># 检查 SSH 配置
+grep -E "PubkeyAuthentication|PermitRootLogin" /etc/ssh/sshd_config
+
+# 重启 SSH 服务（可选）
+sudo systemctl restart sshd</pre>
+        </div>
+
+        <div class="step">
+            <h3>第四步：确认防火墙开放</h3>
+            <p>确保服务器的 SSH 端口（默认22）对平台可见：</p>
+            <pre style="background:#f8f9fa;padding:15px;border-radius:4px;overflow-x:auto;"># 检查端口是否开放
+sudo ufw status  # Ubuntu/Debian
+sudo iptables -L -n | grep 22  # CentOS/RHEL</pre>
+        </div>
+
+        <div class="step">
+            <h3>第五步：开始贡献服务器</h3>
+            <p>配置完成后，前往 <a href="/servers/contribute">贡献服务器页面</a> 填写服务器信息。</p>
+        </div>
+
+        <script>
+        function copyKey() {{
+            const key = document.getElementById('pubkey').textContent.trim();
+            navigator.clipboard.writeText(key).then(() => {{
+                alert('公钥已复制到剪贴板！');
+            }});
+        }}
+        </script>
+    </div>
+</body>
+</html>"#,
+        site_name,
+        ssh_public_key,
+        ssh_public_key
+    );
+
+    Html(html)
+}
+
 pub async fn contribute_server_page(
     State(state): State<AppState>,
     cookies: Cookies,
@@ -450,6 +545,10 @@ pub async fn contribute_server_page(
         .flatten();
     ctx.insert("user_ldc", &user_ldc.unwrap_or(0.0));
 
+    // Pass the platform's SSH public key for users to set up server access
+    let ssh_public_key = services::session::get_ssh_public_key();
+    ctx.insert("ssh_public_key", &ssh_public_key);
+
     let rendered = state
         .templates
         .render("user/contribute.html", &ctx)
@@ -462,7 +561,6 @@ pub struct ContributeServerForm {
     pub name: String,
     pub ip: String,
     pub ssh_port: Option<i32>,
-    pub ssh_key: String,
     pub cpu_cores: i32,
     pub memory_gb: f64,
     pub bandwidth_mbps: Option<f64>,
@@ -495,10 +593,9 @@ pub async fn contribute_server_submit(
     // ---- Input Validation ----
     let name = form.name.trim();
     let ip = form.ip.trim();
-    let ssh_key = form.ssh_key.trim();
 
     // Validate required fields are not empty
-    if name.is_empty() || ip.is_empty() || ssh_key.is_empty() {
+    if name.is_empty() || ip.is_empty() {
         tracing::warn!("Server contribution failed: empty required fields");
         return Ok(Redirect::to("/servers/contribute?error=empty_fields").into_response());
     }
@@ -618,13 +715,12 @@ pub async fn contribute_server_submit(
     let temp_proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(name)
     .bind(ip)
     .bind(ssh_port)
-    .bind(ssh_key)
     .bind(cpu_cores)
     .bind(memory_gb)
     .bind(bandwidth_mbps)
@@ -668,9 +764,8 @@ pub async fn contribute_server_submit(
 
             // Spawn background task to install agent via ssh2
             let ip_clone = ip.to_string();
-            let ssh_key_clone = ssh_key.to_string();
             tokio::spawn(async move {
-                install_agent_ssh(server_id, &ip_clone, ssh_port, &ssh_key_clone).await;
+                install_agent_ssh(server_id, &ip_clone, ssh_port).await;
             });
 
             Ok(Redirect::to("/dashboard").into_response())
@@ -684,13 +779,28 @@ pub async fn contribute_server_submit(
     }
 }
 
-async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
+    // Get platform URL and agent credentials for remote install
+    let platform_domain = db::get_config_sync("site_url")
+        .or_else(|| db::get_config_sync("platform_domain"))
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+    let install_url = format!("{}/agent/install.sh", platform_domain.trim_end_matches('/'));
+    let agent_api_key = services::session::agent_api_key();
+    let virt_type = db::get_config_sync("default_virt_type")
+        .unwrap_or_else(|| "lxd".to_string());
+    // Use the platform's own SSH key for connecting to contributed servers
+    let ssh_private_key = services::session::get_ssh_private_key();
+
     // Attempt to connect via SSH and run agent installation
     // This runs in the background
     let _ = tokio::task::spawn_blocking({
         let ip = _ip.to_string();
-        let ssh_key = _ssh_key.to_string();
+        let ssh_private_key = ssh_private_key.clone();
         let server_id = _server_id;
+        let install_url = install_url.clone();
+        let agent_api_key = agent_api_key.clone();
+        let virt_type = virt_type.clone();
+        let platform_domain = platform_domain.clone();
         move || {
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
@@ -704,15 +814,20 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &st
             if session.handshake().is_err() {
                 return;
             }
-            if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
+            // Use platform's SSH private key for authentication
+            if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_private_key).is_err() {
                 return;
             }
-            // Run agent install command
+            // Run agent install command with platform URL, virt type and agent API key
             if let Ok(mut channel) = session.channel_session() {
-                if channel
-                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
-                    .is_ok()
-                {
+                let cmd = format!(
+                    "curl -sSL {} | bash -s -- {} {} {}",
+                    install_url,
+                    virt_type,
+                    agent_api_key,
+                    platform_domain
+                );
+                if channel.exec(&cmd).is_ok() {
                     let _ = channel.wait_close();
                     if channel.exit_status().unwrap_or(1) == 0 {
                         // Detect Linux version via uname -r
