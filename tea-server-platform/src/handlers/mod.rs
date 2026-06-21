@@ -171,7 +171,7 @@ fn set_session_cookie(
 
     let mut cookie = Cookie::new("session", cookie_value);
     cookie.set_path("/");
-    cookie.set_max_age(Duration::seconds(SESSION_TTL_SECS as i32));
+    cookie.set_max_age(Duration::seconds(SESSION_TTL_SECS));
     cookie.set_http_only(true);
     cookie.set_same_site(SameSite::Lax);
     cookies.add(cookie);
@@ -305,7 +305,7 @@ pub async fn logout(cookies: Cookies) -> impl IntoResponse {
     cookie.set_path("/");
     cookie.set_max_age(Duration::seconds(0));
     cookies.add(cookie);
-    Redirect::to("/")
+    Redirect::to("/").into_response()
 }
 
 // ---- User Page Handlers ----
@@ -376,7 +376,7 @@ pub async fn regenerate_api_key(cookies: Cookies) -> impl IntoResponse {
         .bind(user_id)
         .execute(pool)
         .await;
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard").into_response()
 }
 
 pub async fn contribute_server_page(
@@ -492,7 +492,7 @@ pub async fn delete_server(
         .execute(pool)
         .await;
 
-    Redirect::to("/servers/contribute")
+    Redirect::to("/servers/contribute").into_response()
 }
 
 pub async fn buy_premium(
@@ -539,7 +539,7 @@ pub async fn buy_premium(
     .execute(pool)
     .await;
 
-    Redirect::to("/servers/contribute")
+    Redirect::to("/servers/contribute").into_response()
 }
 
 pub async fn machine_market(
@@ -619,16 +619,16 @@ pub async fn create_machine(
     let duration_days = form.duration_days.unwrap_or(1).max(1);
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
 
-    // 检查服务器是否存在且活跃
-    let server: Option<(i64, String, f64, f64, f64)> = sqlx::query_as(
-        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
+    // 检查服务器是否存在且活跃，包括资源总量
+    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String)> = sqlx::query_as(
+        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(form.server_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (_sid, _ip, cpu_mul, mem_mul, disk_mul) = match server {
+    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt) = match server {
         Some(s) => s,
         None => return Redirect::to("/machines?error=server_unavailable").into_response(),
     };
@@ -648,15 +648,65 @@ pub async fn create_machine(
         return Redirect::to("/machines?error=insufficient_funds").into_response();
     }
 
-    // 扣费并创建机器
-    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+    // 在事务中检查服务器剩余资源并创建机器
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!("Failed to begin transaction: {}", e);
+            return Redirect::to("/machines?error=db").into_response();
+        }
+    };
+
+    // 原子查询当前已使用资源
+    let used: (Option<i64>, Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0.0), COALESCE(SUM(disk_gb), 0.0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
+    )
+    .bind(sid)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap_or((Some(0), Some(0.0), Some(0.0)));
+
+    let used_cpu = used.0.unwrap_or(0) as i32;
+    let used_mem = used.1.unwrap_or(0.0);
+    let used_disk = used.2.unwrap_or(0.0);
+
+    // 检查是否有足够的剩余资源
+    if used_cpu + form.cpu_cores > total_cpu {
+        let _ = tx.rollback().await;
+        return Redirect::to("/machines?error=insufficient_cpu").into_response();
+    }
+    if used_mem + form.memory_gb > total_mem {
+        let _ = tx.rollback().await;
+        return Redirect::to("/machines?error=insufficient_memory").into_response();
+    }
+    if used_disk + form.disk_gb > total_disk {
+        let _ = tx.rollback().await;
+        return Redirect::to("/machines?error=insufficient_disk").into_response();
+    }
+
+    // 扣费
+    let debit = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?")
         .bind(cost)
         .bind(user_id)
-        .execute(pool)
+        .bind(cost)
+        .execute(&mut *tx)
         .await;
 
+    match debit {
+        Ok(res) if res.rows_affected() > 0 => {}
+        Ok(_) => {
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=insufficient_funds").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Failed to debit: {}", e);
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
+        }
+    }
+
     let insert = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, created_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, DATETIME('now', format('+{} days', ?)), NULL, CURRENT_TIMESTAMP)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, CURRENT_TIMESTAMP)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -666,16 +716,44 @@ pub async fn create_machine(
     .bind(&virt_type)
     .bind(0.01)
     .bind(duration_days)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
 
-    match insert {
-        Ok(_) => Redirect::to("/machines").into_response(),
+    let machine_id = match insert {
+        Ok(res) => res.last_insert_rowid(),
         Err(e) => {
-            tracing::error!("Failed to create machine: {}", e);
-            Redirect::to("/machines?error=db").into_response()
+            tracing::error!("Failed to insert machine: {}", e);
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
         }
+    };
+
+    if let Err(e) = tx.commit().await {
+        tracing::error!("Failed to commit transaction: {}", e);
+        return Redirect::to("/machines?error=db").into_response();
     }
+
+    // 调用 Agent 创建 VM（使用 machine_lifecycle 服务，含重试和退款）
+    let machine_name = format!("machine-{}", machine_id);
+    services::machine_lifecycle::spawn_agent_create_job(
+        services::machine_lifecycle::MachineProvisioningJob {
+            machine_id,
+            user_id,
+            owner_id: sid,
+            server_ip: ip,
+            machine_name,
+            virt_type,
+            cpu: form.cpu_cores,
+            memory_gb: form.memory_gb,
+            disk_gb: form.disk_gb,
+            agent_key: "tea-platform-agent-key".to_string(),
+            regular_used: cost,
+            bonus_used: 0.0,
+            used_hours: hours,
+        },
+    );
+
+    Redirect::to("/machines").into_response()
 }
 
 pub async fn my_machines(
@@ -729,7 +807,7 @@ pub async fn stop_machine(
         .execute(pool)
         .await;
 
-    Redirect::to("/machines")
+    Redirect::to("/machines").into_response()
 }
 
 pub async fn delete_machine(
@@ -757,7 +835,7 @@ pub async fn delete_machine(
         .execute(pool)
         .await;
 
-    Redirect::to("/machines")
+    Redirect::to("/machines").into_response()
 }
 
 pub async fn machine_connect(
@@ -829,7 +907,7 @@ pub async fn free_plan(
             .await;
     }
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard").into_response()
 }
 
 pub async fn checkin(
@@ -856,7 +934,7 @@ pub async fn checkin(
         .execute(pool)
         .await;
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard").into_response()
 }
 
 // ---- Recharge / Withdraw ----
@@ -895,7 +973,7 @@ pub async fn recharge_callback(
             .await;
     }
 
-    Redirect::to("/dashboard")
+    Redirect::to("/dashboard").into_response()
 }
 
 pub async fn withdraw_page(
@@ -934,7 +1012,7 @@ pub async fn withdraw_submit(
         Err(redirect) => return redirect.into_response(),
     };
     // 占位：实际提现流程需接入支付系统
-    Redirect::to("/dashboard?msg=withdraw_submitted")
+    Redirect::to("/dashboard?msg=withdraw_submitted").into_response()
 }
 
 // ---- Stats Page ----
@@ -1024,7 +1102,7 @@ pub async fn admin_config_page(
     build_base_context(&cookies, &mut ctx);
 
     // 收集所有站点配置
-    for key in &[
+    for key in [
         "site_name", "checkin_enabled", "free_plan_enabled", "registration_enabled",
         "require_invite", "checkin_reward", "payment_mode", "ldc_client_id", "ldc_client_secret",
         "admin_api_key", "traffic_monitor_enabled", "traffic_bandwidth_threshold_mbps",
@@ -1036,8 +1114,7 @@ pub async fn admin_config_page(
         .bind(key)
         .fetch_optional(pool)
         .await
-        .unwrap_or(None)
-        .flatten();
+        .unwrap_or(None);
         ctx.insert(key, &value.unwrap_or_default());
     }
 
@@ -1080,7 +1157,7 @@ pub async fn admin_config_save(
         }
     }
 
-    Redirect::to("/admin/config")
+    Redirect::to("/admin/config").into_response()
 }
 
 pub async fn admin_users(
@@ -1141,7 +1218,7 @@ pub async fn admin_user_edit(
             .await;
     }
 
-    Redirect::to("/admin/users")
+    Redirect::to("/admin/users").into_response()
 }
 
 pub async fn admin_servers(
@@ -1182,7 +1259,7 @@ pub async fn admin_servers_toggle(
         .execute(pool)
         .await;
 
-    Redirect::to("/admin/servers")
+    Redirect::to("/admin/servers").into_response()
 }
 
 pub async fn admin_oauth_apps(
@@ -1242,7 +1319,7 @@ pub async fn admin_oauth_apps_create(
     .execute(pool)
     .await;
 
-    Redirect::to("/admin/oauth-apps")
+    Redirect::to("/admin/oauth-apps").into_response()
 }
 
 // ---- Balance to Code ----
@@ -1294,5 +1371,5 @@ pub async fn balance_to_code(
     .execute(pool)
     .await;
 
-    Redirect::to(&format!("/dashboard?code={}", code))
+    Redirect::to(&format!("/dashboard?code={}", code)).into_response()
 }

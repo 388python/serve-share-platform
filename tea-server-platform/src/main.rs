@@ -281,13 +281,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines/:id/stop", post(handlers::stop_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
-        // Disputes
-        .route("/disputes/new", get(handlers::dispute_new_page))
-        .route("/disputes/create", post(handlers::dispute_create))
-        .route("/disputes/:id/reply", post(handlers::merchant_dispute_reply))
+        // Disputes - 预留，未实现
         // Recharge
-        .route("/recharge", get(handlers::recharge_page))
-        .route("/recharge", post(handlers::create_recharge_order))
         .route("/recharge/callback", get(handlers::recharge_callback))
         // Withdraw
         .route("/withdraw", get(handlers::withdraw_page))
@@ -296,15 +291,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/checkin", post(handlers::checkin))
         // Free plan
         .route("/free-plan", post(handlers::free_plan))
-        // Redeem
-        .route("/redeem", get(handlers::redeem_page))
-        .route("/redeem", post(handlers::redeem_submit))
-        // Packages
-        .route("/packages", get(handlers::packages_page))
-        .route("/packages/buy", post(handlers::buy_package))
         // Balance to code
-        .route("/balance-to-code", get(handlers::balance_to_code_page))
-        .route("/balance-to-code", post(handlers::balance_to_code_submit))
+        .route("/balance-to-code", post(handlers::balance_to_code))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
@@ -315,18 +303,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/users/:id", post(handlers::admin_user_edit))
         .route("/admin/servers", get(handlers::admin_servers))
         .route("/admin/servers/:id/toggle", post(handlers::admin_servers_toggle))
-        .route("/admin/machines", get(handlers::admin_machines))
-        .route("/admin/packages", get(handlers::admin_packages))
-        .route("/admin/packages/create", post(handlers::admin_package_create))
-        .route("/admin/packages/:id/delete", post(handlers::admin_package_delete))
-        .route("/admin/codes", get(handlers::admin_generate_codes))
-        .route("/admin/codes/generate", post(handlers::admin_generate_codes_submit))
-        .route("/admin/invites", get(handlers::admin_invites))
-        .route("/admin/invites/generate", post(handlers::admin_generate_invites))
-        .route("/admin/orders", get(handlers::admin_orders))
-        .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
-        .route("/admin/disputes", get(handlers::admin_disputes))
-        .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
         .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
         // API routes (RESTful JSON) - mounted under /api prefix
