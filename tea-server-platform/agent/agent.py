@@ -678,7 +678,105 @@ def report_stats_loop():
         
         time.sleep(60)  # Report every 60 seconds
 
+def detect_hardware():
+    """Detect hardware specs of the host machine"""
+    hardware = {}
+
+    # CPU cores
+    try:
+        result = subprocess.run(
+            ["nproc", "--all"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            hardware["cpu_cores"] = int(result.stdout.strip())
+    except:
+        pass
+
+    # Memory (GB)
+    try:
+        result = subprocess.run(
+            ["grep", "MemTotal", "/proc/meminfo"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                kb = int(parts[1])
+                hardware["memory_gb"] = round(kb / 1024.0 / 1024.0, 2)
+    except:
+        pass
+
+    # Disk (GB)
+    try:
+        result = subprocess.run(
+            ["df", "-BG", "/"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().split("\n")
+            if len(lines) >= 2:
+                parts = lines[1].split()
+                if len(parts) >= 2:
+                    size_str = parts[1].rstrip("G").strip()
+                    if size_str.isdigit():
+                        hardware["disk_gb"] = int(size_str)
+    except:
+        pass
+
+    # Linux version
+    try:
+        result = subprocess.run(
+            ["bash", "-c", "cat /etc/os-release 2>/dev/null | grep -E '^NAME=|^VERSION=' | tr '\\n' ' ' | sed 's/NAME=//;s/VERSION=//g' | tr -d '\"' || uname -srm"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            hardware["linux_version"] = result.stdout.strip()
+    except:
+        pass
+
+    return hardware
+
+
+def register_with_platform():
+    """Register this agent with the platform and report hardware specs"""
+    hardware = detect_hardware()
+    payload = {
+        "virt_type": VIRT_TYPE,
+        "platform_url": PLATFORM_URL,
+    }
+    payload.update(hardware)
+
+    # Include public IP as reported to platform
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        payload["ip"] = s.getsockname()[0]
+        s.close()
+    except:
+        pass
+
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{PLATFORM_URL.rstrip('/')}/api/v1/agent/register",
+            data=data,
+            headers={"Content-Type": "application/json", "X-API-Key": API_KEY},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            result = json.loads(response.read().decode())
+            print(f"[agent] Registered with platform: {result}")
+    except Exception as e:
+        print(f"[agent] Failed to register with platform: {e}")
+
+
 if __name__ == "__main__":
+    # Register with platform on startup - reports hardware specs
+    register_thread = threading.Thread(target=register_with_platform, daemon=True)
+    register_thread.start()
+
     # Start stats reporting thread
     stats_thread = threading.Thread(target=report_stats_loop, daemon=True)
     stats_thread.start()

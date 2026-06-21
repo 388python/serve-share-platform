@@ -388,16 +388,38 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
     let agent_api_key = services::session::agent_api_key();
     let virt_type = db::get_config_sync("default_virt_type")
         .unwrap_or_else(|| "lxd".to_string());
+    // Use the platform's own SSH key if the user did not provide one; otherwise
+    // fall back to the key they provided.
+    let effective_ssh_key: String = if ssh_key.is_empty() || ssh_key == "AUTO" {
+        services::session::get_ssh_private_key()
+    } else {
+        ssh_key.to_string()
+    };
 
     let _ = tokio::task::spawn_blocking({
         let ip = ip.to_string();
-        let ssh_key = ssh_key.to_string();
+        let ssh_key = effective_ssh_key.clone();
         let port = port;
         let server_id = _server_id;
         let install_url = install_url.clone();
         let agent_api_key = agent_api_key.clone();
         let virt_type = virt_type.clone();
+        let platform_domain = platform_domain.clone();
         move || {
+            // Helper to run a command over SSH and capture output
+            fn ssh_exec(session: &ssh2::Session, cmd: &str) -> Option<String> {
+                if let Ok(mut channel) = session.channel_session() {
+                    let _ = channel.exec(cmd);
+                    let _ = channel.wait_close();
+                    let mut s = String::new();
+                    use std::io::Read;
+                    let _ = channel.read_to_string(&mut s);
+                    Some(s.trim().to_string())
+                } else {
+                    None
+                }
+            }
+
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, port)) {
                 Ok(tcp) => tcp,
                 Err(_) => return,
@@ -413,8 +435,32 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
             if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
                 return;
             }
-            if let Ok(mut channel) = session.channel_session() {
-                // Pass virt_type, api_key, and platform_url to install script
+
+            // ---- Phase 1: Detect server hardware via SSH ----
+            let detected_cpu: i32 = ssh_exec(&session, "nproc --all 2>/dev/null || grep -c ^processor /proc/cpuinfo")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+
+            let detected_memory: f64 = {
+                let raw = ssh_exec(&session, "grep MemTotal /proc/meminfo | awk '{print $2}' 2>/dev/null");
+                raw.and_then(|s| s.parse::<i64>().ok())
+                    .map(|kb| kb as f64 / 1024.0 / 1024.0)
+                    .unwrap_or(1.0)
+            };
+
+            let detected_disk: f64 = {
+                let raw = ssh_exec(&session, "df -BG / 2>/dev/null | awk 'NR==2 {print $2}' | tr -d 'G'");
+                raw.and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(10.0)
+            };
+
+            let detected_linux = ssh_exec(
+                &session,
+                "cat /etc/os-release 2>/dev/null | grep -E '^NAME=|^VERSION=' | tr '\\n' ' ' | sed 's/NAME=//;s/VERSION=//g' | tr -d '\"' || uname -srm"
+            ).unwrap_or_default();
+
+            // ---- Phase 2: Run Agent install ----
+            let install_success = if let Ok(mut channel) = session.channel_session() {
                 let cmd = format!(
                     "curl -sSL {} | bash -s -- {} {} {}",
                     install_url,
@@ -424,13 +470,33 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
                 );
                 if channel.exec(&cmd).is_ok() {
                     let _ = channel.wait_close();
-                    if channel.exit_status().unwrap_or(1) == 0 {
-                        let pool = db::get_db();
-                        let _ = sqlx::query("UPDATE servers SET agent_installed = 1 WHERE id = ?")
-                            .bind(server_id)
-                            .execute(pool);
-                    }
+                    channel.exit_status().unwrap_or(1) == 0
+                } else {
+                    false
                 }
+            } else {
+                false
+            };
+
+            if install_success {
+                let pool = db::get_db();
+                let _ = sqlx::query(
+                    "UPDATE servers SET \
+                        cpu_cores = ?, \
+                        memory_gb = ?, \
+                        disk_gb = ?, \
+                        bandwidth_mbps = COALESCE(NULLIF(bandwidth_mbps, 0), ?), \
+                        agent_installed = 1, \
+                        linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END \
+                        WHERE id = ?",
+                )
+                .bind(detected_cpu)
+                .bind(detected_memory)
+                .bind(detected_disk)
+                .bind(100.0_f64)
+                .bind(&detected_linux)
+                .bind(server_id)
+                .execute(pool);
             }
         }
     })
@@ -1563,6 +1629,125 @@ pub struct MachineStatsReport {
     pub process_count: Option<i64>,
 }
 
+// Agent server hardware registration payload
+#[derive(Deserialize)]
+pub struct AgentRegisterRequest {
+    pub server_id: Option<i64>,
+    pub ip: Option<String>,
+    pub virt_type: Option<String>,
+    pub platform_url: Option<String>,
+    pub cpu_cores: Option<i32>,
+    pub memory_gb: Option<f64>,
+    pub disk_gb: Option<f64>,
+    pub bandwidth_mbps: Option<f64>,
+    pub linux_version: Option<String>,
+}
+
+// POST /api/v1/agent/register - Agent registers itself and optionally updates server hardware specs
+async fn api_agent_register(
+    headers: HeaderMap,
+    Json(form): Json<AgentRegisterRequest>,
+) -> impl IntoResponse {
+    if !verify_agent_api_key(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
+    }
+
+    let pool = db::get_db();
+
+    // Try to identify the server by server_id first, then by IP
+    if let Some(server_id) = form.server_id {
+        let _ = sqlx::query(
+            "UPDATE servers SET \
+                virt_type = COALESCE(?, virt_type), \
+                cpu_cores = COALESCE(?, cpu_cores), \
+                memory_gb = COALESCE(?, memory_gb), \
+                disk_gb = COALESCE(?, disk_gb), \
+                bandwidth_mbps = COALESCE(?, bandwidth_mbps), \
+                linux_version = COALESCE(?, linux_version), \
+                agent_installed = 1 \
+            WHERE id = ?",
+        )
+        .bind(form.virt_type.clone())
+        .bind(form.cpu_cores)
+        .bind(form.memory_gb)
+        .bind(form.disk_gb)
+        .bind(form.bandwidth_mbps)
+        .bind(form.linux_version.clone())
+        .bind(server_id)
+        .execute(pool)
+        .await;
+
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "data": {
+                    "status": "ok",
+                    "server_id": server_id,
+                    "message": "Server agent configuration updated",
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    // Fallback: try to match by IP
+    if let Some(ip) = form.ip.as_ref() {
+        let found: Option<i64> = sqlx::query_scalar("SELECT id FROM servers WHERE ip = ?")
+            .bind(ip)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
+
+        if let Some(server_id) = found {
+            let _ = sqlx::query(
+                "UPDATE servers SET \
+                    virt_type = COALESCE(?, virt_type), \
+                    cpu_cores = COALESCE(?, cpu_cores), \
+                    memory_gb = COALESCE(?, memory_gb), \
+                    disk_gb = COALESCE(?, disk_gb), \
+                    bandwidth_mbps = COALESCE(?, bandwidth_mbps), \
+                    linux_version = COALESCE(?, linux_version), \
+                    agent_installed = 1 \
+                WHERE id = ?",
+            )
+            .bind(form.virt_type.as_ref())
+            .bind(form.cpu_cores)
+            .bind(form.memory_gb)
+            .bind(form.disk_gb)
+            .bind(form.bandwidth_mbps)
+            .bind(form.linux_version.as_ref())
+            .bind(server_id)
+            .execute(pool)
+            .await;
+
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true,
+                    "data": {
+                        "status": "ok",
+                        "server_id": server_id,
+                        "message": "Server agent configuration updated by IP",
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": "server_not_found", "message": "Could not identify server by server_id or ip"})),
+    )
+        .into_response()
+}
+
 // POST /api/v1/agent/stats - Agent reports machine stats
 async fn api_agent_stats(
     headers: HeaderMap,
@@ -2231,6 +2416,7 @@ pub fn router(_state: AppState) -> Router<AppState> {
         )
         .route("/v1/admin/machines", get(api_admin_machines))
         .route("/v1/admin/machines-stats", get(api_admin_machines_stats))
+        .route("/v1/agent/register", post(api_agent_register))
         .route("/v1/agent/stats", post(api_agent_stats))
         .route(
             "/v1/admin/config",

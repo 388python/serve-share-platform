@@ -47,25 +47,9 @@
                         <label for="ssh_port" class="form-label">SSH 端口</label>
                         <input type="number" class="form-control" id="ssh_port" name="ssh_port" value="22">
                     </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="cpu_cores" class="form-label">CPU 核心数</label>
-                            <input type="number" class="form-control" id="cpu_cores" name="cpu_cores" required min="1">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="memory_gb" class="form-label">内存 (GB)</label>
-                            <input type="number" class="form-control" id="memory_gb" name="memory_gb" required min="0" step="0.1">
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="bandwidth_mbps" class="form-label">带宽 (Mbps)</label>
-                            <input type="number" class="form-control" id="bandwidth_mbps" name="bandwidth_mbps" step="1">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="disk_gb" class="form-label">磁盘 (GB)</label>
-                            <input type="number" class="form-control" id="disk_gb" name="disk_gb" required min="1" step="0.1">
-                        </div>
+
+                    <div class="alert alert-info mb-3 small" role="alert">
+                        <strong>服务器配置将由 Agent 自动探测：</strong>平台连接服务器后将自动检测 CPU 核心数、内存、磁盘大小、操作系统版本等信息，无需手动填写。
                     </div>
 
                     <h5 class="mt-3 mb-3">资源倍率设置</h5>

@@ -561,10 +561,6 @@ pub struct ContributeServerForm {
     pub name: String,
     pub ip: String,
     pub ssh_port: Option<i32>,
-    pub cpu_cores: i32,
-    pub memory_gb: f64,
-    pub bandwidth_mbps: Option<f64>,
-    pub disk_gb: f64,
     pub cpu_multiplier: Option<f64>,
     pub memory_multiplier: Option<f64>,
     pub bandwidth_multiplier: Option<f64>,
@@ -617,24 +613,6 @@ pub async fn contribute_server_submit(
         return Ok(Redirect::to("/servers/contribute?error=invalid_ssh_port").into_response());
     }
 
-    // Validate CPU cores
-    let cpu_cores = form.cpu_cores;
-    if cpu_cores < 1 || cpu_cores > 256 {
-        return Ok(Redirect::to("/servers/contribute?error=invalid_cpu").into_response());
-    }
-
-    // Validate memory
-    let memory_gb = form.memory_gb;
-    if memory_gb < 0.1 || memory_gb > 1000.0 {
-        return Ok(Redirect::to("/servers/contribute?error=invalid_memory").into_response());
-    }
-
-    // Validate disk
-    let disk_gb = form.disk_gb;
-    if disk_gb < 1.0 || disk_gb > 100000.0 {
-        return Ok(Redirect::to("/servers/contribute?error=invalid_disk").into_response());
-    }
-
     // Validate expires_days
     let expires_days = form.expires_days.unwrap_or(30);
     if expires_days < 1 || expires_days > 3650 {
@@ -660,7 +638,14 @@ pub async fn contribute_server_submit(
         db::get_config_sync("virt_type").unwrap_or_else(|| "lxd".to_string())
     };
 
-    let bandwidth_mbps = form.bandwidth_mbps.unwrap_or(0.0);
+    // Server hardware specs (cpu_cores, memory_gb, disk_gb, bandwidth_mbps)
+    // will be auto-detected by the Agent after installation.
+    // We use safe placeholder values initially; the Agent will overwrite them.
+    let cpu_cores: i32 = 1;
+    let memory_gb: f64 = 1.0;
+    let disk_gb: f64 = 10.0;
+    let bandwidth_mbps: f64 = 0.0;
+
     let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
     let mem_mult = form.memory_multiplier.unwrap_or(1.0);
     let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
@@ -802,6 +787,20 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
         let virt_type = virt_type.clone();
         let platform_domain = platform_domain.clone();
         move || {
+            // Helper to run a command over SSH and capture output
+            fn ssh_exec(session: &ssh2::Session, cmd: &str) -> Option<String> {
+                if let Ok(mut channel) = session.channel_session() {
+                    let _ = channel.exec(cmd);
+                    let _ = channel.wait_close();
+                    let mut s = String::new();
+                    use std::io::Read;
+                    let _ = channel.read_to_string(&mut s);
+                    Some(s.trim().to_string())
+                } else {
+                    None
+                }
+            }
+
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
                 Err(_) => return,
@@ -818,8 +817,36 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
             if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_private_key).is_err() {
                 return;
             }
-            // Run agent install command with platform URL, virt type and agent API key
-            if let Ok(mut channel) = session.channel_session() {
+
+            // ---- Phase 1: Detect server hardware ----
+            // CPU cores from nproc
+            let detected_cpu: i32 = ssh_exec(&session, "nproc --all 2>/dev/null || grep -c ^processor /proc/cpuinfo")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
+
+            // Memory GB from /proc/meminfo (MemTotal in kB)
+            let detected_memory: f64 = {
+                let raw = ssh_exec(&session, "grep MemTotal /proc/meminfo | awk '{print $2}' 2>/dev/null");
+                raw.and_then(|s| s.parse::<i64>().ok())
+                    .map(|kb| kb as f64 / 1024.0 / 1024.0)
+                    .unwrap_or(1.0)
+            };
+
+            // Disk GB from df - total root filesystem capacity
+            let detected_disk: f64 = {
+                let raw = ssh_exec(&session, "df -BG / 2>/dev/null | awk 'NR==2 {print $2}' | tr -d 'G'");
+                raw.and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(10.0)
+            };
+
+            // Detect Linux distribution
+            let detected_linux = ssh_exec(
+                &session,
+                "cat /etc/os-release 2>/dev/null | grep -E '^NAME=|^VERSION=' | tr '\\n' ' ' | sed 's/NAME=//;s/VERSION=//g' | tr -d '\"' || uname -srm"
+            ).unwrap_or_default();
+
+            // ---- Phase 2: Run Agent install command ----
+            let install_success = if let Ok(mut channel) = session.channel_session() {
                 let cmd = format!(
                     "curl -sSL {} | bash -s -- {} {} {}",
                     install_url,
@@ -829,28 +856,34 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
                 );
                 if channel.exec(&cmd).is_ok() {
                     let _ = channel.wait_close();
-                    if channel.exit_status().unwrap_or(1) == 0 {
-                        // Detect Linux version via uname -r
-                        let mut detected_linux_version = String::new();
-                        if let Ok(mut ver_channel) = session.channel_session() {
-                            if ver_channel.exec("uname -r").is_ok() {
-                                use std::io::Read;
-                                let _ = ver_channel.read_to_string(&mut detected_linux_version);
-                                detected_linux_version = detected_linux_version.trim().to_string();
-                                let _ = ver_channel.wait_close();
-                            }
-                        }
-
-                        // Mark agent as installed, backfill linux_version if empty
-                        let pool = db::get_db();
-                        let _ = sqlx::query(
-                            "UPDATE servers SET agent_installed = 1, linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END WHERE id = ?",
-                        )
-                        .bind(&detected_linux_version)
-                        .bind(server_id)
-                        .execute(pool);
-                    }
+                    channel.exit_status().unwrap_or(1) == 0
+                } else {
+                    false
                 }
+            } else {
+                false
+            };
+
+            if install_success {
+                // Update servers row with detected hardware specs
+                let pool = db::get_db();
+                let _ = sqlx::query(
+                    "UPDATE servers SET \
+                        cpu_cores = ?, \
+                        memory_gb = ?, \
+                        disk_gb = ?, \
+                        bandwidth_mbps = COALESCE(NULLIF(bandwidth_mbps, 0), ?), \
+                        agent_installed = 1, \
+                        linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END \
+                        WHERE id = ?",
+                )
+                .bind(detected_cpu)
+                .bind(detected_memory)
+                .bind(detected_disk)
+                .bind(100.0_f64) // default bandwidth placeholder if none was set
+                .bind(&detected_linux)
+                .bind(server_id)
+                .execute(pool);
             }
         }
     })
