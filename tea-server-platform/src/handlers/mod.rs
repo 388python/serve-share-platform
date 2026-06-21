@@ -651,7 +651,7 @@ pub async fn contribute_server_submit(
     let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
     let disk_mult = form.disk_multiplier.unwrap_or(1.0);
     let use_bonus = form.use_bonus.unwrap_or(false);
-    let expose_ip = form.expose_ip.unwrap_or(false);
+    let expose_ip = true; // 强制暴露 IP
     let nat_port_start = form.nat_port_start.unwrap_or(0);
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
