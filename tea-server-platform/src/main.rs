@@ -4,11 +4,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::Utc;
 use std::sync::Arc;
 use tera::{Context, Tera};
 use tower_cookies::{cookie::time::Duration, Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 use tracing_subscriber;
+
+use crate::models::Server;
 
 mod config;
 mod db;
@@ -378,6 +381,17 @@ async fn main() -> anyhow::Result<()> {
 // ---- Route Handlers ----
 
 async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
+    let pool = db::get_db();
+
+    // 只查询激活且未过期的服务器
+    let servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY is_premium DESC, created_at DESC",
+    )
+    .bind(Utc::now())
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
     let cfg = config::AppConfig::get();
     let site_name = db::get_config("site_name")
         .await
@@ -385,8 +399,9 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
 
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
+    ctx.insert("servers", &servers);
 
-    // 从签名 cookie 中读取会话 — 无效/篡改的会话将被忽略
+    // 已登录用户信息
     if let Some(session) = services::session::get_session_checked(&cookies) {
         ctx.insert("user_name", &session.username);
         ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
@@ -396,7 +411,7 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
 
     let rendered = state
         .templates
-        .render("user/index.html", &ctx)
+        .render("servers.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Html(rendered)
 }
