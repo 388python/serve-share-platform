@@ -399,10 +399,55 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
     Html(rendered)
 }
 
-async fn login_page(State(_state): State<AppState>) -> impl IntoResponse {
+async fn login_page(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
-    let oauth_url = services::auth::create_oauth_url(cfg);
-    Redirect::to(&oauth_url)
+
+    // 检查关键配置
+    if cfg.linuxdo_oauth.client_id.is_empty() {
+        tracing::error!("LINUXDO_CLIENT_ID is not configured — OAuth login unavailable");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "服务器未配置 LinuxDo OAuth Client ID，请在 .env 中设置 LINUXDO_CLIENT_ID",
+        )
+            .into_response();
+    }
+    if cfg.linuxdo_oauth.redirect_uri.is_empty() {
+        tracing::error!("OAuth redirect_uri is empty — check PLATFORM_DOMAIN");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "服务器未配置 OAuth 回调地址，请在 .env 中设置 PLATFORM_DOMAIN",
+        )
+            .into_response();
+    }
+
+    // 获取签名的 state（由 auth.rs 生成：timestamp.nonce.hmac_sha256）
+    let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
+
+    // 设置 state cookie — 用于回调时的 CSRF 校验
+    let mut state_cookie = Cookie::new("oauth_state", state_value);
+    state_cookie.set_path("/");
+    state_cookie.set_max_age(Duration::seconds(600));
+    state_cookie.set_http_only(true);
+    state_cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+    cookies.add(state_cookie);
+
+    // 如果用户传入 invite_code，保存到 cookie，供回调时使用（LinuxDo 不会回传此参数）
+    if let Some(invite_code) = params.get("invite_code") {
+        if !invite_code.is_empty() {
+            let mut invite_cookie = Cookie::new("invite_code", invite_code.clone());
+            invite_cookie.set_path("/");
+            invite_cookie.set_max_age(Duration::seconds(600));
+            invite_cookie.set_http_only(true);
+            invite_cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+            cookies.add(invite_cookie);
+        }
+    }
+
+    Redirect::to(&oauth_url).into_response()
 }
 
 async fn auth_callback(
@@ -412,12 +457,43 @@ async fn auth_callback(
 ) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
 
+    // 提取 OAuth code
     let code = match params.get("code") {
         Some(c) => c.clone(),
         None => return Redirect::to("/").into_response(),
     };
 
-    // Exchange code for token
+    // ---- CSRF + state 签名校验 ----
+    // 1. cookie 中有 state：与回调中的 state 精确比对，然后验证签名和有效期
+    // 2. cookie 中无 state：仍然验证签名（降级模式）
+    let cookie_state = cookies.get("oauth_state").map(|c| c.value().to_string());
+    if let Some(expected_state) = cookie_state {
+        if let Some(incoming_state) = params.get("state") {
+            // 精确匹配（防 CSRF）
+            if incoming_state != &expected_state {
+                tracing::warn!("OAuth state mismatch — possible CSRF attack");
+                return Redirect::to("/").into_response();
+            }
+            // 签名 + 有效期验证（防篡改和重放）
+            if !services::auth::verify_state(incoming_state) {
+                tracing::warn!(
+                    "OAuth state signature invalid or expired — possible tampering"
+                );
+                return Redirect::to("/").into_response();
+            }
+        } else {
+            tracing::warn!("OAuth callback missing state parameter");
+            return Redirect::to("/").into_response();
+        }
+    } else if let Some(incoming_state) = params.get("state") {
+        // 降级：只验证签名
+        if !services::auth::verify_state(incoming_state) {
+            tracing::warn!("OAuth state signature invalid (no cookie state)");
+            return Redirect::to("/").into_response();
+        }
+    }
+
+    // Token exchange
     let token_response = match services::auth::exchange_code_for_token(cfg, &code).await {
         Ok(t) => t,
         Err(e) => {
@@ -457,7 +533,8 @@ async fn auth_callback(
         ldc_balance = ldc;
     } else {
         // Check registration enabled
-        let reg_enabled = db::get_config("registration_enabled").await
+        let reg_enabled = db::get_config("registration_enabled")
+            .await
             .map(|v| v == "true")
             .unwrap_or(true);
         if !reg_enabled {
@@ -465,20 +542,25 @@ async fn auth_callback(
         }
 
         // Check invite requirement
-        let require_invite = db::get_config("require_invite").await
+        let require_invite = db::get_config("require_invite")
+            .await
             .map(|v| v == "true")
             .unwrap_or(false);
 
-        let new_user_core_hours: f64 = db::get_config("new_user_core_hours").await
+        let new_user_core_hours: f64 = db::get_config("new_user_core_hours")
+            .await
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0);
 
-        if require_invite {
-            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
+        // invite_code：从 cookie 读取（/login 时保存的），不是从 OAuth 回调 params 读
+        let pending_invite_id: Option<i64> = if require_invite {
+            let invite_code = cookies
+                .get("invite_code")
+                .map(|c| c.value().to_string())
+                .unwrap_or_default();
             if invite_code.is_empty() {
                 return Redirect::to("/?error=invite_required").into_response();
             }
-            // Verify invite code exists and is unused
             let invite_valid: Option<(i64, String)> = sqlx::query_as(
                 "SELECT id, public_note FROM invites WHERE code = ? AND is_used = 0",
             )
@@ -488,37 +570,49 @@ async fn auth_callback(
             .unwrap_or(None);
 
             match invite_valid {
-                Some((_, public_note)) => {
-                    // Note: invite will be marked used AFTER user is successfully created
-                    // Store invite_code for later use in session
-                    let invite_code_for_session = invite_code.clone();
-                    // Check if public_note has error message
+                Some((invite_id, public_note)) => {
                     if !public_note.is_empty() {
-                        return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&public_note))).into_response();
+                        return Redirect::to(&format!(
+                            "/?error=invalid_invite&note={}",
+                            urlencoding::encode(&public_note)
+                        ))
+                        .into_response();
                     }
+                    // 标记邀请码已使用（用户创建后回填 used_by）
+                    let _ = sqlx::query(
+                        "UPDATE invites SET is_used = 1, used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    )
+                    .bind(invite_id)
+                    .execute(pool)
+                    .await;
+                    Some(invite_id)
                 }
                 None => {
-                    // Check if code exists but already used
-                    let code_exists: Option<String> = sqlx::query_scalar(
-                        "SELECT public_note FROM invites WHERE code = ?"
+                    let note_exists: Option<String> = sqlx::query_scalar(
+                        "SELECT public_note FROM invites WHERE code = ?",
                     )
                     .bind(&invite_code)
                     .fetch_optional(pool)
                     .await
                     .unwrap_or(None)
                     .flatten();
-                    
-                    if let Some(note) = code_exists {
+                    if let Some(note) = note_exists {
                         if !note.is_empty() {
-                            return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
+                            return Redirect::to(&format!(
+                                "/?error=invalid_invite&note={}",
+                                urlencoding::encode(&note)
+                            ))
+                            .into_response();
                         }
                     }
                     return Redirect::to("/?error=invalid_invite").into_response();
                 }
             }
-        }
+        } else {
+            None
+        };
 
-        // Create user FIRST (invite code consumed only if this succeeds)
+        // Create user
         let result = sqlx::query(
             "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
         )
@@ -540,16 +634,13 @@ async fn auth_callback(
             }
         }
 
-        // Mark invite code as used AFTER user is successfully created
-        if require_invite {
-            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
-            let _ = sqlx::query(
-                "UPDATE invites SET is_used = 1, used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ? AND is_used = 0"
-            )
-            .bind(new_user_id)
-            .bind(&invite_code)
-            .execute(pool)
-            .await;
+        // 回填邀请码 used_by
+        if let Some(invite_id) = pending_invite_id {
+            let _ = sqlx::query("UPDATE invites SET used_by = ? WHERE id = ?")
+                .bind(new_user_id)
+                .bind(invite_id)
+                .execute(pool)
+                .await;
         }
 
         user_id = new_user_id;
@@ -558,7 +649,7 @@ async fn auth_callback(
         ldc_balance = 0.0;
     }
 
-    // Create session cookie (signed with HMAC-SHA256)
+    // Create session cookie (signed with HMAC-SHA256 by session.rs)
     let session = crate::services::session::UserSession {
         user_id,
         username: user_info.effective_name().to_string(),
@@ -567,6 +658,17 @@ async fn auth_callback(
         ldc_balance,
     };
     crate::services::session::set_session_cookie(&cookies, &session);
+
+    // Clear oauth_state and invite_code cookies — 不再需要
+    let mut state_cookie = Cookie::new("oauth_state", "");
+    state_cookie.set_path("/");
+    state_cookie.set_max_age(Duration::seconds(0));
+    cookies.add(state_cookie);
+
+    let mut invite_cookie = Cookie::new("invite_code", "");
+    invite_cookie.set_path("/");
+    invite_cookie.set_max_age(Duration::seconds(0));
+    cookies.add(invite_cookie);
 
     Redirect::to("/").into_response()
 }

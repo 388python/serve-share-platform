@@ -5,10 +5,14 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     Json,
 };
+use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::Sha256;
 use tower_cookies::Cookies;
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LinuxDoTokenResponse {
@@ -42,20 +46,105 @@ impl LinuxDoUserInfo {
     }
 }
 
-pub fn create_oauth_url(config: &AppConfig) -> String {
-    format!(
-        "{}?client_id={}&response_type=code&redirect_uri={}&scope=read",
+// ---- OAuth State (Signed) ----
+// state 格式：timestamp.nonce.hmac_sha256_signature
+// 自包含、可验证，防 CSRF 和重放攻击
+
+pub const STATE_TTL_SECS: i64 = 600; // 10 分钟
+
+fn state_secret_bytes() -> Vec<u8> {
+    AppConfig::get().session_secret.as_bytes().to_vec()
+}
+
+/// HMAC-SHA256 签名并返回 hex 字符串
+fn hmac_hex(payload: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(&state_secret_bytes())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
+    mac.update(payload);
+    let result = mac.finalize().into_bytes();
+    let mut hex = String::with_capacity(result.len() * 2);
+    use std::fmt::Write;
+    for byte in &result[..] {
+        let _ = write!(hex, "{:02x}", byte);
+    }
+    hex
+}
+
+/// 验证 HMAC-SHA256 签名
+fn hmac_verify(payload: &[u8], expected_hex: &str) -> bool {
+    let expected = match hex::decode(expected_hex) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if expected.is_empty() {
+        return false;
+    }
+    let mut mac = HmacSha256::new_from_slice(&state_secret_bytes())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
+    mac.update(payload);
+    mac.verify_slice(&expected).is_ok()
+}
+
+/// 生成带签名的 OAuth state
+pub fn generate_state() -> String {
+    let timestamp = chrono::Utc::now().timestamp();
+    let nonce = uuid::Uuid::new_v4().to_string().replace('-', "");
+    let payload = format!("{}.{}", timestamp, nonce);
+    let sig = hmac_hex(payload.as_bytes());
+    format!("{}.{}", payload, sig)
+}
+
+/// 验证 OAuth state：签名必须有效 + 未过期
+pub fn verify_state(state: &str) -> bool {
+    let parts: Vec<&str> = state.splitn(3, '.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    let (ts_str, _nonce, expected_sig) = (parts[0], parts[1], parts[2]);
+    let timestamp: i64 = match ts_str.parse() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let now = chrono::Utc::now().timestamp();
+    if now - timestamp > STATE_TTL_SECS || timestamp - now > 30 {
+        return false;
+    }
+    let signed_payload = format!("{}.{}", ts_str, parts[1]);
+    hmac_verify(signed_payload.as_bytes(), expected_sig)
+}
+
+/// 生成 LinuxDo OAuth 授权 URL
+/// 返回 (oauth_url, signed_state_value)
+/// 所有参数值都经过 URL 编码，顺序：client_id → redirect_uri → response_type → scope → state
+pub fn create_oauth_url(config: &AppConfig) -> (String, String) {
+    let state = generate_state();
+
+    // 对每个参数值单独 URL 编码
+    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id).to_string();
+    let redirect_uri_enc =
+        urlencoding::encode(&config.linuxdo_oauth.redirect_uri).to_string();
+    let state_enc = urlencoding::encode(&state).to_string();
+    let scope_enc = urlencoding::encode("read").to_string();
+
+    let url = format!(
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}",
         config.linuxdo_oauth.auth_url,
-        config.linuxdo_oauth.client_id,
-        config.linuxdo_oauth.redirect_uri,
-    )
+        client_id_enc,
+        redirect_uri_enc,
+        scope_enc,
+        state_enc
+    );
+    (url, state)
 }
 
 pub async fn exchange_code_for_token(
     config: &AppConfig,
     code: &str,
 ) -> anyhow::Result<LinuxDoTokenResponse> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
     let resp = client
         .post(&config.linuxdo_oauth.token_url)
         .form(&[
@@ -66,27 +155,80 @@ pub async fn exchange_code_for_token(
             ("redirect_uri", config.linuxdo_oauth.redirect_uri.as_str()),
         ])
         .send()
-        .await?
-        .error_for_status()?
-        .json::<LinuxDoTokenResponse>()
-        .await?;
-    Ok(resp)
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("LinuxDo token exchange request failed: {}", e);
+            return Err(anyhow::anyhow!("token exchange request failed: {}", e));
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(
+            "LinuxDo token exchange failed: status={}, body={}",
+            status,
+            body
+        );
+        return Err(anyhow::anyhow!(
+            "token exchange failed (status={}): {}",
+            status,
+            body
+        ));
+    }
+
+    let token = resp.json::<LinuxDoTokenResponse>().await.map_err(|e| {
+        tracing::error!("LinuxDo token response parse failed: {}", e);
+        anyhow::anyhow!("token response parse failed: {}", e)
+    })?;
+    Ok(token)
 }
 
 pub async fn get_user_info(
     config: &AppConfig,
     access_token: &str,
 ) -> anyhow::Result<LinuxDoUserInfo> {
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
     let resp = client
         .get(&config.linuxdo_oauth.user_info_url)
         .bearer_auth(access_token)
         .send()
-        .await?
-        .error_for_status()?
-        .json::<LinuxDoUserInfo>()
-        .await?;
-    Ok(resp)
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("LinuxDo user info request failed: {}", e);
+            return Err(anyhow::anyhow!("user info request failed: {}", e));
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        tracing::error!(
+            "LinuxDo user info failed: status={}, body={}",
+            status,
+            body
+        );
+        return Err(anyhow::anyhow!(
+            "user info failed (status={}): {}",
+            status,
+            body
+        ));
+    }
+
+    let user = resp.json::<LinuxDoUserInfo>().await.map_err(|e| {
+        tracing::error!("LinuxDo user info response parse failed: {}", e);
+        anyhow::anyhow!("user info response parse failed: {}", e)
+    })?;
+    Ok(user)
 }
 
 #[derive(Deserialize)]
