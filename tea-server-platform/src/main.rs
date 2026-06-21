@@ -383,15 +383,35 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
     Html(rendered)
 }
 
-async fn login_page(State(_state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
+async fn login_page(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
     let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
+
+    // state cookie: 用于 CSRF 校验，包含 HMAC-SHA256 签名
     let mut state_cookie = Cookie::new("oauth_state", state_value);
     state_cookie.set_path("/");
     state_cookie.set_max_age(cookie::time::Duration::minutes(10));
     state_cookie.set_http_only(true);
     state_cookie.set_same_site(SameSite::Lax);
     cookies.add(state_cookie);
+
+    // invite_code cookie: 如果用户通过 /login?invite_code=xxx 访问，
+    // 保存邀请码到 cookie 以便在 OAuth 回调时使用（LinuxDo 不会回传 invite_code）
+    if let Some(invite_code) = params.get("invite_code") {
+        if !invite_code.is_empty() {
+            let mut invite_cookie = Cookie::new("invite_code", invite_code.clone());
+            invite_cookie.set_path("/");
+            invite_cookie.set_max_age(cookie::time::Duration::minutes(10));
+            invite_cookie.set_http_only(true);
+            invite_cookie.set_same_site(SameSite::Lax);
+            cookies.add(invite_cookie);
+        }
+    }
+
     Redirect::to(&oauth_url)
 }
 
@@ -491,12 +511,19 @@ async fn auth_callback(
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0);
 
+        // 需要邀请码时：先验证，保存 invite_id，用户创建后再标记使用人
+        let mut pending_invite_id: Option<i64> = None;
         if require_invite {
-            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
+            // 从 cookie 读取 invite_code（在 /login?invite_code=xxx 时保存）
+            // 注意：LinuxDo OAuth 回调只会带 code 和 state，不会回传 invite_code
+            let invite_code = cookies
+                .get("invite_code")
+                .map(|c| c.value().to_string())
+                .unwrap_or_default();
             if invite_code.is_empty() {
                 return Redirect::to("/?error=invite_required").into_response();
             }
-            // Verify and consume invite code
+            // 验证邀请码是否存在且未使用
             let invite_valid: Option<i64> = sqlx::query_scalar(
                 "SELECT id FROM invites WHERE code = ? AND is_used = 0",
             )
@@ -507,16 +534,18 @@ async fn auth_callback(
 
             match invite_valid {
                 Some(invite_id) => {
-                    sqlx::query("UPDATE invites SET is_used = 1, used_by = (SELECT id FROM users WHERE linuxdo_id = ? LIMIT 1), used_at = CURRENT_TIMESTAMP WHERE id = ?")
-                        .bind(user_info.id)
-                        .bind(invite_id)
-                        .execute(pool)
-                        .await
-                        .ok();
+                    // 先标记为已使用（防止并发重复使用），used_by 稍后在用户创建后回填
+                    let _ = sqlx::query(
+                        "UPDATE invites SET is_used = 1, used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    )
+                    .bind(invite_id)
+                    .execute(pool)
+                    .await;
+                    pending_invite_id = Some(invite_id);
                 }
                 None => {
                     let public_note: Option<String> = sqlx::query_scalar(
-                        "SELECT public_note FROM invites WHERE code = ?"
+                        "SELECT public_note FROM invites WHERE code = ?",
                     )
                     .bind(&invite_code)
                     .fetch_optional(pool)
@@ -525,7 +554,11 @@ async fn auth_callback(
                     .flatten();
                     if let Some(note) = public_note {
                         if !note.is_empty() {
-                            return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
+                            return Redirect::to(&format!(
+                                "/?error=invalid_invite&note={}",
+                                urlencoding::encode(&note)
+                            ))
+                            .into_response();
                         }
                     }
                     return Redirect::to("/?error=invalid_invite").into_response();
@@ -553,6 +586,15 @@ async fn auth_callback(
         .await
         .unwrap_or((0, false, 0.0, 0.0));
 
+        // 如果有待处理的邀请码，现在回填使用人
+        if let Some(invite_id) = pending_invite_id {
+            let _ = sqlx::query("UPDATE invites SET used_by = ? WHERE id = ?")
+                .bind(new_user.0)
+                .bind(invite_id)
+                .execute(pool)
+                .await;
+        }
+
         user_id = new_user.0;
         is_admin = new_user.1;
         core_hours = new_user.2;
@@ -568,11 +610,16 @@ async fn auth_callback(
         ldc_balance,
     );
 
-    // 清除 state cookie
+    // 清除 state 和 invite_code cookie
     let mut state_cookie = Cookie::new("oauth_state", "");
     state_cookie.set_path("/");
     state_cookie.set_max_age(cookie::time::Duration::seconds(0));
     cookies.add(state_cookie);
+
+    let mut invite_cookie = Cookie::new("invite_code", "");
+    invite_cookie.set_path("/");
+    invite_cookie.set_max_age(cookie::time::Duration::seconds(0));
+    cookies.add(invite_cookie);
 
     Redirect::to("/").into_response()
 }
