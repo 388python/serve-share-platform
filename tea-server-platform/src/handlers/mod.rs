@@ -2091,7 +2091,7 @@ pub async fn admin_users(
 
 #[derive(Deserialize)]
 pub struct AdminUserEditForm {
-    pub is_banned: Option<bool>,
+    pub is_banned: Option<String>,
     pub core_hours: Option<f64>,
     pub ldc_balance: Option<f64>,
     pub is_admin: Option<String>,
@@ -2107,12 +2107,24 @@ pub async fn admin_user_edit(
 
     let pool = db::get_db();
 
-    if let Some(banned) = form.is_banned {
-        let _ = sqlx::query("UPDATE users SET is_banned = ? WHERE id = ?")
-            .bind(banned)
-            .bind(path.id)
-            .execute(pool)
-            .await;
+    // Handle is_banned: checkbox value "true" when checked, absent when unchecked
+    match form.is_banned {
+        Some(_) => {
+            if path.id != admin_user_id {
+                let _ = sqlx::query("UPDATE users SET is_banned = 1 WHERE id = ?")
+                    .bind(path.id)
+                    .execute(pool)
+                    .await;
+            }
+        }
+        None => {
+            if path.id != admin_user_id {
+                let _ = sqlx::query("UPDATE users SET is_banned = 0 WHERE id = ?")
+                    .bind(path.id)
+                    .execute(pool)
+                    .await;
+            }
+        }
     }
     if let Some(ch) = form.core_hours {
         let _ = sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
@@ -2130,22 +2142,66 @@ pub async fn admin_user_edit(
     }
 
     // Handle is_admin: checkbox value is "on" when checked, absent when unchecked
-    if let Some(is_admin_val) = &form.is_admin {
-        if is_admin_val == "on" {
+    match form.is_admin {
+        Some(_) => {
             let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
                 .bind(path.id)
                 .execute(pool)
                 .await;
         }
-    } else {
-        // Checkbox not checked = revoke admin, but protect current admin
-        if path.id != admin_user_id {
-            let _ = sqlx::query("UPDATE users SET is_admin = 0 WHERE id = ?")
-                .bind(path.id)
-                .execute(pool)
-                .await;
+        None => {
+            // Checkbox not checked = revoke admin, but protect current admin
+            if path.id != admin_user_id {
+                let _ = sqlx::query("UPDATE users SET is_admin = 0 WHERE id = ?")
+                    .bind(path.id)
+                    .execute(pool)
+                    .await;
+            }
         }
     }
+
+    Ok(Redirect::to("/admin/users"))
+}
+
+pub async fn admin_user_delete(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    Path(path): Path<MachineIdPath>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (admin_user_id, _admin_username) = require_admin(&cookies)?;
+
+    // Protect self-deletion
+    if path.id == admin_user_id {
+        return Ok(Redirect::to("/admin/users"));
+    }
+
+    let pool = db::get_db();
+
+    // Delete related records first (cascade-like), then user
+    let _ = sqlx::query("DELETE FROM machines WHERE owner_id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM servers WHERE owner_id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM orders WHERE user_id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM warning_letters WHERE user_id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM oauth_codes WHERE user_id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(path.id)
+        .execute(pool)
+        .await;
 
     Ok(Redirect::to("/admin/users"))
 }

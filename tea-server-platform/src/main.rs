@@ -333,6 +333,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/config", post(handlers::admin_config_save))
         .route("/admin/users", get(handlers::admin_users))
         .route("/admin/users/:id", post(handlers::admin_user_edit))
+        .route("/admin/users/:id/delete", post(handlers::admin_user_delete))
         .route("/admin/servers", get(handlers::admin_servers))
         .route("/admin/servers/:id/toggle", post(handlers::admin_servers_toggle))
         .route("/admin/machines", get(handlers::admin_machines))

@@ -56,6 +56,9 @@
                                 <td>{{ u.created_at }}</td>
                                 <td>
                                     <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#editUserModal{{ u.id }}">编辑</button>
+                                    <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline;" onsubmit="return confirm('确定删除用户 {{ u.username }}？所有相关记录将被清除，此操作不可恢复。');">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
                                 </td>
                             </tr>
 
@@ -78,8 +81,7 @@
                                                     <input type="number" class="form-control" name="ldc_balance" value="{{ u.ldc_balance }}" step="0.1">
                                                 </div>
                                                 <div class="form-check mb-3">
-                                                    <input type="hidden" name="is_banned" value="false">
-                                                    <input type="checkbox" class="form-check-input" id="is_banned{{ u.id }}" name="is_banned" value="true" {% if u.is_banned %}checked{% endif %}>
+                                                    <input type="checkbox" class="form-check-input" id="is_banned{{ u.id }}" name="is_banned" {% if u.is_banned %}checked{% endif %}>
                                                     <label class="form-check-label" for="is_banned{{ u.id }}">封禁用户</label>
                                                 </div>
                                                 <div class="mb-3 form-check">
