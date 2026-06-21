@@ -487,17 +487,25 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
     })
     .await;
 
-    if let Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) =
-        install_result
-    {
-        super::update_server_agent_hardware(
-            server_id,
-            detected_cpu,
-            detected_memory,
-            detected_disk,
-            detected_linux,
-        )
-        .await;
+    match install_result {
+        Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) => {
+            super::update_server_agent_hardware(
+                server_id,
+                detected_cpu,
+                detected_memory,
+                detected_disk,
+                detected_linux,
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(
+                server_id = _server_id,
+                error = %err,
+                "agent SSH install task failed"
+            );
+        }
     }
 }
 
@@ -747,7 +755,7 @@ async fn api_machines_create(
     let used_hours = hours as f64;
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -756,6 +764,8 @@ async fn api_machines_create(
     .bind(form.disk_gb)
     .bind(&server.virt_type)
     .bind(ch_per_hour)
+    .bind(regular_used)
+    .bind(bonus_used)
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)

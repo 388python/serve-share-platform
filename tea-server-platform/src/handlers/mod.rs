@@ -19,6 +19,119 @@ use crate::AppState;
 
 // ---- Session Helpers (using signed cookies — SESSION_SECRET) ----
 
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => db_err.is_unique_violation(),
+        _ => false,
+    }
+}
+
+const BALANCE_EPSILON: f64 = 0.000_000_1;
+
+fn split_recorded_balance(regular: f64, bonus: f64, amount: f64) -> (f64, f64) {
+    let amount = amount.max(0.0);
+    if amount <= BALANCE_EPSILON {
+        return (0.0, 0.0);
+    }
+
+    let regular = regular.max(0.0);
+    let bonus = bonus.max(0.0);
+    let total = regular + bonus;
+    if total <= BALANCE_EPSILON {
+        return (amount, 0.0);
+    }
+
+    let scale = if total > amount { amount / total } else { 1.0 };
+    let mut regular_amount = (regular * scale).min(amount);
+    let bonus_amount = (bonus * scale).min((amount - regular_amount).max(0.0));
+    let assigned = regular_amount + bonus_amount;
+
+    if assigned + BALANCE_EPSILON < amount {
+        regular_amount += amount - assigned;
+    }
+
+    (regular_amount, bonus_amount)
+}
+
+fn split_machine_payment(machine: &Machine, amount: f64) -> (f64, f64) {
+    split_recorded_balance(
+        machine.regular_core_hours_used,
+        machine.bonus_core_hours_used,
+        amount,
+    )
+}
+
+fn split_dispute_frozen_balance(dispute: &Dispute) -> (f64, f64) {
+    split_recorded_balance(
+        dispute.regular_amount_frozen,
+        dispute.bonus_amount_frozen,
+        dispute.amount_frozen,
+    )
+}
+
+async fn split_dispute_refund_balance(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    dispute: &Dispute,
+) -> Result<(f64, f64), sqlx::Error> {
+    let machine: Option<Machine> = sqlx::query_as("SELECT * FROM machines WHERE id = ?")
+        .bind(dispute.machine_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+    if let Some(machine) = machine.as_ref() {
+        let recorded_payment = machine.regular_core_hours_used + machine.bonus_core_hours_used;
+        if recorded_payment > BALANCE_EPSILON {
+            return Ok(split_machine_payment(machine, dispute.amount_frozen));
+        }
+    }
+
+    Ok(split_dispute_frozen_balance(dispute))
+}
+
+fn split_freeze_from_balance(
+    preferred_regular: f64,
+    preferred_bonus: f64,
+    available_regular: f64,
+    available_bonus: f64,
+    amount: f64,
+) -> Option<(f64, f64)> {
+    let amount = amount.max(0.0);
+    let available_regular = available_regular.max(0.0);
+    let available_bonus = available_bonus.max(0.0);
+
+    if available_regular + available_bonus + BALANCE_EPSILON < amount {
+        return None;
+    }
+
+    let mut regular = preferred_regular
+        .max(0.0)
+        .min(available_regular)
+        .min(amount);
+    let mut bonus = preferred_bonus
+        .max(0.0)
+        .min(available_bonus)
+        .min((amount - regular).max(0.0));
+    let mut remaining = amount - regular - bonus;
+
+    if remaining > BALANCE_EPSILON {
+        let extra_regular = remaining.min((available_regular - regular).max(0.0));
+        regular += extra_regular;
+        remaining -= extra_regular;
+    }
+
+    if remaining > BALANCE_EPSILON {
+        let extra_bonus = remaining.min((available_bonus - bonus).max(0.0));
+        bonus += extra_bonus;
+        remaining -= extra_bonus;
+    }
+
+    if remaining > BALANCE_EPSILON {
+        None
+    } else {
+        Some((regular, bonus))
+    }
+}
+
 fn get_session_user(cookies: &Cookies) -> Option<(i64, String, bool)> {
     let session = services::session::get_session_checked(cookies)?;
     Some((session.user_id, session.username, session.is_admin))
@@ -934,17 +1047,25 @@ async fn install_agent_ssh(_server_id: i64, _ip: &str, _port: i32) {
     })
     .await;
 
-    if let Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) =
-        install_result
-    {
-        update_server_agent_hardware(
-            server_id,
-            detected_cpu,
-            detected_memory,
-            detected_disk,
-            detected_linux,
-        )
-        .await;
+    match install_result {
+        Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) => {
+            update_server_agent_hardware(
+                server_id,
+                detected_cpu,
+                detected_memory,
+                detected_disk,
+                detected_linux,
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(
+                server_id = _server_id,
+                error = %err,
+                "agent SSH install task failed"
+            );
+        }
     }
 }
 
@@ -1199,7 +1320,7 @@ pub async fn create_machine(
     // Task 1.1: Include used_hours in machine insert
     let used_hours = hours as f64;
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -1208,6 +1329,8 @@ pub async fn create_machine(
     .bind(form.disk_gb)
     .bind(&server.virt_type)
     .bind(ch_per_hour)
+    .bind(regular_used)
+    .bind(bonus_used)
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
@@ -2497,8 +2620,9 @@ pub async fn admin_user_delete(
     }
 
     let hosted_machines: (i64,) = match sqlx::query_as(
-        "SELECT COUNT(*) FROM machines m JOIN servers s ON m.server_id = s.id WHERE s.owner_id = ?",
+        "SELECT COUNT(*) FROM machines m JOIN servers s ON m.server_id = s.id WHERE s.owner_id = ? AND m.user_id != ?",
     )
+    .bind(path.id)
     .bind(path.id)
     .fetch_one(pool)
     .await
@@ -3143,14 +3267,54 @@ pub async fn dispute_create(
 
     // Calculate amount to freeze (core hours)
     let amount_frozen = machine.core_hours_per_hour * machine.used_hours;
+    let (preferred_regular_frozen, preferred_bonus_frozen) =
+        split_machine_payment(&machine, amount_frozen);
 
-    // Freeze the core hours (deduct from contributor)
-    let freeze_result = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?) AND core_hours >= ?")
-        .bind(amount_frozen)
-        .bind(machine.server_id)
-        .bind(amount_frozen)
-        .execute(&mut *tx)
-        .await;
+    let merchant_balance: Option<(i64, f64, f64)> = match sqlx::query_as(
+        "SELECT u.id, u.core_hours, u.bonus_core_hours FROM users u JOIN servers s ON u.id = s.owner_id WHERE s.id = ?",
+    )
+    .bind(machine.server_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(balance) => balance,
+        Err(err) => {
+            tracing::error!("failed to fetch merchant balance for dispute: {}", err);
+            return Ok(Redirect::to("/machines?error=db_error"));
+        }
+    };
+
+    let (merchant_id, merchant_core_hours, merchant_bonus_core_hours) = match merchant_balance {
+        Some(balance) => balance,
+        None => return Ok(Redirect::to("/machines?error=settlement_target_missing")),
+    };
+
+    let (regular_amount_frozen, bonus_amount_frozen) = match split_freeze_from_balance(
+        preferred_regular_frozen,
+        preferred_bonus_frozen,
+        merchant_core_hours,
+        merchant_bonus_core_hours,
+        amount_frozen,
+    ) {
+        Some(split) => split,
+        None => {
+            return Ok(Redirect::to(
+                "/machines?error=merchant_balance_insufficient",
+            ))
+        }
+    };
+
+    // Freeze contributor balance using the same regular/bonus split that settlement will restore.
+    let freeze_result = sqlx::query(
+        "UPDATE users SET core_hours = core_hours - ?, bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND core_hours >= ? AND bonus_core_hours >= ?",
+    )
+    .bind(regular_amount_frozen)
+    .bind(bonus_amount_frozen)
+    .bind(merchant_id)
+    .bind(regular_amount_frozen)
+    .bind(bonus_amount_frozen)
+    .execute(&mut *tx)
+    .await;
 
     match freeze_result {
         Ok(result) if result.rows_affected() > 0 => {}
@@ -3173,18 +3337,24 @@ pub async fn dispute_create(
     let auto_resolve_at = chrono::Utc::now() + chrono::Duration::hours(auto_hours as i64);
 
     let insert_result = sqlx::query(
-        "INSERT INTO disputes (machine_id, user_id, server_id, reason, amount_frozen, auto_resolve_at) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO disputes (machine_id, user_id, server_id, reason, amount_frozen, regular_amount_frozen, bonus_amount_frozen, auto_resolve_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(form.machine_id)
     .bind(user_id)
     .bind(machine.server_id)
     .bind(&form.reason)
     .bind(amount_frozen)
+    .bind(regular_amount_frozen)
+    .bind(bonus_amount_frozen)
     .bind(auto_resolve_at)
     .execute(&mut *tx)
     .await;
 
     if let Err(err) = insert_result {
+        if is_unique_violation(&err) {
+            return Ok(Redirect::to("/machines?error=dispute_exists"));
+        }
+
         tracing::error!("failed to insert dispute: {}", err);
         return Ok(Redirect::to("/machines?error=db_error"));
     }
@@ -3279,19 +3449,47 @@ pub async fn admin_dispute_resolve(
         }
     }
 
-    let credit_result = if form.resolution == "refund" {
-        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-            .bind(d.amount_frozen)
-            .bind(d.user_id)
-            .execute(&mut *tx)
-            .await
+    let (credit_user_id, regular_credit, bonus_credit) = if form.resolution == "refund" {
+        let (regular_refund, bonus_refund) = match split_dispute_refund_balance(&mut tx, &d).await {
+            Ok(split) => split,
+            Err(err) => {
+                tracing::error!("failed to calculate dispute refund {}: {}", id, err);
+                return Ok(Redirect::to("/admin/disputes?error=db_error"));
+            }
+        };
+        (d.user_id, regular_refund, bonus_refund)
     } else {
-        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)")
-            .bind(d.amount_frozen)
-            .bind(d.server_id)
-            .execute(&mut *tx)
-            .await
+        let owner_id: Option<i64> =
+            match sqlx::query_scalar("SELECT owner_id FROM servers WHERE id = ?")
+                .bind(d.server_id)
+                .fetch_optional(&mut *tx)
+                .await
+            {
+                Ok(owner_id) => owner_id,
+                Err(err) => {
+                    tracing::error!("failed to fetch dispute owner {}: {}", id, err);
+                    return Ok(Redirect::to("/admin/disputes?error=db_error"));
+                }
+            };
+
+        let Some(owner_id) = owner_id else {
+            return Ok(Redirect::to(
+                "/admin/disputes?error=settlement_target_missing",
+            ));
+        };
+
+        let (regular_return, bonus_return) = split_dispute_frozen_balance(&d);
+        (owner_id, regular_return, bonus_return)
     };
+
+    let credit_result = sqlx::query(
+        "UPDATE users SET core_hours = core_hours + ?, bonus_core_hours = bonus_core_hours + ? WHERE id = ?",
+    )
+    .bind(regular_credit)
+    .bind(bonus_credit)
+    .bind(credit_user_id)
+    .execute(&mut *tx)
+    .await;
 
     match credit_result {
         Ok(result) if result.rows_affected() > 0 => {}
@@ -3379,19 +3577,32 @@ pub async fn merchant_dispute_reply(
         }
     }
 
-    let credit_result = if form.action == "refund" {
-        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-            .bind(d.amount_frozen)
-            .bind(d.user_id)
-            .execute(&mut *tx)
-            .await
+    let (credit_user_id, regular_credit, bonus_credit) = if form.action == "refund" {
+        let (regular_refund, bonus_refund) = match split_dispute_refund_balance(&mut tx, &d).await {
+            Ok(split) => split,
+            Err(err) => {
+                tracing::error!(
+                    "failed to calculate merchant dispute refund {}: {}",
+                    id,
+                    err
+                );
+                return Ok(Redirect::to("/dashboard?error=db_error"));
+            }
+        };
+        (d.user_id, regular_refund, bonus_refund)
     } else {
-        sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-            .bind(d.amount_frozen)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
+        let (regular_return, bonus_return) = split_dispute_frozen_balance(&d);
+        (user_id, regular_return, bonus_return)
     };
+
+    let credit_result = sqlx::query(
+        "UPDATE users SET core_hours = core_hours + ?, bonus_core_hours = bonus_core_hours + ? WHERE id = ?",
+    )
+    .bind(regular_credit)
+    .bind(bonus_credit)
+    .bind(credit_user_id)
+    .execute(&mut *tx)
+    .await;
 
     match credit_result {
         Ok(result) if result.rows_affected() > 0 => {}
