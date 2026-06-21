@@ -227,6 +227,87 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Add missing fields to servers table (contribute flow)
+    let new_columns = [
+        "expose_ip INTEGER NOT NULL DEFAULT 0",
+        "nat_port_start INTEGER NOT NULL DEFAULT 0",
+        "nat_port_end INTEGER NOT NULL DEFAULT 0",
+        "nat_multiplier REAL NOT NULL DEFAULT 1.0",
+        "max_machine_hours REAL NOT NULL DEFAULT 0",
+        "linux_version TEXT NOT NULL DEFAULT ''",
+        "description TEXT NOT NULL DEFAULT ''",
+        "provider TEXT NOT NULL DEFAULT ''",
+        "is_premium INTEGER NOT NULL DEFAULT 0",
+        "premium_expires_at DATETIME",
+    ];
+    for col in &new_columns {
+        let _ = sqlx::query(&format!("ALTER TABLE servers ADD COLUMN {}", col))
+            .execute(pool)
+            .await;
+    }
+
+    // Add missing fields to machines table
+    let machine_cols = [
+        "description TEXT NOT NULL DEFAULT ''",
+        "provider TEXT NOT NULL DEFAULT ''",
+        "settled INTEGER NOT NULL DEFAULT 0",
+        "core_hours_per_hour REAL NOT NULL DEFAULT 0",
+        "used_hours REAL NOT NULL DEFAULT 0",
+        "max_hours REAL NOT NULL DEFAULT 0",
+        "is_premium INTEGER NOT NULL DEFAULT 0",
+        "premium_expires_at DATETIME",
+        "linux_version TEXT NOT NULL DEFAULT ''",
+    ];
+    for col in &machine_cols {
+        let _ = sqlx::query(&format!("ALTER TABLE machines ADD COLUMN {}", col))
+            .execute(pool)
+            .await;
+    }
+
+    // Create warning_letters table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS warning_letters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            action TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_read INTEGER NOT NULL DEFAULT 0
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create opengfw tables
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS opengfw_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_type TEXT NOT NULL,
+            rule_value TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'block',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS opengfw_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER,
+            server_id INTEGER,
+            rule_id INTEGER,
+            source_ip TEXT,
+            target_ip TEXT,
+            action TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Create balance_to_code_logs table
     sqlx::query(
         r#"
