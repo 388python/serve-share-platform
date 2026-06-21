@@ -379,11 +379,24 @@ async fn api_servers_contribute(
 }
 
 async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &str) {
+    // Get platform base URL for agent install script
+    let platform_domain = db::get_config_sync("site_url")
+        .or_else(|| db::get_config_sync("platform_domain"))
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let install_url = format!("{}/agent/install.sh", platform_domain.trim_end_matches('/'));
+    let agent_api_key = services::session::agent_api_key();
+    let virt_type = db::get_config_sync("default_virt_type")
+        .unwrap_or_else(|| "lxd".to_string());
+
     let _ = tokio::task::spawn_blocking({
         let ip = ip.to_string();
         let ssh_key = ssh_key.to_string();
         let port = port;
         let server_id = _server_id;
+        let install_url = install_url.clone();
+        let agent_api_key = agent_api_key.clone();
+        let virt_type = virt_type.clone();
         move || {
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, port)) {
                 Ok(tcp) => tcp,
@@ -401,10 +414,15 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
                 return;
             }
             if let Ok(mut channel) = session.channel_session() {
-                if channel
-                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
-                    .is_ok()
-                {
+                // Pass virt_type, api_key, and platform_url to install script
+                let cmd = format!(
+                    "curl -sSL {} | bash -s -- {} {} {}",
+                    install_url,
+                    virt_type,
+                    agent_api_key,
+                    platform_domain
+                );
+                if channel.exec(&cmd).is_ok() {
                     let _ = channel.wait_close();
                     if channel.exit_status().unwrap_or(1) == 0 {
                         let pool = db::get_db();

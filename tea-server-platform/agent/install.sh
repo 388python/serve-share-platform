@@ -3,14 +3,15 @@ set -euo pipefail
 
 VIRT_TYPE="${1:-lxd}"
 AGENT_API_KEY="${2:-}"
+PLATFORM_URL="${3:-http://localhost:3000}"
 INSTALL_DIR="/opt/tea-agent"
 
 if [ -z "${AGENT_API_KEY}" ]; then
-    echo "[tea-agent] AGENT_API_KEY is required. Usage: install.sh <lxd|kvm> <agent_api_key>" >&2
+    echo "[tea-agent] AGENT_API_KEY is required. Usage: curl -sL <url> | bash -s -- <lxd|kvm> <agent_api_key> <platform_url>" >&2
     exit 1
 fi
 
-echo "[tea-agent] Installing with virt_type=${VIRT_TYPE}"
+echo "[tea-agent] Installing with virt_type=${VIRT_TYPE}, platform=${PLATFORM_URL}"
 
 # --- Install virtualization dependencies ---
 if [ "${VIRT_TYPE}" = "lxd" ]; then
@@ -39,15 +40,21 @@ mkdir -p "${INSTALL_DIR}"
 cat > "${INSTALL_DIR}/agent.py" << 'PYEOF'
 #!/usr/bin/env python3
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
 import json
 import subprocess
 import os
+import re
 import sys
+import threading
+import time
+import urllib.request
 
 API_KEY = os.environ.get("AGENT_API_KEY")
 if not API_KEY:
     raise SystemExit("AGENT_API_KEY is required")
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
+PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 
 class AgentHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
@@ -162,8 +169,70 @@ class AgentHandler(BaseHTTPRequestHandler):
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
         self._send_json({"status": "deleted" if result.returncode == 0 else "error", "output": result.stdout, "error": result.stderr})
 
+def report_stats_loop():
+    """Background thread to report machine stats to platform"""
+    while True:
+        try:
+            result = subprocess.run(
+                ["lxc", "list", "name=machine-", "--format", "csv", "-c", "n"],
+                capture_output=True, text=True, timeout=30
+            )
+            for line in result.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                machine_name = line.strip()
+                try:
+                    info_result = subprocess.run(
+                        ["lxc", "info", machine_name],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    cpu_usage = 0.0
+                    memory_used = 0
+                    memory_total = 0
+                    for info_line in info_result.stdout.split("\n"):
+                        info_line = info_line.strip()
+                        if "CPU usage:" in info_line:
+                            match = re.search(r'(\d+\.?\d*)', info_line.split("CPU usage:")[1])
+                            if match:
+                                cpu_usage = float(match.group(1))
+                        elif "Memory usage:" in info_line:
+                            match = re.search(r'(\d+)', info_line.split("Memory usage:")[1])
+                            if match:
+                                memory_used = int(match.group(1))
+                        elif "Memory:" in info_line:
+                            match = re.search(r'(\d+)', info_line.split("Memory:")[1])
+                            if match:
+                                memory_total = int(match.group(1))
+                    stats = {
+                        "machine_name": machine_name,
+                        "cpu_usage_percent": cpu_usage,
+                        "memory_used_mb": float(memory_used),
+                        "memory_total_mb": float(memory_total),
+                        "disk_used_gb": 0,
+                        "disk_total_gb": 10.0,
+                        "bandwidth_rx_mbps": 0,
+                        "bandwidth_tx_mbps": 0,
+                        "uptime_seconds": 0,
+                        "process_count": 0
+                    }
+                    data = json.dumps(stats).encode()
+                    req = urllib.request.Request(
+                        f"{PLATFORM_URL}/api/v1/agent/stats",
+                        data=data,
+                        headers={"Content-Type": "application/json", "X-API-Key": API_KEY},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        pass
+                except Exception as e:
+                    print(f"Failed to report stats for {machine_name}: {e}")
+        except Exception as e:
+            print(f"Stats reporting error: {e}")
+        time.sleep(60)
 
 if __name__ == "__main__":
+    stats_thread = threading.Thread(target=report_stats_loop, daemon=True)
+    stats_thread.start()
     server = HTTPServer(("0.0.0.0", 19527), AgentHandler)
     print(f"Agent running on port 19527, virt_type={VIRT_TYPE}")
     server.serve_forever()
@@ -182,6 +251,7 @@ Type=simple
 ExecStart=/usr/bin/python3 ${INSTALL_DIR}/agent.py
 Environment=AGENT_API_KEY=${AGENT_API_KEY}
 Environment=VIRT_TYPE=${VIRT_TYPE}
+Environment=PLATFORM_URL=${PLATFORM_URL}
 Restart=always
 RestartSec=10
 

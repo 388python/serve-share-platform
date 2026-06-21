@@ -367,6 +367,8 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api", handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
+        // Agent install scripts (install.sh, agent.service)
+        .nest_service("/agent", ServeDir::new("agent"))
         .layer(CookieManagerLayer::new())
         .with_state(app_state);
 
