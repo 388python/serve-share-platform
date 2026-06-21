@@ -41,6 +41,10 @@
                                 <td>
                                     {% if m.status == "running" %}
                                     <span class="badge bg-success">运行中</span>
+                                    {% elif m.status == "pending" %}
+                                    <span class="badge bg-info">创建中</span>
+                                    {% elif m.status == "failed" %}
+                                    <span class="badge bg-danger">创建失败</span>
                                     {% else %}
                                     <span class="badge bg-secondary">已停止</span>
                                     {% endif %}

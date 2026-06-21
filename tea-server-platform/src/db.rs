@@ -84,7 +84,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             order_name TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             trade_no TEXT,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS recharge_packages (
@@ -170,7 +171,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?;
 
     // Create disputes table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS disputes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             machine_id INTEGER NOT NULL,
@@ -185,10 +187,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             resolved_at DATETIME,
             auto_resolve_at DATETIME NOT NULL
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create oauth_apps table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS oauth_apps (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -199,10 +205,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create oauth_codes table for authorization codes with expiration
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS oauth_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             code TEXT NOT NULL UNIQUE,
@@ -212,10 +222,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             expires_at DATETIME NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create balance_to_code_logs table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS balance_to_code_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -225,10 +239,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             code TEXT NOT NULL UNIQUE,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create warning_letters table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS warning_letters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -246,10 +264,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             expires_at DATETIME,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create machine_stats table for storing real-time machine stats
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS machine_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             machine_id INTEGER NOT NULL UNIQUE,
@@ -265,10 +287,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create OpenGFW rules table for VPN/protocol blocking
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS opengfw_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -278,10 +304,14 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Create OpenGFW blocked logs table
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS opengfw_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             machine_id INTEGER NOT NULL,
@@ -294,11 +324,16 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE,
             FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
         );
-    "#).execute(pool).await?;
+    "#,
+    )
+    .execute(pool)
+    .await?;
 
     // Add OpenGFW enabled column to servers table
-    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN opengfw_enabled INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+    let _ =
+        sqlx::query("ALTER TABLE servers ADD COLUMN opengfw_enabled INTEGER NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await;
 
     // Add columns to invites
     let _ = sqlx::query("ALTER TABLE invites ADD COLUMN private_note TEXT DEFAULT ''")
@@ -310,43 +345,64 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
 
     // Settlement: machines table
     let _ = sqlx::query("ALTER TABLE machines ADD COLUMN settled INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE machines ADD COLUMN used_hours REAL NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
 
     // Expose IP & NAT: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN expose_ip INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_start INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_end INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_multiplier REAL NOT NULL DEFAULT 1.0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
 
     // Max machine hours: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN max_machine_hours REAL NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
 
     // Bonus expiry: users table
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_core_hours REAL NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_expires_at DATETIME")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
 
     // Premium and Linux version: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN linux_version TEXT NOT NULL DEFAULT ''")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN premium_expires_at DATETIME")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
 
     // Description and provider: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN description TEXT NOT NULL DEFAULT ''")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN provider TEXT NOT NULL DEFAULT ''")
-        .execute(pool).await;
+        .execute(pool)
+        .await;
+
+    // Orders update timestamp for payment callbacks
+    let _ = sqlx::query(
+        "ALTER TABLE orders ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    )
+    .execute(pool)
+    .await;
 
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),
@@ -428,7 +484,12 @@ pub async fn set_config(key: &str, value: &str) -> anyhow::Result<()> {
 /// Synchronous version of get_config for use in non-async contexts.
 /// Uses block_in_place to safely block within the tokio runtime.
 pub fn get_config_sync(key: &str) -> Option<String> {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(get_config(key)))
+}
+
+/// Synchronous version of set_config for use in non-async contexts.
+pub fn set_config_sync(key: &str, value: &str) -> anyhow::Result<()> {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(get_config(key))
+        tokio::runtime::Handle::current().block_on(set_config(key, value))
     })
 }

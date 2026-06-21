@@ -9,7 +9,9 @@ import threading
 import time
 import urllib.request
 
-API_KEY = os.environ.get("AGENT_API_KEY", "tea-platform-agent-key")
+API_KEY = os.environ.get("AGENT_API_KEY")
+if not API_KEY:
+    raise SystemExit("AGENT_API_KEY is required")
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
 PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
@@ -480,7 +482,7 @@ table ip opengfw {{
                 "lxc", "launch", "ubuntu:22.04", name,
                 "-c", f"limits.cpu={cpu}",
                 "-c", f"limits.memory={memory}MB",
-                "-c", f"limits Disk.space={disk}GB"
+                "-c", f"limits.disk={disk}GB"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:

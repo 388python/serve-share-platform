@@ -326,6 +326,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/balance-to-code", post(handlers::balance_to_code_submit))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
+        .route("/oauth/token", post(services::auth::oauth_token))
         // Admin routes
         .route("/admin", get(handlers::admin_dashboard))
         .route("/admin/config", get(handlers::admin_config_page))
