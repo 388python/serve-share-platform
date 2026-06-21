@@ -15,5 +15,6 @@ WORKDIR /app
 COPY --from=builder /app/target/release/tea-server-platform /app/
 COPY --from=builder /app/templates/ /app/templates/
 COPY --from=builder /app/static/ /app/static/
+COPY --from=builder /app/.env* /app/
 EXPOSE 3000
 CMD ["/app/tea-server-platform"]
