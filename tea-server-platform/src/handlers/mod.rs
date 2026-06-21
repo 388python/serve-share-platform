@@ -618,7 +618,7 @@ pub async fn contribute_server_submit(
     let temp_proxy_port = services::ssh_proxy::allocate_port(0) as i32; // temporary
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(name)
@@ -1107,6 +1107,23 @@ pub async fn my_machines(
 #[derive(Deserialize)]
 pub struct MachineIdPath {
     pub id: i64,
+}
+
+#[derive(Serialize)]
+pub struct WarningLetterView {
+    pub id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub subject: String,
+    pub content: String,
+    pub warning_type: String,
+    pub severity: String,
+    pub is_read: bool,
+    pub requires_action: bool,
+    pub action_taken: bool,
+    pub action_note: Option<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
 }
 
 pub async fn stop_machine(

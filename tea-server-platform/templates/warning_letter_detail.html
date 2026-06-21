@@ -5,63 +5,56 @@
 {% block content %}
 <div class="row mb-4">
     <div class="col-12">
-        <a href="/warnings" class="btn btn-outline-secondary mb-3">← 返回警告信列表</a>
+        <a href="/warnings" class="btn btn-link ps-0">← 返回警告信列表</a>
     </div>
 </div>
 
 <div class="row">
-    <div class="col-12">
-        <div class="card">
+    <div class="col-md-8 mx-auto">
+        <div class="card mb-4">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <h5 class="mb-0">{{ letter.subject }}</h5>
-                </div>
-                <div>
-                    {% if letter.severity == "critical" %}<span class="badge bg-danger">严重</span>
-                    {% elif letter.severity == "warning" %}<span class="badge bg-warning text-dark">警告</span>
-                    {% else %}<span class="badge bg-info">提示</span>
-                    {% endif %}
-                    <span class="badge bg-secondary ms-1">{{ letter.warning_type }}</span>
-                </div>
+                <h5 class="mb-0">{{ letter.subject }}</h5>
+                <span class="badge {% if letter.severity == 'critical' %}bg-danger{% elif letter.severity == 'warning' %}bg-warning text-dark{% else %}bg-info{% endif %}">{{ letter.severity }}</span>
             </div>
             <div class="card-body">
-                <div class="mb-3">
-                    <small class="text-muted">发送时间: {{ letter.created_at }}</small>
-                    {% if letter.expires_at %}
-                    <small class="text-muted ms-3">有效期至: {{ letter.expires_at }}</small>
-                    {% endif %}
+                <div class="mb-3 text-muted small">
+                    <div>类型: {{ letter.warning_type }}</div>
+                    <div>发送时间: {{ letter.created_at }}</div>
+                    {% if letter.expires_at %}<div>有效期至: {{ letter.expires_at }}</div>{% endif %}
+                    {% if letter.requires_action %}<div class="text-warning">⚠ 需要您回应</div>{% endif %}
                 </div>
-
-                <div class="border-top pt-3">
-                    <h6>警告内容:</h6>
-                    <p class="mt-3" style="white-space: pre-wrap;">{{ letter.content }}</p>
+                <hr>
+                <div class="letter-content" style="white-space: pre-wrap; line-height: 1.8;">
+                    {{ letter.content }}
                 </div>
-
-                {% if letter.requires_action %}
-                <div class="border-top pt-3 mt-4">
-                    {% if letter.action_taken %}
-                    <div class="alert alert-success">
-                        <strong>您已回应此警告</strong>
-                        {% if letter.action_note %}
-                        <p class="mb-0 mt-2">您的回应: {{ letter.action_note }}</p>
-                        {% endif %}
-                    </div>
-                    {% else %}
-                    <div class="alert alert-warning">
-                        <strong>此警告需要您的回应</strong>
-                        <p class="mb-3 mt-2">请在下方填写您的回应并提交：</p>
-                        <form method="post" action="/warnings/{{ letter.id }}/action">
-                            <div class="mb-3">
-                                <textarea name="note" class="form-control" rows="4" placeholder="请填写您的回应内容..." required></textarea>
-                            </div>
-                            <button type="submit" class="btn btn-primary">提交回应</button>
-                        </form>
-                    </div>
-                    {% endif %}
-                </div>
-                {% endif %}
             </div>
         </div>
+
+        {% if letter.requires_action and not letter.action_taken %}
+        <div class="card border-warning">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0">请回复此警告信</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/warnings/{{ letter.id }}/action">
+                    <div class="mb-3">
+                        <label for="note" class="form-label">您的回应</label>
+                        <textarea class="form-control" id="note" name="note" rows="4" required placeholder="请描述您对此次警告的处理或说明..."></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-warning">提交回应</button>
+                </form>
+            </div>
+        </div>
+        {% elif letter.action_taken %}
+        <div class="card border-success">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">✓ 您已回应</h5>
+            </div>
+            <div class="card-body">
+                <p class="mb-0 text-muted"><strong>您的回复:</strong> {{ letter.action_note | default(value="(无)") }}</p>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock content %}

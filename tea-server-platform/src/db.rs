@@ -264,31 +264,56 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             .await;
     }
 
-    // Create warning_letters table
+    // Create warning_letters table (proper schema)
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS warning_letters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
+            subject TEXT NOT NULL,
             content TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            action TEXT,
+            warning_type TEXT NOT NULL DEFAULT 'general',
+            severity TEXT NOT NULL DEFAULT 'warning',
+            is_read INTEGER NOT NULL DEFAULT 0,
+            requires_action INTEGER NOT NULL DEFAULT 0,
+            action_taken INTEGER NOT NULL DEFAULT 0,
+            action_note TEXT,
+            action_at DATETIME,
+            sent_by INTEGER,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            is_read INTEGER NOT NULL DEFAULT 0
+            expires_at DATETIME
         );
     "#,
     )
     .execute(pool)
     .await?;
 
+    // Migrate warning_letters: add missing columns in case table was created with old schema
+    let warning_cols = [
+        "subject TEXT NOT NULL DEFAULT 'Warning'",
+        "warning_type TEXT NOT NULL DEFAULT 'general'",
+        "severity TEXT NOT NULL DEFAULT 'warning'",
+        "requires_action INTEGER NOT NULL DEFAULT 0",
+        "action_taken INTEGER NOT NULL DEFAULT 0",
+        "action_note TEXT",
+        "action_at DATETIME",
+        "sent_by INTEGER",
+        "expires_at DATETIME",
+    ];
+    for col in &warning_cols {
+        let _ = sqlx::query(&format!("ALTER TABLE warning_letters ADD COLUMN {}", col))
+            .execute(pool)
+            .await;
+    }
+
     // Create opengfw tables
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS opengfw_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rule_type TEXT NOT NULL,
-            rule_value TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            protocol TEXT NOT NULL,
             action TEXT NOT NULL DEFAULT 'block',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -319,31 +344,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             is_bonus INTEGER NOT NULL DEFAULT 0,
             code TEXT NOT NULL UNIQUE,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-    "#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Create warning_letters table
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS warning_letters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            subject TEXT NOT NULL,
-            content TEXT NOT NULL,
-            warning_type TEXT NOT NULL DEFAULT 'general',
-            severity TEXT NOT NULL DEFAULT 'warning',
-            is_read INTEGER NOT NULL DEFAULT 0,
-            requires_action INTEGER NOT NULL DEFAULT 0,
-            action_taken INTEGER NOT NULL DEFAULT 0,
-            action_note TEXT,
-            action_at DATETIME,
-            sent_by INTEGER,
-            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            expires_at DATETIME,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
     "#,
     )
