@@ -389,6 +389,25 @@ async fn login_page(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
+
+    // OAuth 配置缺失时给出明确错误，避免跳转到无效 URL
+    if cfg.linuxdo_oauth.client_id.is_empty() {
+        tracing::error!("LINUXDO_CLIENT_ID is not configured — OAuth login unavailable");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "服务器未配置 LinuxDo OAuth Client ID，请在 .env 中设置 LINUXDO_CLIENT_ID",
+        )
+            .into_response();
+    }
+    if cfg.linuxdo_oauth.redirect_uri.is_empty() {
+        tracing::error!("redirect_uri is empty — check PLATFORM_DOMAIN or LINUXDO_REDIRECT_URI");
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "服务器未配置 OAuth redirect_uri，请在 .env 中设置 PLATFORM_DOMAIN 或 LINUXDO_REDIRECT_URI",
+        )
+            .into_response();
+    }
+
     let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
 
     // state cookie: 用于 CSRF 校验，包含 HMAC-SHA256 签名
@@ -412,7 +431,7 @@ async fn login_page(
         }
     }
 
-    Redirect::to(&oauth_url)
+    Redirect::to(&oauth_url).into_response()
 }
 
 async fn auth_callback(
