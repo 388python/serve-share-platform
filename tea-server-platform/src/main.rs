@@ -6,7 +6,7 @@ use axum::{
 };
 use std::sync::Arc;
 use tera::{Context, Tera};
-use tower_cookies::{cookie::time::Duration, Cookie, CookieManagerLayer, Cookies};
+use tower_cookies::{cookie::SameSite, Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 use tracing_subscriber;
 
@@ -262,7 +262,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
-        .route("/admin-login", get(handlers::admin_login))
+        .route("/admin-login", post(handlers::admin_login))
+        .route("/admin-login/ui", get(handlers::admin_login_ui))
         .route("/logout", get(handlers::logout))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
@@ -354,25 +355,23 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
 
-    // Try to read user session from cookie
     if let Some(session_cookie) = cookies.get("session") {
-        let session_value = session_cookie.value().to_string();
-        if let Ok(session) = handlers::parse_session(&session_value) {
+        if let Some(session) = handlers::parse_signed_session_wrapper(session_cookie.value()) {
             ctx.insert(
                 "user_name",
-                &session.get("username").unwrap_or(&String::new()),
+                &session.get("username").cloned().unwrap_or_default(),
             );
             ctx.insert(
                 "user_balance",
-                &session.get("core_hours").unwrap_or(&"0".to_string()),
+                &session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string()),
             );
             ctx.insert(
                 "user_ldc",
-                &session.get("ldc_balance").unwrap_or(&"0".to_string()),
+                &session.get("ldc_balance").cloned().unwrap_or_else(|| "0".to_string()),
             );
             ctx.insert(
                 "is_admin",
-                &session.get("is_admin").unwrap_or(&"false".to_string()),
+                &session.get("is_admin").cloned().unwrap_or_else(|| "false".to_string()),
             );
         }
     }
@@ -384,9 +383,15 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
     Html(rendered)
 }
 
-async fn login_page(State(_state): State<AppState>) -> impl IntoResponse {
+async fn login_page(State(_state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
-    let oauth_url = services::auth::create_oauth_url(cfg);
+    let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
+    let mut state_cookie = Cookie::new("oauth_state", state_value);
+    state_cookie.set_path("/");
+    state_cookie.set_max_age(cookie::time::Duration::minutes(10));
+    state_cookie.set_http_only(true);
+    state_cookie.set_same_site(SameSite::Lax);
+    cookies.add(state_cookie);
     Redirect::to(&oauth_url)
 }
 
@@ -401,6 +406,15 @@ async fn auth_callback(
         Some(c) => c.clone(),
         None => return Redirect::to("/").into_response(),
     };
+
+    if let Some(expected_state) = cookies.get("oauth_state").map(|c| c.value().to_string()) {
+        if let Some(incoming_state) = params.get("state") {
+            if incoming_state != &expected_state {
+                tracing::warn!("OAuth state mismatch — possible CSRF");
+                return Redirect::to("/").into_response();
+            }
+        }
+    }
 
     // Exchange code for token
     let token_response = match services::auth::exchange_code_for_token(cfg, &code).await {
@@ -509,10 +523,8 @@ async fn auth_callback(
         .bind(new_user_core_hours)
         .execute(pool)
         .await
-        .unwrap_or_else(|e| {
-            tracing::error!("Failed to create user: {}", e);
-            panic!("User creation failed");
-        });
+        .map_err(|e| tracing::error!("Failed to create user: {}", e))
+        .ok();
 
         let new_user: (i64, bool, f64, f64) = sqlx::query_as(
             "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
@@ -528,21 +540,20 @@ async fn auth_callback(
         ldc_balance = new_user.3;
     }
 
-    // Create session cookie
-    let session_data = format!(
-        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}",
+    handlers::set_session_cookie_wrapper(
+        &cookies,
         user_id,
-        user_info.effective_name(),
+        &user_info.effective_name(),
         is_admin,
         core_hours,
         ldc_balance,
     );
 
-    let mut cookie = Cookie::new("session", session_data);
-    cookie.set_path("/");
-    cookie.set_max_age(Duration::hours(24));
-    cookie.set_http_only(true);
-    cookies.add(cookie);
+    // 清除 state cookie
+    let mut state_cookie = Cookie::new("oauth_state", "");
+    state_cookie.set_path("/");
+    state_cookie.set_max_age(cookie::time::Duration::seconds(0));
+    cookies.add(state_cookie);
 
     Redirect::to("/").into_response()
 }

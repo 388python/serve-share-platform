@@ -2478,6 +2478,7 @@ dependencies = [
  "dotenvy",
  "ed25519-dalek",
  "hex",
+ "hmac",
  "md5",
  "rand",
  "reqwest",

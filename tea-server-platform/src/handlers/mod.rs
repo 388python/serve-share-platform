@@ -3,11 +3,15 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use chrono::Utc;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tera::Context;
-use tower_cookies::{cookie::time::Duration, Cookie, Cookies};
+use tower_cookies::{cookie::SameSite, cookie::time::Duration, Cookie, Cookies};
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
 
 pub mod api;
 
@@ -17,7 +21,68 @@ use crate::models::*;
 use crate::services;
 use crate::AppState;
 
-// Re-export parse_session so main.rs can share it
+fn signing_secret() -> Vec<u8> {
+    AppConfig::get().session_secret.as_bytes().to_vec()
+}
+
+/// HMAC-SHA256 对 payload 签名，返回 hex
+fn sign_bytes(payload: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(&signing_secret())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"").expect("HMAC init failed"));
+    mac.update(payload);
+    mac.finalize().into_bytes().iter().fold(
+        String::with_capacity(64), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        },
+    )
+}
+
+/// 用 HMAC-SHA256 比较两个签名，constant time
+fn verify_bytes(payload: &[u8], expected_sig: &str) -> bool {
+    let expected = hex::decode(expected_sig).unwrap_or_default();
+    if expected.is_empty() {
+        return false;
+    }
+    let mut mac = HmacSha256::new_from_slice(&signing_secret())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"").expect("HMAC init failed"));
+    mac.update(payload);
+    mac.verify_slice(&expected).is_ok()
+}
+
+fn build_session_payload(
+    user_id: i64, username: &str, is_admin: bool, core_hours: f64, ldc_balance: f64,
+) -> String {
+    format!(
+        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}",
+        user_id, username, is_admin, core_hours, ldc_balance
+    )
+}
+
+fn parse_signed_session(signed: &str) -> Option<HashMap<String, String>> {
+    let dot_pos = signed.rfind('.')?;
+    let (data_b64, sig) = signed.split_at(dot_pos);
+    let sig = &sig[1..]; // 跳过 '.'
+    let payload = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        data_b64.as_bytes(),
+    ).ok()?;
+    let payload_str = std::str::from_utf8(&payload).ok()?;
+    if !verify_bytes(&payload, sig) {
+        tracing::warn!("Invalid session signature rejected");
+        return None;
+    }
+    let mut map = HashMap::new();
+    for part in payload_str.split('|') {
+        let mut kv = part.splitn(2, '=');
+        if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+            map.insert(k.to_string(), v.to_string());
+        }
+    }
+    Some(map)
+}
+
 pub(crate) fn parse_session(
     session: &str,
 ) -> anyhow::Result<std::collections::HashMap<String, String>> {
@@ -35,8 +100,7 @@ pub(crate) fn parse_session(
 
 fn get_session_user(cookies: &Cookies) -> Option<(i64, String, bool)> {
     let session_cookie = cookies.get("session")?;
-    let session_value = session_cookie.value();
-    let parsed = parse_session(session_value).ok()?;
+    let parsed = parse_signed_session(session_cookie.value())?;
     let user_id = parsed.get("user_id")?.parse::<i64>().ok()?;
     let username = parsed.get("username")?.clone();
     let is_admin = parsed.get("is_admin")?.parse::<bool>().unwrap_or(false);
@@ -56,28 +120,16 @@ fn require_admin(cookies: &Cookies) -> Result<(i64, String), Redirect> {
 }
 
 fn build_base_context(cookies: &Cookies, ctx: &mut Context) {
-    let site_name = db::get_config_sync("site_name").unwrap_or_else(|| "茶的服务器公益站".to_string());
+    let site_name = db::get_config_sync("site_name")
+        .unwrap_or_else(|| "茶的服务器公益站".to_string());
     ctx.insert("site_name", &site_name);
 
     if let Some(session_cookie) = cookies.get("session") {
-        if let Ok(parsed) = parse_session(session_cookie.value()) {
-            let uname = parsed
-                .get("username")
-                .cloned()
-                .unwrap_or_default();
-            let balance = parsed
-                .get("core_hours")
-                .cloned()
-                .unwrap_or_else(|| "0".to_string());
-            let ldc = parsed
-                .get("ldc_balance")
-                .cloned()
-                .unwrap_or_else(|| "0".to_string());
-            let admin = parsed
-                .get("is_admin")
-                .cloned()
-                .unwrap_or_else(|| "false".to_string());
-
+        if let Some(parsed) = parse_signed_session(session_cookie.value()) {
+            let uname = parsed.get("username").cloned().unwrap_or_default();
+            let balance = parsed.get("core_hours").cloned().unwrap_or_else(|| "0".to_string());
+            let ldc = parsed.get("ldc_balance").cloned().unwrap_or_else(|| "0".to_string());
+            let admin = parsed.get("is_admin").cloned().unwrap_or_else(|| "false".to_string());
             ctx.insert("user_name", &uname);
             ctx.insert("user_balance", &balance);
             ctx.insert("user_ldc", &ldc);
@@ -94,15 +146,32 @@ fn set_session_cookie(
     core_hours: f64,
     ldc_balance: f64,
 ) {
-    let session_data = format!(
-        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}",
-        user_id, username, is_admin, core_hours, ldc_balance,
+    let payload = build_session_payload(user_id, username, is_admin, core_hours, ldc_balance);
+    let payload_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        payload.as_bytes(),
     );
+    let sig = sign_bytes(payload.as_bytes());
+    let session_data = format!("{}.{}", payload_b64, sig);
+
     let mut cookie = Cookie::new("session", session_data);
     cookie.set_path("/");
     cookie.set_max_age(Duration::hours(24));
     cookie.set_http_only(true);
+    cookie.set_same_site(SameSite::Lax);
     cookies.add(cookie);
+}
+
+/// Constant-time 字符串比较，防时序攻击
+fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 // ---- Health Check ----
@@ -114,22 +183,25 @@ pub async fn health_check() -> &'static str {
 // ---- Auth Handlers ----
 
 #[derive(Deserialize)]
-pub struct AdminLoginQuery {
+pub struct AdminLoginForm {
     pub username: String,
     pub password: String,
 }
 
 pub async fn admin_login(
     cookies: Cookies,
-    Query(params): Query<AdminLoginQuery>,
+    Form(params): Form<AdminLoginForm>,
 ) -> impl IntoResponse {
     let cfg = AppConfig::get();
 
-    if params.username != cfg.admin_username || params.password != cfg.admin_password {
-        return Redirect::to("/").into_response();
+    // Constant-time 比较用户名和密码
+    let username_ok = ct_eq(&params.username, &cfg.admin_username);
+    let password_ok = ct_eq(&params.password, &cfg.admin_password);
+    if !username_ok || !password_ok {
+        return Redirect::to("/admin-login/ui").into_response();
     }
 
-    // Find or create the admin user in DB
+    // 找到或创建管理员用户
     let pool = db::get_db();
     let user: Option<(i64, String, bool, f64, f64)> = sqlx::query_as(
         "SELECT id, username, is_admin, core_hours, ldc_balance FROM users WHERE username = ?",
@@ -141,14 +213,12 @@ pub async fn admin_login(
 
     let (user_id, username, core_hours, ldc_balance) =
         if let Some((uid, uname, _admin, ch, ldc)) = user {
-            // Ensure admin flag is set
             let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
                 .bind(uid)
                 .execute(pool)
                 .await;
             (uid, uname, ch, ldc)
         } else {
-            // Create admin user with special linuxdo_id = -1
             let _ = sqlx::query(
                 "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (-1, ?, ?, 0, 0, 1)",
             )
@@ -171,12 +241,49 @@ pub async fn admin_login(
     Redirect::to("/admin").into_response()
 }
 
+pub async fn admin_login_ui(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let cfg = AppConfig::get();
+    let site_name = db::get_config_sync("site_name")
+        .unwrap_or_else(|| cfg.platform_domain.clone());
+
+    let mut ctx = Context::new();
+    ctx.insert("site_name", &site_name);
+    let rendered = state
+        .templates
+        .render("admin/login.html", &ctx)
+        .unwrap_or_else(|e| {
+            format!("加载模板失败: {}", e)
+        });
+    Html(rendered)
+}
+
 pub async fn logout(cookies: Cookies) -> impl IntoResponse {
     let mut cookie = Cookie::new("session", "");
     cookie.set_path("/");
     cookie.set_max_age(Duration::seconds(0));
     cookies.add(cookie);
     Redirect::to("/")
+}
+
+/// 公开包装：解析 HMAC 签名的 session cookie
+pub fn parse_signed_session_wrapper(
+    session: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    parse_signed_session(session)
+}
+
+/// 公开包装：写入 HMAC 签名的 session cookie
+pub fn set_session_cookie_wrapper(
+    cookies: &Cookies,
+    user_id: i64,
+    username: &str,
+    is_admin: bool,
+    core_hours: f64,
+    ldc_balance: f64,
+) {
+    set_session_cookie(cookies, user_id, username, is_admin, core_hours, ldc_balance)
 }
 
 // ---- User Page Handlers ----

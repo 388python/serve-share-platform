@@ -34,13 +34,20 @@ impl LinuxDoUserInfo {
     }
 }
 
-pub fn create_oauth_url(config: &AppConfig) -> String {
-    format!(
-        "{}?client_id={}&response_type=code&redirect_uri={}&scope=read",
-        config.linuxdo_oauth.auth_url,
-        config.linuxdo_oauth.client_id,
-        config.linuxdo_oauth.redirect_uri,
-    )
+/// 生成带 state 的 OAuth 授权 URL（URL 编码所有参数）。
+/// 返回 (oauth_url, state_value)
+pub fn create_oauth_url(config: &AppConfig) -> (String, String) {
+    let state = uuid::Uuid::new_v4().to_string();
+
+    let client_id_enc = urlencoding::encode(&config.linuxdo_oauth.client_id);
+    let redirect_uri_enc = urlencoding::encode(&config.linuxdo_oauth.redirect_uri);
+    let state_enc = urlencoding::encode(&state);
+
+    let url = format!(
+        "{}?client_id={}&response_type=code&redirect_uri={}&state={}&scope=read",
+        config.linuxdo_oauth.auth_url, client_id_enc, redirect_uri_enc, state_enc,
+    );
+    (url, state)
 }
 
 pub async fn exchange_code_for_token(
@@ -52,10 +59,7 @@ pub async fn exchange_code_for_token(
         .post(&config.linuxdo_oauth.token_url)
         .form(&[
             ("client_id", config.linuxdo_oauth.client_id.as_str()),
-            (
-                "client_secret",
-                config.linuxdo_oauth.client_secret.as_str(),
-            ),
+            ("client_secret", config.linuxdo_oauth.client_secret.as_str()),
             ("code", code),
             ("grant_type", "authorization_code"),
             ("redirect_uri", config.linuxdo_oauth.redirect_uri.as_str()),
@@ -97,15 +101,14 @@ pub struct OAuthAuthorizeQuery {
     pub response_type: Option<String>,
 }
 
-/// Silent authorization endpoint - no user confirmation
+/// 平台作为 OAuth 提供商的静默授权端点。
 pub async fn oauth_authorize(
     Query(q): Query<OAuthAuthorizeQuery>,
 ) -> impl IntoResponse {
     let pool = crate::db::get_db();
 
-    // Verify the app
     let app: Option<(String, String)> = sqlx::query_as(
-        "SELECT client_id, redirect_uri FROM oauth_apps WHERE client_id = ? AND is_active = 1"
+        "SELECT client_id, redirect_uri FROM oauth_apps WHERE client_id = ? AND is_active = 1",
     )
     .bind(&q.client_id)
     .fetch_optional(pool)
@@ -113,17 +116,15 @@ pub async fn oauth_authorize(
     .unwrap_or(None);
 
     if app.is_none() {
-        return Redirect::to(&format!("{}?error=invalid_client&state={}",
-            q.redirect_uri, q.state.as_deref().unwrap_or("")));
+        let encoded = q.state.as_deref().unwrap_or("");
+        return Redirect::to(&format!(
+            "{}?error=invalid_client&state={}",
+            q.redirect_uri, encoded
+        ));
     }
 
-    // Generate a code (in production, this would be a real auth code)
     let code = format!("auth_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-
-    // Redirect back with code
-    let mut redirect_url = format!("{}?code={}", q.redirect_uri, code);
-    if let Some(state) = &q.state {
-        redirect_url = format!("{}&state={}", redirect_url, state);
-    }
+    let encoded_state = q.state.as_deref().unwrap_or("");
+    let redirect_url = format!("{}?code={}&state={}", q.redirect_uri, code, encoded_state);
     Redirect::to(&redirect_url)
 }
