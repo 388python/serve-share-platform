@@ -4,14 +4,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use chrono::Utc;
 use std::sync::Arc;
 use tera::{Context, Tera};
-use tower_cookies::{cookie::time::Duration, Cookie, CookieManagerLayer, Cookies};
+use tower_cookies::{cookie::SameSite, Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
 use tracing_subscriber;
-
-use crate::models::Server;
 
 mod config;
 mod db;
@@ -37,9 +34,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Init database
     db::init_db(&cfg.database_url).await?;
-
-    // Initialize OpenGFW default rules
-    services::opengfw::init_default_rules().await;
 
     // Init Tera templates
     let mut tera = Tera::new("templates/**/*")?;
@@ -82,11 +76,10 @@ async fn main() -> anyhow::Result<()> {
                 if let Some((ip,)) = server {
                     let machine_name = format!("machine-{}", machine_id);
                     let agent_url = format!("http://{}:19527", ip);
-                    let agent_key = services::session::agent_api_key();
                     let client = reqwest::Client::new();
                     let _ = client
                         .post(&format!("{}/stop/{}", agent_url, machine_name))
-                        .header("X-API-Key", agent_key)
+                        .header("X-API-Key", "tea-platform-agent-key")
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;
@@ -105,64 +98,39 @@ async fn main() -> anyhow::Result<()> {
             let port = start_port + port_offset;
             let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(l) => l,
-                Err(e) => {
-                    tracing::warn!("Failed to bind SSH proxy port {}: {}", port, e);
-                    continue;
-                }
+                Err(_) => continue,
             };
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
                         Ok((mut incoming, _addr)) => {
+                            // Forward to the corresponding server
                             let pool = db::get_db();
-                            let now = chrono::Utc::now();
-                            // Check server is active AND not expired
                             let server: Option<(i32, String)> = sqlx::query_as(
-                                "SELECT ssh_port, ip FROM servers WHERE proxy_port = ? AND is_active = 1 AND expires_at > ?",
+                                "SELECT ssh_port, ip FROM servers WHERE proxy_port = ? AND is_active = 1",
                             )
                             .bind(port as i32)
-                            .bind(now)
                             .fetch_optional(pool)
                             .await
                             .unwrap_or(None);
 
                             if let Some((ssh_port, ip)) = server {
                                 let target = format!("{}:{}", ip, ssh_port);
-                                match tokio::time::timeout(
-                                    std::time::Duration::from_secs(10),
-                                    tokio::net::TcpStream::connect(&target)
-                                ).await {
-                                    Ok(Ok(mut outgoing)) => {
-                                        let (mut ri, mut wi) = tokio::io::split(incoming);
-                                        let (mut ro, mut wo) = tokio::io::split(outgoing);
-                                        let _ = tokio::join!(
-                                            tokio::io::copy(&mut ri, &mut wo),
-                                            tokio::io::copy(&mut ro, &mut wi),
-                                        );
-                                    }
-                                    Ok(Err(e)) => {
-                                        tracing::debug!("SSH proxy connection failed: {}", e);
-                                        drop(incoming);
-                                    }
-                                    Err(_) => {
-                                        tracing::debug!("SSH proxy connection timeout");
-                                        drop(incoming);
-                                    }
+                                if let Ok(mut outgoing) = tokio::net::TcpStream::connect(&target).await {
+                                    let (mut ri, mut wi) = tokio::io::split(incoming);
+                                    let (mut ro, mut wo) = tokio::io::split(outgoing);
+                                    let _ = tokio::join!(
+                                        tokio::io::copy(&mut ri, &mut wo),
+                                        tokio::io::copy(&mut ro, &mut wi),
+                                    );
                                 }
-                            } else {
-                                // No valid server, close connection
-                                drop(incoming);
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("SSH proxy accept error: {}", e);
-                            break;
-                        }
+                        Err(_) => break,
                     }
                 }
             });
         }
-        tracing::info!("SSH proxy listeners started");
     });
 
     // Background task: Traffic monitoring
@@ -204,29 +172,55 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Background task: Delayed settlement
-    // NOTE: Core hours are already credited to server owner when machine is created.
-    // This task handles other settlement logic if needed (e.g., refunds for unused time).
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(600)).await;
             let pool = db::get_db();
-            
-            // Find stopped machines that haven't been settled
-            // (Deleted machines are already removed from DB)
-            let machines: Vec<(i64,)> = sqlx::query_as(
-                "SELECT id FROM machines WHERE status = 'stopped' AND settled = 0"
+            let threshold_pct: f64 = db::get_config("settlement_threshold_pct").await
+                .unwrap_or_else(|| "80".to_string())
+                .parse()
+                .unwrap_or(80.0);
+            let threshold = threshold_pct / 100.0;
+
+            // Find stopped/deleted machines that haven't been settled
+            let machines: Vec<(i64, i64, f64, f64)> = sqlx::query_as(
+                "SELECT m.id, m.server_id, m.core_hours_per_hour, m.used_hours FROM machines m WHERE m.status IN ('stopped','deleted') AND m.settled = 0"
             )
             .fetch_all(pool)
             .await
             .unwrap_or_default();
 
-            for (machine_id,) in &machines {
-                let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
-                    .bind(machine_id)
-                    .execute(pool)
-                    .await;
+            for (machine_id, server_id, ch_per_hour, used_hours) in &machines {
+                // Get server expiry
+                let server_expiry: Option<(String,)> = sqlx::query_as(
+                    "SELECT expires_at FROM servers WHERE id = ?"
+                )
+                .bind(server_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((expires_at_str,)) = server_expiry {
+                    if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
+                        let max_hours = (expires_at.naive_utc() - chrono::Utc::now().naive_utc()).num_hours() as f64;
+                        if max_hours > 0.0 && used_hours / max_hours >= threshold {
+                            // Settle: credit core hours to server owner
+                            let total_ch = ch_per_hour * used_hours;
+                            let _ = sqlx::query(
+                                "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
+                            )
+                            .bind(total_ch)
+                            .bind(server_id)
+                            .execute(pool)
+                            .await;
+                            let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
+                                .bind(machine_id)
+                                .execute(pool)
+                                .await;
+                        }
+                    }
+                }
             }
-            tracing::debug!("Settlement processed {} stopped machines", machines.len());
         }
     });
 
@@ -260,21 +254,6 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Background task: Expire premium on servers
-    tokio::spawn(async {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            let pool = db::get_db();
-            let now = chrono::Utc::now();
-            let _ = sqlx::query(
-                "UPDATE servers SET is_premium = 0, premium_expires_at = NULL WHERE is_premium = 1 AND premium_expires_at IS NOT NULL AND premium_expires_at <= ?"
-            )
-            .bind(now)
-            .execute(pool)
-            .await;
-        }
-    });
-
     // Build router
     let app = Router::new()
         // Public routes
@@ -283,19 +262,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/stats", get(handlers::stats_page))
         .route("/login", get(login_page))
         .route("/auth/callback", get(auth_callback))
-        .route("/servers", get(handlers::servers_page))
-        .route(
-            "/admin-login",
-            post(handlers::admin_login),
-        )
+        .route("/admin-login", post(handlers::admin_login))
         .route("/admin-login/ui", get(handlers::admin_login_ui))
         .route("/logout", get(handlers::logout))
         // User dashboard
-        .route("/user", get(handlers::user_center))
         .route("/dashboard", get(handlers::user_dashboard))
         .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
-        .route("/servers/ssh-key-setup", get(handlers::ssh_key_setup_page))
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
         .route("/servers/:id/delete", post(handlers::delete_server))
@@ -334,18 +307,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/balance-to-code", post(handlers::balance_to_code_submit))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
-        .route("/oauth/token", post(services::auth::oauth_token))
         // Admin routes
         .route("/admin", get(handlers::admin_dashboard))
         .route("/admin/config", get(handlers::admin_config_page))
         .route("/admin/config", post(handlers::admin_config_save))
         .route("/admin/users", get(handlers::admin_users))
         .route("/admin/users/:id", post(handlers::admin_user_edit))
-        .route("/admin/users/:id/delete", post(handlers::admin_user_delete))
         .route("/admin/servers", get(handlers::admin_servers))
         .route("/admin/servers/:id/toggle", post(handlers::admin_servers_toggle))
         .route("/admin/machines", get(handlers::admin_machines))
-        .route("/admin/machines-stats", get(handlers::admin_machines_stats))
         .route("/admin/packages", get(handlers::admin_packages))
         .route("/admin/packages/create", post(handlers::admin_package_create))
         .route("/admin/packages/:id/delete", post(handlers::admin_package_delete))
@@ -355,24 +325,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/invites/generate", post(handlers::admin_generate_invites))
         .route("/admin/orders", get(handlers::admin_orders))
         .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts))
-        .route("/admin/opengfw", get(handlers::admin_opengfw_page))
         .route("/admin/disputes", get(handlers::admin_disputes))
         .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
         .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
-        .route("/admin/warning-letters", get(handlers::admin_warning_letters))
-        .route("/admin/warning-letters/send", post(handlers::admin_warning_letters_send))
-        .route("/admin/warning-letters/:id/delete", post(handlers::admin_warning_letter_delete))
-        // User warning letters
-        .route("/warnings", get(handlers::user_warning_letters))
-        .route("/warnings/:id", get(handlers::user_warning_letter_detail))
-        .route("/warnings/:id/action", post(handlers::user_warning_letter_action))
         // API routes (RESTful JSON) - mounted under /api prefix
         .nest("/api", handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
-        // Agent install scripts (install.sh, agent.service)
-        .nest_service("/agent", ServeDir::new("agent"))
         .layer(CookieManagerLayer::new())
         .with_state(app_state);
 
@@ -387,17 +347,6 @@ async fn main() -> anyhow::Result<()> {
 // ---- Route Handlers ----
 
 async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
-    let pool = db::get_db();
-
-    // 只查询激活且未过期的服务器
-    let servers: Vec<Server> = sqlx::query_as(
-        "SELECT * FROM servers WHERE is_active = 1 AND expires_at > ? ORDER BY is_premium DESC, created_at DESC",
-    )
-    .bind(Utc::now())
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
     let cfg = config::AppConfig::get();
     let site_name = db::get_config("site_name")
         .await
@@ -405,72 +354,45 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
 
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
-    ctx.insert("servers", &servers);
 
-    // 已登录用户信息
-    if let Some(session) = services::session::get_session_checked(&cookies) {
-        ctx.insert("user_name", &session.username);
-        ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
-        ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
-        ctx.insert("is_admin", &session.is_admin.to_string());
+    if let Some(session_cookie) = cookies.get("session") {
+        if let Some(session) = handlers::parse_signed_session_wrapper(session_cookie.value()) {
+            ctx.insert(
+                "user_name",
+                &session.get("username").cloned().unwrap_or_default(),
+            );
+            ctx.insert(
+                "user_balance",
+                &session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string()),
+            );
+            ctx.insert(
+                "user_ldc",
+                &session.get("ldc_balance").cloned().unwrap_or_else(|| "0".to_string()),
+            );
+            ctx.insert(
+                "is_admin",
+                &session.get("is_admin").cloned().unwrap_or_else(|| "false".to_string()),
+            );
+        }
     }
 
     let rendered = state
         .templates
-        .render("servers.html", &ctx)
+        .render("user/index.html", &ctx)
         .unwrap_or_else(|e| e.to_string());
     Html(rendered)
 }
 
-async fn login_page(
-    State(_state): State<AppState>,
-    cookies: Cookies,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
+async fn login_page(State(_state): State<AppState>, cookies: Cookies) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
-
-    // 检查关键配置
-    if cfg.linuxdo_oauth.client_id.is_empty() {
-        tracing::error!("LINUXDO_CLIENT_ID is not configured — OAuth login unavailable");
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "服务器未配置 LinuxDo OAuth Client ID，请在 .env 中设置 LINUXDO_CLIENT_ID",
-        )
-            .into_response();
-    }
-    if cfg.linuxdo_oauth.redirect_uri.is_empty() {
-        tracing::error!("OAuth redirect_uri is empty — check PLATFORM_DOMAIN");
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "服务器未配置 OAuth 回调地址，请在 .env 中设置 PLATFORM_DOMAIN",
-        )
-            .into_response();
-    }
-
-    // 获取签名的 state（由 auth.rs 生成：timestamp.nonce.hmac_sha256）
     let (oauth_url, state_value) = services::auth::create_oauth_url(cfg);
-
-    // 设置 state cookie — 用于回调时的 CSRF 校验
     let mut state_cookie = Cookie::new("oauth_state", state_value);
     state_cookie.set_path("/");
-    state_cookie.set_max_age(Duration::seconds(600));
+    state_cookie.set_max_age(cookie::time::Duration::minutes(10));
     state_cookie.set_http_only(true);
-    state_cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+    state_cookie.set_same_site(SameSite::Lax);
     cookies.add(state_cookie);
-
-    // 如果用户传入 invite_code，保存到 cookie，供回调时使用（LinuxDo 不会回传此参数）
-    if let Some(invite_code) = params.get("invite_code") {
-        if !invite_code.is_empty() {
-            let mut invite_cookie = Cookie::new("invite_code", invite_code.clone());
-            invite_cookie.set_path("/");
-            invite_cookie.set_max_age(Duration::seconds(600));
-            invite_cookie.set_http_only(true);
-            invite_cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
-            cookies.add(invite_cookie);
-        }
-    }
-
-    Redirect::to(&oauth_url).into_response()
+    Redirect::to(&oauth_url)
 }
 
 async fn auth_callback(
@@ -480,43 +402,21 @@ async fn auth_callback(
 ) -> impl IntoResponse {
     let cfg = config::AppConfig::get();
 
-    // 提取 OAuth code
     let code = match params.get("code") {
         Some(c) => c.clone(),
         None => return Redirect::to("/").into_response(),
     };
 
-    // ---- CSRF + state 签名校验 ----
-    // 1. cookie 中有 state：与回调中的 state 精确比对，然后验证签名和有效期
-    // 2. cookie 中无 state：仍然验证签名（降级模式）
-    let cookie_state = cookies.get("oauth_state").map(|c| c.value().to_string());
-    if let Some(expected_state) = cookie_state {
+    if let Some(expected_state) = cookies.get("oauth_state").map(|c| c.value().to_string()) {
         if let Some(incoming_state) = params.get("state") {
-            // 精确匹配（防 CSRF）
             if incoming_state != &expected_state {
-                tracing::warn!("OAuth state mismatch — possible CSRF attack");
+                tracing::warn!("OAuth state mismatch — possible CSRF");
                 return Redirect::to("/").into_response();
             }
-            // 签名 + 有效期验证（防篡改和重放）
-            if !services::auth::verify_state(incoming_state) {
-                tracing::warn!(
-                    "OAuth state signature invalid or expired — possible tampering"
-                );
-                return Redirect::to("/").into_response();
-            }
-        } else {
-            tracing::warn!("OAuth callback missing state parameter");
-            return Redirect::to("/").into_response();
-        }
-    } else if let Some(incoming_state) = params.get("state") {
-        // 降级：只验证签名
-        if !services::auth::verify_state(incoming_state) {
-            tracing::warn!("OAuth state signature invalid (no cookie state)");
-            return Redirect::to("/").into_response();
         }
     }
 
-    // Token exchange
+    // Exchange code for token
     let token_response = match services::auth::exchange_code_for_token(cfg, &code).await {
         Ok(t) => t,
         Err(e) => {
@@ -556,8 +456,7 @@ async fn auth_callback(
         ldc_balance = ldc;
     } else {
         // Check registration enabled
-        let reg_enabled = db::get_config("registration_enabled")
-            .await
+        let reg_enabled = db::get_config("registration_enabled").await
             .map(|v| v == "true")
             .unwrap_or(true);
         if !reg_enabled {
@@ -565,27 +464,22 @@ async fn auth_callback(
         }
 
         // Check invite requirement
-        let require_invite = db::get_config("require_invite")
-            .await
+        let require_invite = db::get_config("require_invite").await
             .map(|v| v == "true")
             .unwrap_or(false);
 
-        let new_user_core_hours: f64 = db::get_config("new_user_core_hours")
-            .await
+        let new_user_core_hours: f64 = db::get_config("new_user_core_hours").await
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0);
 
-        // invite_code：从 cookie 读取（/login 时保存的），不是从 OAuth 回调 params 读
-        let pending_invite_id: Option<i64> = if require_invite {
-            let invite_code = cookies
-                .get("invite_code")
-                .map(|c| c.value().to_string())
-                .unwrap_or_default();
+        if require_invite {
+            let invite_code = params.get("invite_code").cloned().unwrap_or_default();
             if invite_code.is_empty() {
                 return Redirect::to("/?error=invite_required").into_response();
             }
-            let invite_valid: Option<(i64, String)> = sqlx::query_as(
-                "SELECT id, public_note FROM invites WHERE code = ? AND is_used = 0",
+            // Verify and consume invite code
+            let invite_valid: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM invites WHERE code = ? AND is_used = 0",
             )
             .bind(&invite_code)
             .fetch_optional(pool)
@@ -593,50 +487,34 @@ async fn auth_callback(
             .unwrap_or(None);
 
             match invite_valid {
-                Some((invite_id, public_note)) => {
-                    if !public_note.is_empty() {
-                        return Redirect::to(&format!(
-                            "/?error=invalid_invite&note={}",
-                            urlencoding::encode(&public_note)
-                        ))
-                        .into_response();
-                    }
-                    // 标记邀请码已使用（用户创建后回填 used_by）
-                    let _ = sqlx::query(
-                        "UPDATE invites SET is_used = 1, used_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    )
-                    .bind(invite_id)
-                    .execute(pool)
-                    .await;
-                    Some(invite_id)
+                Some(invite_id) => {
+                    sqlx::query("UPDATE invites SET is_used = 1, used_by = (SELECT id FROM users WHERE linuxdo_id = ? LIMIT 1), used_at = CURRENT_TIMESTAMP WHERE id = ?")
+                        .bind(user_info.id)
+                        .bind(invite_id)
+                        .execute(pool)
+                        .await
+                        .ok();
                 }
                 None => {
-                    let note_exists: Option<String> = sqlx::query_scalar(
-                        "SELECT public_note FROM invites WHERE code = ?",
+                    let public_note: Option<String> = sqlx::query_scalar(
+                        "SELECT public_note FROM invites WHERE code = ?"
                     )
                     .bind(&invite_code)
                     .fetch_optional(pool)
                     .await
                     .unwrap_or(None)
                     .flatten();
-                    if let Some(note) = note_exists {
+                    if let Some(note) = public_note {
                         if !note.is_empty() {
-                            return Redirect::to(&format!(
-                                "/?error=invalid_invite&note={}",
-                                urlencoding::encode(&note)
-                            ))
-                            .into_response();
+                            return Redirect::to(&format!("/?error=invalid_invite&note={}", urlencoding::encode(&note))).into_response();
                         }
                     }
                     return Redirect::to("/?error=invalid_invite").into_response();
                 }
             }
-        } else {
-            None
-        };
+        }
 
-        // Create user
-        let result = sqlx::query(
+        sqlx::query(
             "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
         )
         .bind(user_info.id)
@@ -644,54 +522,38 @@ async fn auth_callback(
         .bind(user_info.effective_email())
         .bind(new_user_core_hours)
         .execute(pool)
-        .await;
+        .await
+        .map_err(|e| tracing::error!("Failed to create user: {}", e))
+        .ok();
 
-        let new_user_id: i64;
-        match result {
-            Ok(res) => {
-                new_user_id = res.last_insert_rowid();
-            }
-            Err(e) => {
-                tracing::error!("Failed to create user: {}", e);
-                return Redirect::to("/?error=registration_failed").into_response();
-            }
-        }
+        let new_user: (i64, bool, f64, f64) = sqlx::query_as(
+            "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
+        )
+        .bind(user_info.id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0, false, 0.0, 0.0));
 
-        // 回填邀请码 used_by
-        if let Some(invite_id) = pending_invite_id {
-            let _ = sqlx::query("UPDATE invites SET used_by = ? WHERE id = ?")
-                .bind(new_user_id)
-                .bind(invite_id)
-                .execute(pool)
-                .await;
-        }
-
-        user_id = new_user_id;
-        is_admin = false;
-        core_hours = new_user_core_hours;
-        ldc_balance = 0.0;
+        user_id = new_user.0;
+        is_admin = new_user.1;
+        core_hours = new_user.2;
+        ldc_balance = new_user.3;
     }
 
-    // Create session cookie (signed with HMAC-SHA256 by session.rs)
-    let session = crate::services::session::UserSession {
+    handlers::set_session_cookie_wrapper(
+        &cookies,
         user_id,
-        username: user_info.effective_name().to_string(),
+        &user_info.effective_name(),
         is_admin,
         core_hours,
         ldc_balance,
-    };
-    crate::services::session::set_session_cookie(&cookies, &session);
+    );
 
-    // Clear oauth_state and invite_code cookies — 不再需要
+    // 清除 state cookie
     let mut state_cookie = Cookie::new("oauth_state", "");
     state_cookie.set_path("/");
-    state_cookie.set_max_age(Duration::seconds(0));
+    state_cookie.set_max_age(cookie::time::Duration::seconds(0));
     cookies.add(state_cookie);
-
-    let mut invite_cookie = Cookie::new("invite_code", "");
-    invite_cookie.set_path("/");
-    invite_cookie.set_max_age(Duration::seconds(0));
-    cookies.add(invite_cookie);
 
     Redirect::to("/").into_response()
 }
