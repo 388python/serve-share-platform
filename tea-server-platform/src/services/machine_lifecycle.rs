@@ -212,13 +212,13 @@ async fn grant_cumulative_packages(
                 .bind(user_id)
                 .bind(package_id)
                 .bind(core_hours)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
                 sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
                     .bind(core_hours)
                     .bind(user_id)
-                    .execute(&mut *tx)
+                    .execute(&mut **tx)
                     .await?;
             }
         }
