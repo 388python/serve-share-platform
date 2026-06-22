@@ -70,6 +70,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             virt_type TEXT NOT NULL DEFAULT 'lxd',
             status TEXT NOT NULL DEFAULT 'running',
             core_hours_per_hour REAL NOT NULL DEFAULT 0,
+            regular_core_hours_used REAL NOT NULL DEFAULT 0,
+            bonus_core_hours_used REAL NOT NULL DEFAULT 0,
             expires_at DATETIME NOT NULL,
             ssh_port INTEGER,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -183,6 +185,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             resolution TEXT,
             reply TEXT,
             amount_frozen REAL NOT NULL DEFAULT 0,
+            regular_amount_frozen REAL NOT NULL DEFAULT 0,
+            bonus_amount_frozen REAL NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             resolved_at DATETIME,
             auto_resolve_at DATETIME NOT NULL
@@ -253,6 +257,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "settled INTEGER NOT NULL DEFAULT 0",
         "core_hours_per_hour REAL NOT NULL DEFAULT 0",
         "used_hours REAL NOT NULL DEFAULT 0",
+        "regular_core_hours_used REAL NOT NULL DEFAULT 0",
+        "bonus_core_hours_used REAL NOT NULL DEFAULT 0",
         "max_hours REAL NOT NULL DEFAULT 0",
         "is_premium INTEGER NOT NULL DEFAULT 0",
         "premium_expires_at DATETIME",
@@ -431,6 +437,27 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE machines ADD COLUMN used_hours REAL NOT NULL DEFAULT 0")
         .execute(pool)
         .await;
+    let _ = sqlx::query(
+        "ALTER TABLE machines ADD COLUMN regular_core_hours_used REAL NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE machines ADD COLUMN bonus_core_hours_used REAL NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+
+    // Dispute frozen balance split: preserves regular/bonus accounting during settlement.
+    let _ = sqlx::query(
+        "ALTER TABLE disputes ADD COLUMN regular_amount_frozen REAL NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await;
+    let _ =
+        sqlx::query("ALTER TABLE disputes ADD COLUMN bonus_amount_frozen REAL NOT NULL DEFAULT 0")
+            .execute(pool)
+            .await;
 
     // Expose IP & NAT: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN expose_ip INTEGER NOT NULL DEFAULT 0")
@@ -458,6 +485,88 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE users ADD COLUMN bonus_expires_at DATETIME")
         .execute(pool)
         .await;
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET core_hours = core_hours + (
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN d.regular_amount_frozen > 0 OR d.bonus_amount_frozen > 0
+                            THEN d.regular_amount_frozen
+                        ELSE d.amount_frozen
+                    END
+                ), 0)
+                FROM disputes d
+                JOIN servers s ON d.server_id = s.id
+                WHERE s.owner_id = users.id
+                  AND d.status IN ('pending', 'platform')
+                  AND d.id NOT IN (
+                      SELECT MIN(id)
+                      FROM disputes
+                      WHERE status IN ('pending', 'platform')
+                      GROUP BY machine_id
+                  )
+            ),
+            bonus_core_hours = bonus_core_hours + (
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN d.regular_amount_frozen > 0 OR d.bonus_amount_frozen > 0
+                            THEN d.bonus_amount_frozen
+                        ELSE 0
+                    END
+                ), 0)
+                FROM disputes d
+                JOIN servers s ON d.server_id = s.id
+                WHERE s.owner_id = users.id
+                  AND d.status IN ('pending', 'platform')
+                  AND d.id NOT IN (
+                      SELECT MIN(id)
+                      FROM disputes
+                      WHERE status IN ('pending', 'platform')
+                      GROUP BY machine_id
+                  )
+            )
+        WHERE id IN (
+            SELECT s.owner_id
+            FROM disputes d
+            JOIN servers s ON d.server_id = s.id
+            WHERE d.status IN ('pending', 'platform')
+              AND d.id NOT IN (
+                  SELECT MIN(id)
+                  FROM disputes
+                  WHERE status IN ('pending', 'platform')
+                  GROUP BY machine_id
+              )
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE disputes
+        SET status = 'resolved',
+            resolution = COALESCE(resolution, 'duplicate'),
+            resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP)
+        WHERE status IN ('pending', 'platform')
+          AND id NOT IN (
+              SELECT MIN(id)
+              FROM disputes
+              WHERE status IN ('pending', 'platform')
+              GROUP BY machine_id
+          )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_one_active_per_machine ON disputes(machine_id) WHERE status = 'pending' OR status = 'platform'",
+    )
+    .execute(pool)
+    .await?;
 
     // Premium and Linux version: servers table
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")

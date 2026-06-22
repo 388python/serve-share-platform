@@ -386,8 +386,7 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
 
     let install_url = format!("{}/agent/install.sh", platform_domain.trim_end_matches('/'));
     let agent_api_key = services::session::agent_api_key();
-    let virt_type = db::get_config_sync("default_virt_type")
-        .unwrap_or_else(|| "lxd".to_string());
+    let virt_type = db::get_config_sync("default_virt_type").unwrap_or_else(|| "lxd".to_string());
     // Use the platform's own SSH key if the user did not provide one; otherwise
     // fall back to the key they provided.
     let effective_ssh_key: String = if ssh_key.is_empty() || ssh_key == "AUTO" {
@@ -396,10 +395,9 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
         ssh_key.to_string()
     };
 
-    let _ = tokio::task::spawn_blocking({
+    let install_result = tokio::task::spawn_blocking({
         let ip = ip.to_string();
         let ssh_key = effective_ssh_key.clone();
-        let port = port;
         let server_id = _server_id;
         let install_url = install_url.clone();
         let agent_api_key = agent_api_key.clone();
@@ -422,18 +420,18 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
 
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, port)) {
                 Ok(tcp) => tcp,
-                Err(_) => return,
+                Err(_) => return None,
             };
             let mut session = match ssh2::Session::new() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(_) => return None,
             };
             session.set_tcp_stream(tcp);
             if session.handshake().is_err() {
-                return;
+                return None;
             }
             if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
-                return;
+                return None;
             }
 
             // ---- Phase 1: Detect server hardware via SSH ----
@@ -478,29 +476,37 @@ async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &s
                 false
             };
 
-            if install_success {
-                let pool = db::get_db();
-                let _ = sqlx::query(
-                    "UPDATE servers SET \
-                        cpu_cores = ?, \
-                        memory_gb = ?, \
-                        disk_gb = ?, \
-                        bandwidth_mbps = COALESCE(NULLIF(bandwidth_mbps, 0), ?), \
-                        agent_installed = 1, \
-                        linux_version = CASE WHEN linux_version = '' OR linux_version IS NULL THEN ? ELSE linux_version END \
-                        WHERE id = ?",
-                )
-                .bind(detected_cpu)
-                .bind(detected_memory)
-                .bind(detected_disk)
-                .bind(100.0_f64)
-                .bind(&detected_linux)
-                .bind(server_id)
-                .execute(pool);
-            }
+            install_success.then_some((
+                server_id,
+                detected_cpu,
+                detected_memory,
+                detected_disk,
+                detected_linux,
+            ))
         }
     })
     .await;
+
+    match install_result {
+        Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) => {
+            super::update_server_agent_hardware(
+                server_id,
+                detected_cpu,
+                detected_memory,
+                detected_disk,
+                detected_linux,
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(
+                server_id = _server_id,
+                error = %err,
+                "agent SSH install task failed"
+            );
+        }
+    }
 }
 
 // ==============================
@@ -579,6 +585,13 @@ async fn api_machines_create(
     }
 
     let mut hours = form.hours.unwrap_or(24) as i64;
+    if hours <= 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_hours", "message": "Hours must be greater than 0" })),
+        )
+            .into_response();
+    }
 
     // Check max machine hours limit
     if server.max_machine_hours > 0.0 && hours as f64 > server.max_machine_hours {
@@ -604,24 +617,29 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    // NAT port allocation: each running machine uses 1 NAT port
-    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
-        let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
-        )
-        .bind(server.id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or((0,));
-        let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
-        // Each machine uses 1 NAT port, check if there's capacity for this new machine
-        if used_ports.0 < total_available_nat {
-            1 // This new machine uses 1 NAT port
-        } else {
-            0 // No ports available, won't charge for NAT
+    let nat_ports = match super::machine_nat_ports_for_create(pool, &server).await {
+        Ok(nat_ports) => nat_ports,
+        Err("nat_ports_exhausted") => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "nat_ports_exhausted", "message": "No NAT ports are available on this server" })),
+            )
+                .into_response();
         }
-    } else {
-        0
+        Err("nat_range_invalid") => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "nat_range_invalid", "message": "Server NAT port range is invalid" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "nat_capacity_check_failed", "message": "Failed to check NAT capacity" })),
+            )
+                .into_response();
+        }
     };
 
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
@@ -737,7 +755,7 @@ async fn api_machines_create(
     let used_hours = hours as f64;
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -746,6 +764,8 @@ async fn api_machines_create(
     .bind(form.disk_gb)
     .bind(&server.virt_type)
     .bind(ch_per_hour)
+    .bind(regular_used)
+    .bind(bonus_used)
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
