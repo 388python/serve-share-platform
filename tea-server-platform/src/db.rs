@@ -463,6 +463,9 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN expose_ip INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
         .await;
+    let _ = sqlx::query("ALTER TABLE servers ADD COLUMN agent_key TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await;
     let _ = sqlx::query("ALTER TABLE servers ADD COLUMN nat_port_start INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
         .await;

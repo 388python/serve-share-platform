@@ -44,6 +44,7 @@ pub struct Server {
     pub is_active: bool,
     pub proxy_port: Option<i32>,
     pub agent_installed: bool,
+    pub agent_key: String,
     pub created_at: DateTime<Utc>,
     pub expose_ip: bool,
     pub nat_port_start: i32,

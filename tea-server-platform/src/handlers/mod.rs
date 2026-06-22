@@ -620,15 +620,15 @@ pub async fn create_machine(
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
 
     // 检查服务器是否存在且活跃，包括资源总量
-    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String)> = sqlx::query_as(
-        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
+    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String, String)> = sqlx::query_as(
+        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type, agent_key FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(form.server_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt) = match server {
+    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt, agent_key) = match server {
         Some(s) => s,
         None => return Redirect::to("/machines?error=server_unavailable").into_response(),
     };
@@ -739,14 +739,13 @@ pub async fn create_machine(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
-            owner_id: sid,
             server_ip: ip,
             machine_name,
             virt_type,
             cpu: form.cpu_cores,
             memory_gb: form.memory_gb,
             disk_gb: form.disk_gb,
-            agent_key: "tea-platform-agent-key".to_string(),
+            agent_key: agent_key.clone(),
             regular_used: cost,
             bonus_used: 0.0,
             used_hours: hours,

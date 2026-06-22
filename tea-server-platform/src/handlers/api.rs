@@ -184,6 +184,7 @@ pub struct ContributeServerRequest {
     pub linux_version: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
+    pub agent_key: Option<String>,
 }
 
 // POST /api/v1/servers/contribute
@@ -214,11 +215,12 @@ async fn api_servers_contribute(
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let agent_key = form.agent_key.clone().unwrap_or_default();
 
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, agent_key, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -237,6 +239,7 @@ async fn api_servers_contribute(
     .bind(&virt_type)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(&agent_key)
     .bind(expose_ip)
     .bind(nat_port_start)
     .bind(nat_port_end)
@@ -659,12 +662,14 @@ async fn api_machines_create(
     let memory = form.memory_gb;
     let disk = form.disk_gb;
 
-    let agent_key = "tea-platform-agent-key".to_string();
+    let agent_key = server.agent_key.clone();
+    if agent_key.is_empty() {
+        tracing::warn!(server_id = server.id, machine_id = machine_id, "server has no agent_key configured");
+    }
     services::machine_lifecycle::spawn_agent_create_job(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
-            owner_id: server.owner_id,
             server_ip,
             machine_name,
             virt_type,
