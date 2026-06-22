@@ -2,21 +2,24 @@
 FROM rust:bookworm AS builder
 WORKDIR /app
 
-# Copy only Cargo files first for caching
+# 单线程编译，减少内存使用
+ENV CARGO_BUILD_JOBS=1
+
+# 复制 Cargo 文件
 COPY Cargo.toml Cargo.lock ./
 
-# Create minimal src to build dependencies
+# 创建最小项目结构
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 
-# Build dependencies (cached if Cargo files haven't changed)
+# 构建依赖（缓存）
 RUN cargo build --release --locked 2>/dev/null || true
 
-# Now copy actual source code
+# 复制源代码
 COPY src/ ./src/
 COPY templates/ ./templates/
 COPY static/ ./static/
 
-# Build the actual project
+# 构建实际项目
 RUN cargo build --release
 
 # Runtime stage
