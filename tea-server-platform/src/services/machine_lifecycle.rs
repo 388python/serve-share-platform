@@ -5,7 +5,6 @@ use crate::db;
 pub struct MachineProvisioningJob {
     pub machine_id: i64,
     pub user_id: i64,
-    pub owner_id: i64,
     pub server_ip: String,
     pub machine_name: String,
     pub virt_type: String,
@@ -43,60 +42,109 @@ pub fn spawn_agent_create_job(job: MachineProvisioningJob) {
 
 async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
     let agent_url = format!("http://{}:19527", job.server_ip);
-    let response = reqwest::Client::new()
-        .post(format!("{}/create", agent_url))
-        .header("X-API-Key", &job.agent_key)
-        .json(&json!({
-            "name": job.machine_name,
-            "cpu": job.cpu,
-            "memory": (job.memory_gb * 1024.0) as i64,
-            "disk": job.disk_gb,
-            "virt_type": job.virt_type,
-        }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await;
+    let client = reqwest::Client::new();
 
-    let response = match response {
-        Ok(response) => response,
-        Err(err) => {
+    let request_body = json!({
+        "name": job.machine_name,
+        "cpu": job.cpu,
+        "memory": (job.memory_gb * 1024.0) as i64,
+        "disk": job.disk_gb,
+        "virt_type": job.virt_type,
+    });
+
+    let max_retries = 3;
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            let backoff = std::time::Duration::from_secs(1 << (attempt - 1));
             tracing::warn!(
                 machine_id = job.machine_id,
-                error = %err,
-                "agent create request failed"
+                attempt = attempt + 1,
+                max = max_retries,
+                backoff_ms = backoff.as_millis(),
+                "retrying agent create after backoff",
             );
-            return false;
+            tokio::time::sleep(backoff).await;
         }
-    };
 
-    if !response.status().is_success() {
-        tracing::warn!(
+        tracing::info!(
             machine_id = job.machine_id,
-            status = %response.status(),
-            "agent create returned non-success status"
+            attempt = attempt + 1,
+            agent_url = %agent_url,
+            request_body = %request_body,
+            "sending create request to agent",
         );
-        return false;
+
+        let response = client
+            .post(&format!("{}/create", agent_url))
+            .header("X-API-Key", &job.agent_key)
+            .json(&request_body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                tracing::warn!(
+                    machine_id = job.machine_id,
+                    attempt = attempt + 1,
+                    error = %err,
+                    "agent create request failed",
+                );
+                continue;
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let body_text = response.text().await.unwrap_or_default();
+            tracing::warn!(
+                machine_id = job.machine_id,
+                attempt = attempt + 1,
+                status = %status,
+                response_body = %body_text,
+                "agent create returned non-success status",
+            );
+            continue;
+        }
+
+        match response.json::<Value>().await {
+            Ok(body) if body.get("status").and_then(Value::as_str) == Some("created") => {
+                tracing::info!(
+                    machine_id = job.machine_id,
+                    attempt = attempt + 1,
+                    response = %body,
+                    "agent create succeeded",
+                );
+                return true;
+            }
+            Ok(body) => {
+                tracing::warn!(
+                    machine_id = job.machine_id,
+                    attempt = attempt + 1,
+                    response = %body,
+                    "agent create did not confirm creation",
+                );
+                continue;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    machine_id = job.machine_id,
+                    attempt = attempt + 1,
+                    error = %err,
+                    "agent create returned invalid json",
+                );
+                continue;
+            }
+        }
     }
 
-    match response.json::<Value>().await {
-        Ok(body) if body.get("status").and_then(Value::as_str) == Some("created") => true,
-        Ok(body) => {
-            tracing::warn!(
-                machine_id = job.machine_id,
-                response = %body,
-                "agent create did not confirm creation"
-            );
-            false
-        }
-        Err(err) => {
-            tracing::warn!(
-                machine_id = job.machine_id,
-                error = %err,
-                "agent create returned invalid json"
-            );
-            false
-        }
-    }
+    tracing::error!(
+        machine_id = job.machine_id,
+        "agent create failed after all {} retries",
+        max_retries,
+    );
+    false
 }
 
 async fn mark_machine_running(
@@ -194,13 +242,6 @@ async fn fail_machine_and_refund(job: &MachineProvisioningJob) -> anyhow::Result
             .bind(job.bonus_used)
             .bind(job.regular_used)
             .bind(job.user_id)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ?")
-            .bind(job.bonus_used)
-            .bind(job.regular_used)
-            .bind(job.owner_id)
             .execute(&mut *tx)
             .await?;
     }

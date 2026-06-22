@@ -1,13 +1,12 @@
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use uuid::Uuid;
@@ -17,17 +16,29 @@ use crate::models::*;
 use crate::services;
 use crate::AppState;
 
-// ---- Helpers ----
-
-/// 验证 IP 地址格式（IPv4 或 IPv6）
-fn is_valid_ip(ip: &str) -> bool {
-    ip.parse::<IpAddr>().is_ok()
-}
-
 static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
 
 pub fn set_startup_time(t: chrono::DateTime<chrono::Utc>) {
     let _ = STARTUP_TIME.set(t);
+}
+
+// Query parameters for OpenGFW stats
+#[derive(Debug, Deserialize)]
+struct StatsQuery {
+    start_time: Option<String>,
+    end_time: Option<String>,
+    server_id: Option<i64>,
+    hours: Option<i64>,
+}
+
+// Query parameters for OpenGFW logs
+#[derive(Debug, Deserialize)]
+struct LogsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    server_id: Option<i64>,
+    protocol: Option<String>,
+    username: Option<String>,
 }
 
 // ---- Helpers: Token extraction & auth ----
@@ -95,7 +106,9 @@ async fn authenticate_user(headers: &HeaderMap) -> Result<i64, (StatusCode, Json
 async fn authenticate_admin(headers: &HeaderMap) -> Result<i64, (StatusCode, Json<ApiError>)> {
     // First try the dedicated admin API key
     if let Some(token) = extract_bearer_token(headers) {
-        let admin_key = db::get_config("admin_api_key").await.unwrap_or_default();
+        let admin_key = db::get_config("admin_api_key")
+            .await
+            .unwrap_or_default();
         if !admin_key.is_empty() && token == admin_key {
             return Ok(-1);
         }
@@ -122,15 +135,6 @@ async fn authenticate_admin(headers: &HeaderMap) -> Result<i64, (StatusCode, Jso
     Ok(user_id)
 }
 
-/// Verify that an agent request carries the correct X-API-Key header.
-fn verify_agent_api_key(headers: &HeaderMap) -> bool {
-    let header_key = headers
-        .get("X-API-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    header_key == services::session::agent_api_key()
-}
-
 // ---- Generic response types ----
 
 #[derive(Serialize, Deserialize)]
@@ -146,10 +150,7 @@ pub struct ApiSuccess<T> {
 }
 
 fn ok_response<T: Serialize>(data: T) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json!({ "success": true, "data": data })),
-    )
+    (StatusCode::OK, Json(json!({ "success": true, "data": data })))
 }
 
 // ==============================
@@ -165,14 +166,11 @@ async fn api_health() -> impl IntoResponse {
         .get()
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "platform": platform,
-            "version": "0.1.0",
-            "started_at": started_at,
-        })),
-    )
+    (StatusCode::OK, Json(json!({
+        "platform": platform,
+        "version": "0.1.0",
+        "started_at": started_at,
+    })))
         .into_response()
 }
 
@@ -205,6 +203,7 @@ pub struct ContributeServerRequest {
     pub linux_version: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
+    pub agent_key: Option<String>,
 }
 
 // POST /api/v1/servers/contribute
@@ -217,86 +216,12 @@ async fn api_servers_contribute(
         Err(err) => return err.into_response(),
     };
 
-    // ---- Input Validation ----
-    let name = form.name.trim();
-    let ip = form.ip.trim();
-    let ssh_key = form.ssh_key.trim();
-
-    if name.is_empty() || ip.is_empty() || ssh_key.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                json!({ "error": "empty_fields", "message": "Name, IP, and SSH key are required" }),
-            ),
-        )
-            .into_response();
-    }
-
-    if name.len() > 100 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "name_too_long" })),
-        )
-            .into_response();
-    }
-
-    if !is_valid_ip(ip) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_ip", "message": "Invalid IP address format" })),
-        )
-            .into_response();
-    }
-
-    let ssh_port = form.ssh_port.unwrap_or(22);
-    if ssh_port < 1 || ssh_port > 65535 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_ssh_port" })),
-        )
-            .into_response();
-    }
-
-    let cpu_cores = form.cpu_cores;
-    if cpu_cores < 1 || cpu_cores > 256 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_cpu" })),
-        )
-            .into_response();
-    }
-
-    let memory_gb = form.memory_gb;
-    if memory_gb < 0.1 || memory_gb > 1000.0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_memory" })),
-        )
-            .into_response();
-    }
-
-    let disk_gb = form.disk_gb;
-    if disk_gb < 1.0 || disk_gb > 100000.0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_disk" })),
-        )
-            .into_response();
-    }
-
-    let expires_days = form.expires_days.unwrap_or(30);
-    if expires_days < 1 || expires_days > 3650 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_expires" })),
-        )
-            .into_response();
-    }
-
     let pool = db::get_db();
     let now = chrono::Utc::now();
+    let expires_days = form.expires_days.unwrap_or(30);
     let expires_at = now + chrono::Duration::days(expires_days as i64);
 
+    let ssh_port = form.ssh_port.unwrap_or(22);
     let bandwidth_mbps = form.bandwidth_mbps.unwrap_or(0.0);
     let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
     let mem_mult = form.memory_multiplier.unwrap_or(1.0);
@@ -309,21 +234,22 @@ async fn api_servers_contribute(
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let agent_key = form.agent_key.clone().unwrap_or_default();
 
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, expires_at, is_active, proxy_port, agent_installed, agent_key, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
-    .bind(name)
-    .bind(ip)
+    .bind(&form.name)
+    .bind(&form.ip)
     .bind(ssh_port)
-    .bind(ssh_key)
-    .bind(cpu_cores)
-    .bind(memory_gb)
+    .bind(&form.ssh_key)
+    .bind(form.cpu_cores)
+    .bind(form.memory_gb)
     .bind(bandwidth_mbps)
-    .bind(disk_gb)
+    .bind(form.disk_gb)
     .bind(cpu_mult)
     .bind(mem_mult)
     .bind(bw_mult)
@@ -332,6 +258,7 @@ async fn api_servers_contribute(
     .bind(&virt_type)
     .bind(expires_at)
     .bind(proxy_port)
+    .bind(&agent_key)
     .bind(expose_ip)
     .bind(nat_port_start)
     .bind(nat_port_end)
@@ -378,135 +305,49 @@ async fn api_servers_contribute(
     }
 }
 
-async fn install_agent_ssh_api(_server_id: i64, ip: &str, port: i32, ssh_key: &str) {
-    // Get platform base URL for agent install script
-    let platform_domain = db::get_config_sync("site_url")
-        .or_else(|| db::get_config_sync("platform_domain"))
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let install_url = format!("{}/agent/install.sh", platform_domain.trim_end_matches('/'));
-    let agent_api_key = services::session::agent_api_key();
-    let virt_type = db::get_config_sync("default_virt_type").unwrap_or_else(|| "lxd".to_string());
-    // Use the platform's own SSH key if the user did not provide one; otherwise
-    // fall back to the key they provided.
-    let effective_ssh_key: String = if ssh_key.is_empty() || ssh_key == "AUTO" {
-        services::session::get_ssh_private_key()
-    } else {
-        ssh_key.to_string()
-    };
-
-    let install_result = tokio::task::spawn_blocking({
-        let ip = ip.to_string();
-        let ssh_key = effective_ssh_key.clone();
+async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+    let _ = tokio::task::spawn_blocking({
+        let ip = _ip.to_string();
+        let ssh_key = _ssh_key.to_string();
         let server_id = _server_id;
-        let install_url = install_url.clone();
-        let agent_api_key = agent_api_key.clone();
-        let virt_type = virt_type.clone();
-        let platform_domain = platform_domain.clone();
         move || {
-            // Helper to run a command over SSH and capture output
-            fn ssh_exec(session: &ssh2::Session, cmd: &str) -> Option<String> {
-                if let Ok(mut channel) = session.channel_session() {
-                    let _ = channel.exec(cmd);
-                    let _ = channel.wait_close();
-                    let mut s = String::new();
-                    use std::io::Read;
-                    let _ = channel.read_to_string(&mut s);
-                    Some(s.trim().to_string())
-                } else {
-                    None
-                }
-            }
-
-            let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, port)) {
+            let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
-                Err(_) => return None,
+                Err(_) => return,
             };
             let mut session = match ssh2::Session::new() {
                 Ok(s) => s,
-                Err(_) => return None,
+                Err(_) => return,
             };
             session.set_tcp_stream(tcp);
             if session.handshake().is_err() {
-                return None;
+                return;
             }
-            if services::ssh_key::userauth_pubkey_from_memory(&session, "root", &ssh_key).is_err() {
-                return None;
+            if session
+                .userauth_pubkey_memory("root", None, &ssh_key, None)
+                .is_err()
+            {
+                return;
             }
-
-            // ---- Phase 1: Detect server hardware via SSH ----
-            let detected_cpu: i32 = ssh_exec(&session, "nproc --all 2>/dev/null || grep -c ^processor /proc/cpuinfo")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
-
-            let detected_memory: f64 = {
-                let raw = ssh_exec(&session, "grep MemTotal /proc/meminfo | awk '{print $2}' 2>/dev/null");
-                raw.and_then(|s| s.parse::<i64>().ok())
-                    .map(|kb| kb as f64 / 1024.0 / 1024.0)
-                    .unwrap_or(1.0)
-            };
-
-            let detected_disk: f64 = {
-                let raw = ssh_exec(&session, "df -BG / 2>/dev/null | awk 'NR==2 {print $2}' | tr -d 'G'");
-                raw.and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(10.0)
-            };
-
-            let detected_linux = ssh_exec(
-                &session,
-                "cat /etc/os-release 2>/dev/null | grep -E '^NAME=|^VERSION=' | tr '\\n' ' ' | sed 's/NAME=//;s/VERSION=//g' | tr -d '\"' || uname -srm"
-            ).unwrap_or_default();
-
-            // ---- Phase 2: Run Agent install ----
-            let install_success = if let Ok(mut channel) = session.channel_session() {
-                let cmd = format!(
-                    "curl -sSL {} | bash -s -- {} {} {}",
-                    install_url,
-                    virt_type,
-                    agent_api_key,
-                    platform_domain
-                );
-                if channel.exec(&cmd).is_ok() {
+            if let Ok(mut channel) = session.channel_session() {
+                if channel
+                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
+                    .is_ok()
+                {
                     let _ = channel.wait_close();
-                    channel.exit_status().unwrap_or(1) == 0
-                } else {
-                    false
+                    if channel.exit_status().unwrap_or(1) == 0 {
+                        let pool = db::get_db();
+                        let _ = sqlx::query(
+                            "UPDATE servers SET agent_installed = 1 WHERE id = ?",
+                        )
+                        .bind(server_id)
+                        .execute(pool);
+                    }
                 }
-            } else {
-                false
-            };
-
-            install_success.then_some((
-                server_id,
-                detected_cpu,
-                detected_memory,
-                detected_disk,
-                detected_linux,
-            ))
+            }
         }
     })
     .await;
-
-    match install_result {
-        Ok(Some((server_id, detected_cpu, detected_memory, detected_disk, detected_linux))) => {
-            super::update_server_agent_hardware(
-                server_id,
-                detected_cpu,
-                detected_memory,
-                detected_disk,
-                detected_linux,
-            )
-            .await;
-        }
-        Ok(None) => {}
-        Err(err) => {
-            tracing::error!(
-                server_id = _server_id,
-                error = %err,
-                "agent SSH install task failed"
-            );
-        }
-    }
 }
 
 // ==============================
@@ -584,20 +425,17 @@ async fn api_machines_create(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_disk", "message": format!("Disk must be between 1 and {}", server.disk_gb) }))).into_response();
     }
 
+    // Validate hours
     let mut hours = form.hours.unwrap_or(24) as i64;
     if hours <= 0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "invalid_hours", "message": "Hours must be greater than 0" })),
-        )
-            .into_response();
+        hours = 24;
     }
 
     // Check max machine hours limit
     if server.max_machine_hours > 0.0 && hours as f64 > server.max_machine_hours {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "exceeds_max_hours" })),
+            Json(json!({ "error": "exceeds_max_hours", "message": "Max machine hours exceeded" })),
         )
             .into_response();
     }
@@ -617,31 +455,6 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
-    let nat_ports = match super::machine_nat_ports_for_create(pool, &server).await {
-        Ok(nat_ports) => nat_ports,
-        Err("nat_ports_exhausted") => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "nat_ports_exhausted", "message": "No NAT ports are available on this server" })),
-            )
-                .into_response();
-        }
-        Err("nat_range_invalid") => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "nat_range_invalid", "message": "Server NAT port range is invalid" })),
-            )
-                .into_response();
-        }
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "nat_capacity_check_failed", "message": "Failed to check NAT capacity" })),
-            )
-                .into_response();
-        }
-    };
-
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
         form.cpu_cores,
         form.memory_gb,
@@ -651,8 +464,8 @@ async fn api_machines_create(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
-        nat_ports,
-        server.nat_multiplier,
+        0,
+        0.0,
     )
     .await;
 
@@ -674,6 +487,7 @@ async fn api_machines_create(
     };
     let regular_used = total_cost - bonus_used;
 
+    // Start transaction - all capacity checks happen here atomically
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(err) => {
@@ -686,6 +500,67 @@ async fn api_machines_create(
         }
     };
 
+    // Check server resource capacity (CPU/Memory/Disk) within transaction
+    let used_resources: Option<(Option<i64>, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0.0), COALESCE(SUM(disk_gb), 0.0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
+    )
+    .bind(server.id)
+    .fetch_optional(&mut *tx)
+    .await
+    .ok()
+    .flatten();
+
+    let (used_cpu, used_mem, used_disk) = used_resources.unwrap_or((Some(0), Some(0.0), Some(0.0)));
+    let used_cpu = used_cpu.unwrap_or(0) as i32;
+    let used_mem = used_mem.unwrap_or(0.0);
+    let used_disk = used_disk.unwrap_or(0.0);
+
+    if used_cpu + form.cpu_cores > server.cpu_cores {
+        let _ = tx.rollback().await;
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "insufficient_cpu", "message": "Server has insufficient CPU capacity" })),
+        )
+            .into_response();
+    }
+    if used_mem + form.memory_gb > server.memory_gb {
+        let _ = tx.rollback().await;
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "insufficient_memory", "message": "Server has insufficient memory capacity" })),
+        )
+            .into_response();
+    }
+    if used_disk + form.disk_gb > server.disk_gb {
+        let _ = tx.rollback().await;
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "insufficient_disk", "message": "Server has insufficient disk capacity" })),
+        )
+            .into_response();
+    }
+
+    // Check NAT port capacity within transaction
+    if server.expose_ip && server.nat_port_start > 0 {
+        let used_ports: (i64,) = sqlx::query_as(
+            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
+        )
+        .bind(server.id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or((0,));
+        let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
+        if used_ports.0 + 1 > total_available_nat {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "no_nat_ports", "message": "Server has no available NAT ports" })),
+            )
+                .into_response();
+        }
+    }
+
+    // Atomic debit with WHERE clause
     let debit_result = sqlx::query(
         "UPDATE users SET bonus_core_hours = bonus_core_hours - ?, core_hours = core_hours - ? WHERE id = ? AND bonus_core_hours >= ? AND core_hours >= ?",
     )
@@ -700,6 +575,7 @@ async fn api_machines_create(
     match debit_result {
         Ok(result) if result.rows_affected() > 0 => {}
         Ok(_) => {
+            let _ = tx.rollback().await;
             return (
                 StatusCode::PAYMENT_REQUIRED,
                 Json(json!({ "error": "insufficient_balance", "message": "Balance changed, please try again" })),
@@ -708,6 +584,7 @@ async fn api_machines_create(
         }
         Err(err) => {
             tracing::error!("failed to debit machine create cost: {}", err);
+            let _ = tx.rollback().await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "db_error", "message": "Failed to debit balance" })),
@@ -728,6 +605,7 @@ async fn api_machines_create(
         .await
         {
             tracing::error!("failed to credit merchant bonus balance: {}", err);
+            let _ = tx.rollback().await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "db_error", "message": "Failed to credit merchant" })),
@@ -743,6 +621,7 @@ async fn api_machines_create(
             .await
         {
             tracing::error!("failed to credit merchant balance: {}", err);
+            let _ = tx.rollback().await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "db_error", "message": "Failed to credit merchant" })),
@@ -755,7 +634,7 @@ async fn api_machines_create(
     let used_hours = hours as f64;
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -764,8 +643,6 @@ async fn api_machines_create(
     .bind(form.disk_gb)
     .bind(&server.virt_type)
     .bind(ch_per_hour)
-    .bind(regular_used)
-    .bind(bonus_used)
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
@@ -776,6 +653,7 @@ async fn api_machines_create(
         Ok(result) => result,
         Err(err) => {
             tracing::error!("failed to insert pending machine: {}", err);
+            let _ = tx.rollback().await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "insert_failed", "message": "Failed to create machine record" })),
@@ -795,7 +673,7 @@ async fn api_machines_create(
             .into_response();
     }
 
-    // Trigger agent to create VM
+    // Trigger agent to create VM with retry
     let server_ip = server.ip.clone();
     let machine_name = format!("machine-{}", machine_id);
     let virt_type = server.virt_type.clone();
@@ -803,12 +681,14 @@ async fn api_machines_create(
     let memory = form.memory_gb;
     let disk = form.disk_gb;
 
-    let agent_key = services::session::agent_api_key();
+    let agent_key = server.agent_key.clone();
+    if agent_key.is_empty() {
+        tracing::warn!(server_id = server.id, machine_id = machine_id, "server has no agent_key configured");
+    }
     services::machine_lifecycle::spawn_agent_create_job(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
-            owner_id: server.owner_id,
             server_ip,
             machine_name,
             virt_type,
@@ -841,22 +721,23 @@ pub struct RedeemRequest {
 }
 
 // POST /api/v1/redeem
-async fn api_redeem(headers: HeaderMap, Json(form): Json<RedeemRequest>) -> impl IntoResponse {
+async fn api_redeem(
+    headers: HeaderMap,
+    Json(form): Json<RedeemRequest>,
+) -> impl IntoResponse {
     let user_id = match authenticate_user(&headers).await {
         Ok(id) => id,
         Err(err) => return err.into_response(),
     };
 
     let pool = db::get_db();
-
-    // Use atomic UPDATE with WHERE to prevent race conditions
-    // This ensures only one request can redeem a code even with concurrent requests
-    let code: Option<RedeemCode> =
-        sqlx::query_as("SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0")
-            .bind(&form.code)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let code: Option<RedeemCode> = sqlx::query_as(
+        "SELECT * FROM redeem_codes WHERE code = ? AND is_used = 0",
+    )
+    .bind(&form.code)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
 
     let code = match code {
         Some(c) => c,
@@ -870,98 +751,42 @@ async fn api_redeem(headers: HeaderMap, Json(form): Json<RedeemRequest>) -> impl
     };
 
     let now = chrono::Utc::now();
-
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!("failed to begin redeem transaction: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "db_error", "message": "Failed to start transaction" })),
-            )
-                .into_response();
-        }
-    };
-
-    let marked: Option<(i64,)> = match sqlx::query_as(
-        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ? AND is_used = 0 RETURNING id"
-    )
-    .bind(user_id)
-    .bind(now)
-    .bind(code.id)
-    .fetch_optional(&mut *tx)
-    .await
-    {
-        Ok(marked) => marked,
-        Err(err) => {
-            tracing::error!("failed to mark redeem code as used: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "db_error", "message": "Failed to redeem code" })),
-            )
-                .into_response();
-        }
-    };
-
-    if marked.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "already_redeemed", "message": "Code was already redeemed" })),
-        )
-            .into_response();
-    }
-
     let mut reward_info = json!({});
 
     match code.code_type.as_str() {
         "core_hours" => {
             let reward = code.core_hours.unwrap_or(0.0);
-            if let Err(err) =
-                sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-                    .bind(reward)
-                    .bind(user_id)
-                    .execute(&mut *tx)
-                    .await
-            {
-                tracing::error!("failed to grant redeem core hours: {}", err);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": "db_error", "message": "Failed to grant reward" })),
-                )
-                    .into_response();
-            }
+            let _ = sqlx::query(
+                "UPDATE users SET core_hours = core_hours + ? WHERE id = ?",
+            )
+            .bind(reward)
+            .bind(user_id)
+            .execute(pool)
+            .await;
             reward_info = json!({ "type": "core_hours", "core_hours": reward });
         }
         "subscription" => {
             let pkg_id = code.package_id;
-            if let Err(err) = sqlx::query(
+            let _ = sqlx::query(
                 "INSERT INTO user_packages (user_id, package_id, core_hours, is_active) VALUES (?, ?, 0, 1)",
             )
             .bind(user_id)
             .bind(pkg_id)
-            .execute(&mut *tx)
-            .await
-            {
-                tracing::error!("failed to grant redeem subscription: {}", err);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": "db_error", "message": "Failed to grant reward" })),
-                )
-                    .into_response();
-            }
+            .execute(pool)
+            .await;
             reward_info = json!({ "type": "subscription", "package_id": pkg_id });
         }
         _ => {}
     }
 
-    if let Err(err) = tx.commit().await {
-        tracing::error!("failed to commit redeem transaction: {}", err);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "db_error", "message": "Failed to commit redemption" })),
-        )
-            .into_response();
-    }
+    let _ = sqlx::query(
+        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = ? WHERE id = ?",
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(code.id)
+    .execute(pool)
+    .await;
 
     ok_response(json!({
         "redeemed": true,
@@ -990,22 +815,23 @@ async fn api_packages_buy(
     };
 
     let pool = db::get_db();
-    let pkg: Option<RechargePackage> =
-        sqlx::query_as("SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1")
-            .bind(form.package_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let pkg: Option<RechargePackage> = sqlx::query_as(
+        "SELECT * FROM recharge_packages WHERE id = ? AND is_active = 1",
+    )
+    .bind(form.package_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
 
     let pkg = match pkg {
         Some(p) => p,
-        None => return (
-            StatusCode::NOT_FOUND,
-            Json(
-                json!({ "error": "package_not_found", "message": "Package not found or inactive" }),
-            ),
-        )
-            .into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "package_not_found", "message": "Package not found or inactive" })),
+            )
+                .into_response()
+        }
     };
 
     let cfg = crate::config::AppConfig::get();
@@ -1022,11 +848,8 @@ async fn api_packages_buy(
     .execute(pool)
     .await;
 
-    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await
-    {
-        Ok(url) => {
-            ok_response(json!({ "payment_url": url, "order_id": out_trade_no })).into_response()
-        }
+    match services::ldc_payment::create_payment(cfg, &out_trade_no, pkg.price_ldc, &pkg.name).await {
+        Ok(url) => ok_response(json!({ "payment_url": url, "order_id": out_trade_no })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "payment_failed", "message": format!("{}", e) })),
@@ -1093,12 +916,13 @@ async fn api_my_servers(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let servers: Vec<Server> =
-        sqlx::query_as("SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC")
-            .bind(user_id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE owner_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     ok_response(servers).into_response()
 }
@@ -1111,12 +935,13 @@ async fn api_my_machines(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let machines: Vec<Machine> =
-        sqlx::query_as("SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC")
-            .bind(user_id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let machines: Vec<Machine> = sqlx::query_as(
+        "SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     ok_response(machines).into_response()
 }
@@ -1144,12 +969,13 @@ async fn api_my_orders(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let orders: Vec<Order> =
-        sqlx::query_as("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC")
-            .bind(user_id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let orders: Vec<Order> = sqlx::query_as(
+        "SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
 
     ok_response(orders).into_response()
 }
@@ -1305,10 +1131,11 @@ async fn api_admin_servers(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let servers: Vec<Server> = sqlx::query_as("SELECT * FROM servers ORDER BY created_at DESC")
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    let servers: Vec<Server> =
+        sqlx::query_as("SELECT * FROM servers ORDER BY created_at DESC")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     ok_response(servers).into_response()
 }
@@ -1353,10 +1180,11 @@ async fn api_admin_machines(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let machines: Vec<Machine> = sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    let machines: Vec<Machine> =
+        sqlx::query_as("SELECT * FROM machines ORDER BY created_at DESC")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     ok_response(machines).into_response()
 }
@@ -1375,6 +1203,370 @@ async fn api_admin_config(headers: HeaderMap) -> impl IntoResponse {
         .unwrap_or_default();
 
     ok_response(configs).into_response()
+}
+
+// OpenGFW Config Types
+#[derive(Serialize)]
+struct OpenGFWConfigResponse {
+    enabled: bool,
+    block_vpn: bool,
+    block_shadowsocks: bool,
+    block_wireguard: bool,
+    block_openvpn: bool,
+    block_trojan: bool,
+    block_vmess: bool,
+    block_vless: bool,
+    block_xray: bool,
+    block_clash: bool,
+    servers_with_opengfw: Vec<(i64, String, String)>,
+}
+
+#[derive(Deserialize)]
+struct OpenGFWConfigPatch {
+    enabled: bool,
+    block_vpn: bool,
+    block_shadowsocks: bool,
+    block_wireguard: bool,
+    block_openvpn: bool,
+    block_trojan: bool,
+    block_vmess: bool,
+    block_vless: bool,
+    block_xray: bool,
+    block_clash: bool,
+}
+
+// GET /api/v1/admin/opengfw/config
+async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let enabled = db::get_config("opengfw_enabled").await.unwrap_or("false".to_string()) == "true";
+    let block_vpn = db::get_config("opengfw_block_vpn").await.unwrap_or("true".to_string()) == "true";
+    let block_shadowsocks = db::get_config("opengfw_block_shadowsocks").await.unwrap_or("true".to_string()) == "true";
+    let block_wireguard = db::get_config("opengfw_block_wireguard").await.unwrap_or("true".to_string()) == "true";
+    let block_openvpn = db::get_config("opengfw_block_openvpn").await.unwrap_or("true".to_string()) == "true";
+    let block_trojan = db::get_config("opengfw_block_trojan").await.unwrap_or("true".to_string()) == "true";
+    let block_vmess = db::get_config("opengfw_block_vmess").await.unwrap_or("true".to_string()) == "true";
+    let block_vless = db::get_config("opengfw_block_vless").await.unwrap_or("true".to_string()) == "true";
+    let block_xray = db::get_config("opengfw_block_xray").await.unwrap_or("true".to_string()) == "true";
+    let block_clash = db::get_config("opengfw_block_clash").await.unwrap_or("true".to_string()) == "true";
+
+    let servers_with_opengfw: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let config = OpenGFWConfigResponse {
+        enabled,
+        block_vpn,
+        block_shadowsocks,
+        block_wireguard,
+        block_openvpn,
+        block_trojan,
+        block_vmess,
+        block_vless,
+        block_xray,
+        block_clash,
+        servers_with_opengfw,
+    };
+
+    ok_response(config).into_response()
+}
+
+// PUT /api/v1/admin/opengfw/config
+async fn api_admin_opengfw_config_save(
+    headers: HeaderMap,
+    Json(form): Json<OpenGFWConfigPatch>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_enabled")
+        .bind(form.enabled.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vpn")
+        .bind(form.block_vpn.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_shadowsocks")
+        .bind(form.block_shadowsocks.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_wireguard")
+        .bind(form.block_wireguard.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_openvpn")
+        .bind(form.block_openvpn.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_trojan")
+        .bind(form.block_trojan.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vmess")
+        .bind(form.block_vmess.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vless")
+        .bind(form.block_vless.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_xray")
+        .bind(form.block_xray.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_clash")
+        .bind(form.block_clash.to_string())
+        .execute(pool)
+        .await;
+
+    ok_response(json!({ "message": "配置已保存" })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/stats
+async fn api_admin_opengfw_stats(headers: HeaderMap, Query(params): Query<StatsQuery>) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let (total_blocked, by_protocol, by_server) = services::opengfw::get_block_stats(
+        params.start_time.clone(),
+        params.end_time.clone(),
+        params.server_id,
+    ).await;
+
+    let hourly_stats = services::opengfw::get_hourly_stats(params.hours.unwrap_or(24)).await;
+    let top_users = services::opengfw::get_top_users(10).await;
+
+    ok_response(json!({
+        "total_blocked": total_blocked,
+        "by_protocol": by_protocol,
+        "by_server": by_server,
+        "hourly_stats": hourly_stats,
+        "top_users": top_users,
+    })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/logs
+async fn api_admin_opengfw_logs(headers: HeaderMap, Query(params): Query<LogsQuery>) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let logs = services::opengfw::get_recent_logs(
+        params.limit.unwrap_or(100),
+        params.offset.unwrap_or(0),
+        params.server_id,
+        params.protocol,
+        params.username,
+    ).await;
+
+    ok_response(logs).into_response()
+}
+
+// POST /api/v1/admin/opengfw/refresh-rules
+async fn api_admin_opengfw_refresh(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let servers: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, ip, agent_key FROM servers WHERE is_active = 1 AND opengfw_enabled = 1 AND agent_installed = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut refreshed_servers = 0;
+    let mut results = Vec::new();
+
+    for (server_id, server_ip, agent_key) in servers {
+        let config = services::opengfw::get_server_opengfw_config(server_id).await;
+        if let Some(config) = config {
+            let rules = serde_json::to_string(&config.rules).unwrap_or_default();
+            let agent_url = format!("http://{}:19527/opengfw/config", server_ip);
+
+            let response = reqwest::Client::new()
+                .post(&agent_url)
+                .header("X-API-Key", &agent_key)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "enabled": config.enabled,
+                    "rules": rules,
+                }))
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    refreshed_servers += 1;
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "ok",
+                    }));
+                }
+                Ok(resp) => {
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "error",
+                        "message": format!("HTTP {}", resp.status()),
+                    }));
+                }
+                Err(err) => {
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "error",
+                        "message": err.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    ok_response(json!({
+        "refreshed_servers": refreshed_servers,
+        "results": results,
+    })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/rules - Get all rules
+async fn api_admin_opengfw_rules_list(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let rules = services::opengfw::get_all_rules().await;
+    ok_response(rules).into_response()
+}
+
+// GET /api/v1/admin/opengfw/rules/templates - Get rule templates
+async fn api_admin_opengfw_rules_templates(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let templates = services::opengfw::get_rule_templates();
+    ok_response(templates).into_response()
+}
+
+// POST /api/v1/admin/opengfw/rules - Create new rule
+async fn api_admin_opengfw_rules_create(
+    headers: HeaderMap,
+    Json(rule): Json<OpenGFWRuleRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::add_rule(
+        rule.name,
+        rule.description,
+        rule.protocol,
+        rule.match_signature,
+        rule.action,
+    ).await {
+        Ok(id) => (StatusCode::OK, Json(json!({ "id": id, "message": "规则已创建" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "create_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// PUT /api/v1/admin/opengfw/rules/:id - Update rule
+async fn api_admin_opengfw_rules_update(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+    Json(rule): Json<OpenGFWRuleRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::update_rule(
+        rule_id,
+        rule.name,
+        rule.description,
+        rule.protocol,
+        rule.match_signature,
+        rule.action,
+        rule.is_active,
+    ).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": "规则已更新" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "update_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// DELETE /api/v1/admin/opengfw/rules/:id - Delete rule
+async fn api_admin_opengfw_rules_delete(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::delete_rule(rule_id).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": "规则已删除" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "delete_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// POST /api/v1/admin/opengfw/rules/:id/toggle - Toggle rule active status
+async fn api_admin_opengfw_rules_toggle(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let active = body.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    match services::opengfw::toggle_rule(rule_id, active).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": if active { "规则已启用" } else { "规则已禁用" } }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "toggle_failed".to_string(), message: e })).into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1456,475 +1648,52 @@ async fn api_balance_to_code(
     };
 
     let pool = db::get_db();
-    if req.amount <= 0.0 || !req.amount.is_finite() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"invalid_amount"})),
-        )
-            .into_response();
-    }
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit").await
+        .unwrap_or_else(|| "5".to_string()).parse().unwrap_or(5);
+    let fee_pct: f64 = db::get_config("balance_to_code_fee").await
+        .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
 
-    let enabled = db::get_config("balance_to_code_enabled")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    if enabled != "true" {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"disabled","message":"余额转码功能未开放"})),
-        )
-            .into_response();
-    }
-
-    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit")
-        .await
-        .unwrap_or_else(|| "5".to_string())
-        .parse()
-        .unwrap_or(5);
-    let fee_pct: f64 = db::get_config("balance_to_code_fee")
-        .await
-        .unwrap_or_else(|| "0.05".to_string())
-        .parse()
-        .unwrap_or(0.05);
-
-    let today_start = chrono::Utc::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
+    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
     let today_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?",
-    )
-    .bind(user_id)
-    .bind(today_start)
-    .fetch_one(pool)
-    .await
-    .unwrap_or((0,));
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
+    ).bind(user_id).bind(today_start).fetch_one(pool).await.unwrap_or((0,));
 
     if today_count.0 >= daily_limit {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"error":"daily_limit","message":"每日兑换次数已达上限"})),
-        )
-            .into_response();
+        return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"daily_limit","message":"每日兑换次数已达上限"}))).into_response();
     }
 
     let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
     let user = match user {
         Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"user_not_found"})),
-            )
-                .into_response()
-        }
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
     };
 
     let fee = req.amount * fee_pct;
     let total_deduct = req.amount + fee;
     let is_bonus = req.use_bonus.unwrap_or(false);
 
-    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
-
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!("failed to begin balance-to-code transaction: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"db_error"})),
-            )
-                .into_response();
-        }
-    };
-
-    let debit_result = if is_bonus {
+    if is_bonus {
         if user.bonus_core_hours < total_deduct {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":"insufficient_bonus"})),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_bonus"}))).into_response();
         }
-        sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?")
-            .bind(total_deduct)
-            .bind(user_id)
-            .bind(total_deduct)
-            .execute(&mut *tx)
-            .await
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
+            .bind(total_deduct).bind(user_id).execute(pool).await;
     } else {
         if user.core_hours < total_deduct {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":"insufficient_balance"})),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_balance"}))).into_response();
         }
-        sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?")
-            .bind(total_deduct)
-            .bind(user_id)
-            .bind(total_deduct)
-            .execute(&mut *tx)
-            .await
-    };
-
-    match debit_result {
-        Ok(result) if result.rows_affected() > 0 => {}
-        Ok(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":"insufficient_balance"})),
-            )
-                .into_response();
-        }
-        Err(err) => {
-            tracing::error!("failed to debit balance-to-code amount: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"db_error"})),
-            )
-                .into_response();
-        }
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+            .bind(total_deduct).bind(user_id).execute(pool).await;
     }
 
-    if let Err(err) = sqlx::query(
-        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)",
-    )
-    .bind(&code)
-    .bind(req.amount)
-    .execute(&mut *tx)
-    .await
-    {
-        tracing::error!("failed to create balance redeem code: {}", err);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":"code_create_failed"})),
-        )
-            .into_response();
-    }
-
-    if let Err(err) = sqlx::query("INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)")
-        .bind(user_id)
-        .bind(req.amount)
-        .bind(fee)
-        .bind(is_bonus)
-        .bind(&code)
-        .execute(&mut *tx)
-        .await
-    {
-        tracing::error!("failed to log balance-to-code conversion: {}", err);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"log_failed"}))).into_response();
-    }
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!("failed to commit balance-to-code transaction: {}", err);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":"db_error"})),
-        )
-            .into_response();
-    }
+    let code = format!("balance_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let _ = sqlx::query("INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)")
+        .bind(&code).bind(req.amount).execute(pool).await;
+    let _ = sqlx::query("INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, ?, ?, ?)")
+        .bind(user_id).bind(req.amount).bind(fee).bind(is_bonus).bind(&code).execute(pool).await;
 
     ok_response(json!({"code": code, "amount": req.amount, "fee": fee})).into_response()
-}
-
-// ==============================
-// Agent Machine Stats API
-// ==============================
-
-#[derive(Deserialize)]
-pub struct MachineStatsReport {
-    pub machine_name: String,
-    pub cpu_usage_percent: Option<f64>,
-    pub memory_used_mb: Option<f64>,
-    pub memory_total_mb: Option<f64>,
-    pub disk_used_gb: Option<f64>,
-    pub disk_total_gb: Option<f64>,
-    pub bandwidth_rx_mbps: Option<f64>,
-    pub bandwidth_tx_mbps: Option<f64>,
-    pub uptime_seconds: Option<i64>,
-    pub process_count: Option<i64>,
-}
-
-// Agent server hardware registration payload
-#[derive(Deserialize)]
-pub struct AgentRegisterRequest {
-    pub server_id: Option<i64>,
-    pub ip: Option<String>,
-    pub virt_type: Option<String>,
-    pub platform_url: Option<String>,
-    pub cpu_cores: Option<i32>,
-    pub memory_gb: Option<f64>,
-    pub disk_gb: Option<f64>,
-    pub bandwidth_mbps: Option<f64>,
-    pub linux_version: Option<String>,
-}
-
-// POST /api/v1/agent/register - Agent registers itself and optionally updates server hardware specs
-async fn api_agent_register(
-    headers: HeaderMap,
-    Json(form): Json<AgentRegisterRequest>,
-) -> impl IntoResponse {
-    if !verify_agent_api_key(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    let pool = db::get_db();
-
-    // Try to identify the server by server_id first, then by IP
-    if let Some(server_id) = form.server_id {
-        let _ = sqlx::query(
-            "UPDATE servers SET \
-                virt_type = COALESCE(?, virt_type), \
-                cpu_cores = COALESCE(?, cpu_cores), \
-                memory_gb = COALESCE(?, memory_gb), \
-                disk_gb = COALESCE(?, disk_gb), \
-                bandwidth_mbps = COALESCE(?, bandwidth_mbps), \
-                linux_version = COALESCE(?, linux_version), \
-                agent_installed = 1 \
-            WHERE id = ?",
-        )
-        .bind(form.virt_type.clone())
-        .bind(form.cpu_cores)
-        .bind(form.memory_gb)
-        .bind(form.disk_gb)
-        .bind(form.bandwidth_mbps)
-        .bind(form.linux_version.clone())
-        .bind(server_id)
-        .execute(pool)
-        .await;
-
-        return (
-            StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "data": {
-                    "status": "ok",
-                    "server_id": server_id,
-                    "message": "Server agent configuration updated",
-                }
-            })),
-        )
-            .into_response();
-    }
-
-    // Fallback: try to match by IP
-    if let Some(ip) = form.ip.as_ref() {
-        let found: Option<i64> = sqlx::query_scalar("SELECT id FROM servers WHERE ip = ?")
-            .bind(ip)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None)
-            .flatten();
-
-        if let Some(server_id) = found {
-            let _ = sqlx::query(
-                "UPDATE servers SET \
-                    virt_type = COALESCE(?, virt_type), \
-                    cpu_cores = COALESCE(?, cpu_cores), \
-                    memory_gb = COALESCE(?, memory_gb), \
-                    disk_gb = COALESCE(?, disk_gb), \
-                    bandwidth_mbps = COALESCE(?, bandwidth_mbps), \
-                    linux_version = COALESCE(?, linux_version), \
-                    agent_installed = 1 \
-                WHERE id = ?",
-            )
-            .bind(form.virt_type.as_ref())
-            .bind(form.cpu_cores)
-            .bind(form.memory_gb)
-            .bind(form.disk_gb)
-            .bind(form.bandwidth_mbps)
-            .bind(form.linux_version.as_ref())
-            .bind(server_id)
-            .execute(pool)
-            .await;
-
-            return (
-                StatusCode::OK,
-                Json(json!({
-                    "success": true,
-                    "data": {
-                        "status": "ok",
-                        "server_id": server_id,
-                        "message": "Server agent configuration updated by IP",
-                    }
-                })),
-            )
-                .into_response();
-        }
-    }
-
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error": "server_not_found", "message": "Could not identify server by server_id or ip"})),
-    )
-        .into_response()
-}
-
-// POST /api/v1/agent/stats - Agent reports machine stats
-async fn api_agent_stats(
-    headers: HeaderMap,
-    Json(stats): Json<MachineStatsReport>,
-) -> impl IntoResponse {
-    // Verify agent API key
-    if !verify_agent_api_key(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    // Extract machine_id from machine_name (format: machine-{id})
-    let machine_id = stats
-        .machine_name
-        .strip_prefix("machine-")
-        .and_then(|s| s.parse::<i64>().ok());
-
-    let machine_id = match machine_id {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "invalid_machine_name"})),
-            )
-                .into_response()
-        }
-    };
-
-    let pool = db::get_db();
-    let now = chrono::Utc::now();
-
-    // Upsert machine stats
-    let _ = sqlx::query(
-        r#"
-        INSERT INTO machine_stats (
-            machine_id, cpu_usage_percent, memory_used_mb, memory_total_mb,
-            disk_used_gb, disk_total_gb, bandwidth_rx_mbps, bandwidth_tx_mbps,
-            uptime_seconds, process_count, last_updated
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(machine_id) DO UPDATE SET
-            cpu_usage_percent = excluded.cpu_usage_percent,
-            memory_used_mb = excluded.memory_used_mb,
-            memory_total_mb = excluded.memory_total_mb,
-            disk_used_gb = excluded.disk_used_gb,
-            disk_total_gb = excluded.disk_total_gb,
-            bandwidth_rx_mbps = excluded.bandwidth_rx_mbps,
-            bandwidth_tx_mbps = excluded.bandwidth_tx_mbps,
-            uptime_seconds = excluded.uptime_seconds,
-            process_count = excluded.process_count,
-            last_updated = excluded.last_updated
-        "#,
-    )
-    .bind(machine_id)
-    .bind(stats.cpu_usage_percent.unwrap_or(0.0))
-    .bind(stats.memory_used_mb.unwrap_or(0.0))
-    .bind(stats.memory_total_mb.unwrap_or(0.0))
-    .bind(stats.disk_used_gb.unwrap_or(0.0))
-    .bind(stats.disk_total_gb.unwrap_or(0.0))
-    .bind(stats.bandwidth_rx_mbps.unwrap_or(0.0))
-    .bind(stats.bandwidth_tx_mbps.unwrap_or(0.0))
-    .bind(stats.uptime_seconds.unwrap_or(0))
-    .bind(stats.process_count.unwrap_or(0))
-    .bind(now)
-    .execute(pool)
-    .await;
-
-    ok_response(json!({"status": "ok", "machine_id": machine_id})).into_response()
-}
-
-// GET /api/v1/admin/machines-stats - Admin views all machine stats
-async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    let pool = db::get_db();
-
-    // Get all machines with their stats
-    let machines: Vec<(
-        i64,
-        i64,
-        String,
-        String,
-        String,
-        i32,
-        f64,
-        f64,
-        i64,
-        String,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT 
-            m.id, m.user_id, m.server_id, s.name as server_name, s.ip as server_ip,
-            m.cpu_cores, m.memory_gb, m.disk_gb, m.status, m.virt_type, m.expires_at
-        FROM machines m
-        JOIN servers s ON m.server_id = s.id
-        ORDER BY m.created_at DESC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    let mut result = Vec::new();
-    for (
-        id,
-        user_id,
-        server_id,
-        server_name,
-        server_ip,
-        cpu_cores,
-        memory_gb,
-        disk_gb,
-        status,
-        virt_type,
-        expires_at,
-    ) in machines
-    {
-        // Get stats for this machine
-        let stats: Option<MachineStats> =
-            sqlx::query_as("SELECT * FROM machine_stats WHERE machine_id = ?")
-                .bind(id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-        // Get user info
-        let username: Option<String> =
-            sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
-                .bind(user_id)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
-
-        result.push(json!({
-            "id": id,
-            "user_id": user_id,
-            "username": username.unwrap_or_else(|| "Unknown".to_string()),
-            "server_id": server_id,
-            "server_name": server_name,
-            "server_ip": server_ip,
-            "cpu_cores": cpu_cores,
-            "memory_gb": memory_gb,
-            "disk_gb": disk_gb,
-            "status": status,
-            "virt_type": virt_type,
-            "expires_at": expires_at,
-            "stats": stats
-        }));
-    }
-
-    ok_response(result).into_response()
 }
 
 // ==============================
@@ -1932,7 +1701,10 @@ async fn api_admin_machines_stats(headers: HeaderMap) -> impl IntoResponse {
 // ==============================
 
 // POST /api/v1/servers/:id/buy-premium
-async fn api_buy_premium(headers: HeaderMap, Path(server_id): Path<i64>) -> impl IntoResponse {
+async fn api_buy_premium(
+    headers: HeaderMap,
+    Path(server_id): Path<i64>,
+) -> impl IntoResponse {
     let user_id = match authenticate_user(&headers).await {
         Ok(id) => id,
         Err(err) => return err.into_response(),
@@ -1940,468 +1712,43 @@ async fn api_buy_premium(headers: HeaderMap, Path(server_id): Path<i64>) -> impl
 
     let pool = db::get_db();
 
-    let premium_enabled = db::get_config("premium_enabled")
-        .await
-        .unwrap_or_else(|| "false".to_string());
+    let premium_enabled = db::get_config("premium_enabled").await.unwrap_or_else(|| "false".to_string());
     if premium_enabled != "true" {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error":"premium_disabled","message":"优选功能未开放"})),
-        )
-            .into_response();
+        return (StatusCode::FORBIDDEN, Json(json!({"error":"premium_disabled","message":"优选功能未开放"}))).into_response();
     }
 
-    let server: Option<Server> =
-        sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
-            .bind(server_id)
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+    let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ? AND owner_id = ?")
+        .bind(server_id).bind(user_id).fetch_optional(pool).await.unwrap_or(None);
 
     let server = match server {
         Some(s) => s,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"server_not_found"})),
-            )
-                .into_response()
-        }
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"server_not_found"}))).into_response(),
     };
 
     if server.is_premium {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"already_premium"})),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"already_premium"}))).into_response();
     }
 
-    let cost: f64 = db::get_config("premium_ldc_cost")
-        .await
-        .unwrap_or_else(|| "100".to_string())
-        .parse()
-        .unwrap_or(100.0);
+    let cost: f64 = db::get_config("premium_ldc_cost").await
+        .unwrap_or_else(|| "100".to_string()).parse().unwrap_or(100.0);
 
     let user: Option<User> = sqlx::query_as("SELECT * FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        .bind(user_id).fetch_optional(pool).await.unwrap_or(None);
     let user = match user {
         Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error":"user_not_found"})),
-            )
-                .into_response()
-        }
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
     };
 
     if user.ldc_balance < cost {
-        return (
-            StatusCode::PAYMENT_REQUIRED,
-            Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"})),
-        )
-            .into_response();
+        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"}))).into_response();
     }
 
-    let premium_expires_at = chrono::Utc::now() + chrono::Duration::days(1);
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!("failed to begin premium transaction: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"db_error"})),
-            )
-                .into_response();
-        }
-    };
+    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+        .bind(cost).bind(user_id).execute(pool).await;
+    let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
+        .bind(server_id).execute(pool).await;
 
-    let debit = sqlx::query(
-        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
-    )
-    .bind(cost)
-    .bind(user_id)
-    .bind(cost)
-    .execute(&mut *tx)
-    .await;
-
-    match debit {
-        Ok(result) if result.rows_affected() > 0 => {}
-        Ok(_) => {
-            return (
-                StatusCode::PAYMENT_REQUIRED,
-                Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"})),
-            )
-                .into_response()
-        }
-        Err(err) => {
-            tracing::error!("failed to debit premium cost: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"db_error"})),
-            )
-                .into_response();
-        }
-    }
-
-    let premium_update = sqlx::query("UPDATE servers SET is_premium = 1, premium_expires_at = ? WHERE id = ? AND owner_id = ? AND is_premium = 0")
-        .bind(premium_expires_at)
-        .bind(server_id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await;
-
-    match premium_update {
-        Ok(result) if result.rows_affected() > 0 => {}
-        Ok(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":"already_premium"})),
-            )
-                .into_response()
-        }
-        Err(err) => {
-            tracing::error!("failed to update premium server: {}", err);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":"db_error"})),
-            )
-                .into_response();
-        }
-    }
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!("failed to commit premium transaction: {}", err);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":"db_error"})),
-        )
-            .into_response();
-    }
-
-    ok_response(json!({
-        "server_id": server_id,
-        "is_premium": true,
-        "cost_ldc": cost,
-        "premium_expires_at": premium_expires_at
-    }))
-    .into_response()
-}
-
-// ==============================
-// OpenGFW Admin API Handlers
-// ==============================
-
-#[derive(Deserialize)]
-pub struct OpenGFWConfigPatch {
-    pub enabled: Option<bool>,
-    pub block_vpn: Option<bool>,
-    pub block_shadowsocks: Option<bool>,
-    pub block_wireguard: Option<bool>,
-    pub block_openvpn: Option<bool>,
-    pub block_trojan: Option<bool>,
-    pub block_vmess: Option<bool>,
-    pub block_vless: Option<bool>,
-    pub block_xray: Option<bool>,
-    pub block_clash: Option<bool>,
-}
-
-// GET /api/v1/admin/opengfw/config - Get OpenGFW configuration
-async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    let pool = db::get_db();
-
-    // Get global settings
-    let enabled = db::get_config("opengfw_enabled")
-        .await
-        .unwrap_or_else(|| "false".to_string());
-    let block_vpn = db::get_config("opengfw_block_vpn")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_shadowsocks = db::get_config("opengfw_block_shadowsocks")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_wireguard = db::get_config("opengfw_block_wireguard")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_openvpn = db::get_config("opengfw_block_openvpn")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_trojan = db::get_config("opengfw_block_trojan")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_vmess = db::get_config("opengfw_block_vmess")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_vless = db::get_config("opengfw_block_vless")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_xray = db::get_config("opengfw_block_xray")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-    let block_clash = db::get_config("opengfw_block_clash")
-        .await
-        .unwrap_or_else(|| "true".to_string());
-
-    // Get servers with OpenGFW enabled
-    let servers_with_opengfw: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    ok_response(json!({
-        "enabled": enabled == "true",
-        "block_vpn": block_vpn == "true",
-        "block_shadowsocks": block_shadowsocks == "true",
-        "block_wireguard": block_wireguard == "true",
-        "block_openvpn": block_openvpn == "true",
-        "block_trojan": block_trojan == "true",
-        "block_vmess": block_vmess == "true",
-        "block_vless": block_vless == "true",
-        "block_xray": block_xray == "true",
-        "block_clash": block_clash == "true",
-        "servers_with_opengfw": servers_with_opengfw
-    }))
-    .into_response()
-}
-
-// PUT /api/v1/admin/opengfw/config - Update OpenGFW configuration
-async fn api_admin_opengfw_config_save(
-    headers: HeaderMap,
-    Json(form): Json<OpenGFWConfigPatch>,
-) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    if let Some(enabled) = form.enabled {
-        let _ = db::set_config("opengfw_enabled", if enabled { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_vpn {
-        let _ = db::set_config("opengfw_block_vpn", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_shadowsocks {
-        let _ = db::set_config(
-            "opengfw_block_shadowsocks",
-            if v { "true" } else { "false" },
-        )
-        .await;
-    }
-    if let Some(v) = form.block_wireguard {
-        let _ = db::set_config("opengfw_block_wireguard", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_openvpn {
-        let _ = db::set_config("opengfw_block_openvpn", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_trojan {
-        let _ = db::set_config("opengfw_block_trojan", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_vmess {
-        let _ = db::set_config("opengfw_block_vmess", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_vless {
-        let _ = db::set_config("opengfw_block_vless", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_xray {
-        let _ = db::set_config("opengfw_block_xray", if v { "true" } else { "false" }).await;
-    }
-    if let Some(v) = form.block_clash {
-        let _ = db::set_config("opengfw_block_clash", if v { "true" } else { "false" }).await;
-    }
-
-    ok_response(json!({"status": "ok", "message": "OpenGFW 配置已更新"})).into_response()
-}
-
-// GET /api/v1/admin/opengfw/logs - Get blocked connection logs
-async fn api_admin_opengfw_logs(headers: HeaderMap) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    let logs = services::opengfw::get_recent_logs(100).await;
-    ok_response(logs).into_response()
-}
-
-// GET /api/v1/admin/opengfw/stats - Get block statistics
-async fn api_admin_opengfw_stats(headers: HeaderMap) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    let (total, by_protocol) = services::opengfw::get_block_stats().await;
-    ok_response(json!({
-        "total_blocked": total,
-        "by_protocol": by_protocol
-    }))
-    .into_response()
-}
-
-// POST /api/v1/admin/opengfw/refresh-rules - Refresh rules on all servers
-async fn api_admin_opengfw_refresh_rules(headers: HeaderMap) -> impl IntoResponse {
-    match authenticate_admin(&headers).await {
-        Ok(_) => {}
-        Err(err) => return err.into_response(),
-    };
-
-    let pool = db::get_db();
-
-    // Get all servers with OpenGFW enabled
-    let servers: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1")
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
-
-    let mut results = Vec::new();
-    let agent_key = services::session::agent_api_key();
-
-    for (server_id, server_ip) in servers {
-        // Notify agent to refresh OpenGFW rules
-        let agent_url = format!("http://{}:19527", server_ip);
-        let client = reqwest::Client::new();
-
-        match client
-            .post(&format!("{}/opengfw/refresh", agent_url))
-            .header("X-API-Key", &agent_key)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                results.push(json!({
-                    "server_id": server_id,
-                    "server_ip": server_ip,
-                    "status": "ok",
-                    "response": resp.text().await.unwrap_or_default()
-                }));
-            }
-            Err(e) => {
-                results.push(json!({
-                    "server_id": server_id,
-                    "server_ip": server_ip,
-                    "status": "error",
-                    "error": e.to_string()
-                }));
-            }
-        }
-    }
-
-    ok_response(json!({
-        "refreshed_servers": results.len(),
-        "results": results
-    }))
-    .into_response()
-}
-
-// ==============================
-// Agent OpenGFW API Handlers
-// ==============================
-
-// GET /api/v1/opengfw/status - Get OpenGFW running status on host
-async fn api_opengfw_status(headers: HeaderMap) -> impl IntoResponse {
-    if !verify_agent_api_key(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    // Check if OpenGFW binary exists and is running
-    let opengfw_exists = std::path::Path::new("/usr/local/bin/opengfw").exists();
-    let opengfw_running = std::process::Command::new("pgrep")
-        .args(["-f", "opengfw"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    ok_response(json!({
-        "installed": opengfw_exists,
-        "running": opengfw_running,
-        "version": if opengfw_exists { "installed" } else { "not_installed" }
-    }))
-    .into_response()
-}
-
-// GET /api/v1/opengfw/config - Get OpenGFW rules configuration
-async fn api_opengfw_get_config(headers: HeaderMap) -> impl IntoResponse {
-    if !verify_agent_api_key(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    let global_enabled =
-        db::get_config_sync("opengfw_enabled").unwrap_or_else(|| "false".to_string());
-
-    if global_enabled != "true" {
-        return ok_response(json!({
-            "enabled": false,
-            "rules": []
-        }))
-        .into_response();
-    }
-
-    let rules = services::opengfw::get_active_rules().await;
-
-    ok_response(json!({
-        "enabled": true,
-        "rules": rules
-    }))
-    .into_response()
-}
-
-// POST /api/v1/opengfw/block-report - Agent reports blocked connections
-#[derive(Deserialize)]
-pub struct OpenGFWBlockReport {
-    pub machine_id: i64,
-    pub server_id: i64,
-    pub protocol: String,
-    pub src_ip: Option<String>,
-    pub dst_ip: Option<String>,
-    pub dst_port: Option<i32>,
-}
-
-async fn api_opengfw_block_report(
-    headers: HeaderMap,
-    Json(report): Json<OpenGFWBlockReport>,
-) -> impl IntoResponse {
-    if !verify_agent_api_key(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    // Log the blocked connection
-    services::opengfw::log_blocked_connection(
-        report.machine_id,
-        report.server_id,
-        &report.protocol,
-        report.src_ip,
-        report.dst_ip,
-        report.dst_port,
-    )
-    .await;
-
-    ok_response(json!({"status": "ok"})).into_response()
+    ok_response(json!({"server_id": server_id, "is_premium": true, "cost_ldc": cost})).into_response()
 }
 
 // ==============================
@@ -2435,29 +1782,24 @@ pub fn router(_state: AppState) -> Router<AppState> {
             post(api_admin_server_toggle),
         )
         .route("/v1/admin/machines", get(api_admin_machines))
-        .route("/v1/admin/machines-stats", get(api_admin_machines_stats))
-        .route("/v1/agent/register", post(api_agent_register))
-        .route("/v1/agent/stats", post(api_agent_stats))
         .route(
             "/v1/admin/config",
             get(api_admin_config).put(api_admin_config_save),
         )
-        .route("/v1/admin/orders", get(api_admin_orders))
-        .route("/v1/admin/packages", get(api_admin_packages))
-        // OpenGFW API
-        .route("/v1/admin/opengfw/config", get(api_admin_opengfw_config))
         .route(
             "/v1/admin/opengfw/config",
-            put(api_admin_opengfw_config_save),
+            get(api_admin_opengfw_config).put(api_admin_opengfw_config_save),
         )
-        .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
         .route("/v1/admin/opengfw/stats", get(api_admin_opengfw_stats))
-        .route(
-            "/v1/admin/opengfw/refresh-rules",
-            post(api_admin_opengfw_refresh_rules),
-        )
-        // Agent OpenGFW endpoints
-        .route("/v1/opengfw/status", get(api_opengfw_status))
-        .route("/v1/opengfw/config", get(api_opengfw_get_config))
-        .route("/v1/opengfw/block-report", post(api_opengfw_block_report))
+        .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
+        .route("/v1/admin/opengfw/refresh-rules", post(api_admin_opengfw_refresh))
+        // Rule management endpoints
+        .route("/v1/admin/opengfw/rules", get(api_admin_opengfw_rules_list))
+        .route("/v1/admin/opengfw/rules/templates", get(api_admin_opengfw_rules_templates))
+        .route("/v1/admin/opengfw/rules", post(api_admin_opengfw_rules_create))
+        .route("/v1/admin/opengfw/rules/:id", put(api_admin_opengfw_rules_update))
+        .route("/v1/admin/opengfw/rules/:id", delete(api_admin_opengfw_rules_delete))
+        .route("/v1/admin/opengfw/rules/:id/toggle", post(api_admin_opengfw_rules_toggle))
+        .route("/v1/admin/orders", get(api_admin_orders))
+        .route("/v1/admin/packages", get(api_admin_packages))
 }
