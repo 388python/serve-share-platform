@@ -1186,6 +1186,250 @@ async fn api_admin_config(headers: HeaderMap) -> impl IntoResponse {
     ok_response(configs).into_response()
 }
 
+// OpenGFW Config Types
+#[derive(Serialize)]
+struct OpenGFWConfigResponse {
+    enabled: bool,
+    block_vpn: bool,
+    block_shadowsocks: bool,
+    block_wireguard: bool,
+    block_openvpn: bool,
+    block_trojan: bool,
+    block_vmess: bool,
+    block_vless: bool,
+    block_xray: bool,
+    block_clash: bool,
+    servers_with_opengfw: Vec<(i64, String, String)>,
+}
+
+#[derive(Deserialize)]
+struct OpenGFWConfigPatch {
+    enabled: bool,
+    block_vpn: bool,
+    block_shadowsocks: bool,
+    block_wireguard: bool,
+    block_openvpn: bool,
+    block_trojan: bool,
+    block_vmess: bool,
+    block_vless: bool,
+    block_xray: bool,
+    block_clash: bool,
+}
+
+// GET /api/v1/admin/opengfw/config
+async fn api_admin_opengfw_config(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let enabled = db::get_config("opengfw_enabled").await.unwrap_or("false".to_string()) == "true";
+    let block_vpn = db::get_config("opengfw_block_vpn").await.unwrap_or("true".to_string()) == "true";
+    let block_shadowsocks = db::get_config("opengfw_block_shadowsocks").await.unwrap_or("true".to_string()) == "true";
+    let block_wireguard = db::get_config("opengfw_block_wireguard").await.unwrap_or("true".to_string()) == "true";
+    let block_openvpn = db::get_config("opengfw_block_openvpn").await.unwrap_or("true".to_string()) == "true";
+    let block_trojan = db::get_config("opengfw_block_trojan").await.unwrap_or("true".to_string()) == "true";
+    let block_vmess = db::get_config("opengfw_block_vmess").await.unwrap_or("true".to_string()) == "true";
+    let block_vless = db::get_config("opengfw_block_vless").await.unwrap_or("true".to_string()) == "true";
+    let block_xray = db::get_config("opengfw_block_xray").await.unwrap_or("true".to_string()) == "true";
+    let block_clash = db::get_config("opengfw_block_clash").await.unwrap_or("true".to_string()) == "true";
+
+    let servers_with_opengfw: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, name, ip FROM servers WHERE opengfw_enabled = 1 AND is_active = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let config = OpenGFWConfigResponse {
+        enabled,
+        block_vpn,
+        block_shadowsocks,
+        block_wireguard,
+        block_openvpn,
+        block_trojan,
+        block_vmess,
+        block_vless,
+        block_xray,
+        block_clash,
+        servers_with_opengfw,
+    };
+
+    ok_response(config).into_response()
+}
+
+// PUT /api/v1/admin/opengfw/config
+async fn api_admin_opengfw_config_save(
+    headers: HeaderMap,
+    Json(form): Json<OpenGFWConfigPatch>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_enabled")
+        .bind(form.enabled.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vpn")
+        .bind(form.block_vpn.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_shadowsocks")
+        .bind(form.block_shadowsocks.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_wireguard")
+        .bind(form.block_wireguard.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_openvpn")
+        .bind(form.block_openvpn.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_trojan")
+        .bind(form.block_trojan.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vmess")
+        .bind(form.block_vmess.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_vless")
+        .bind(form.block_vless.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_xray")
+        .bind(form.block_xray.to_string())
+        .execute(pool)
+        .await;
+
+    let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
+        .bind("opengfw_block_clash")
+        .bind(form.block_clash.to_string())
+        .execute(pool)
+        .await;
+
+    ok_response(json!({ "message": "配置已保存" })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/stats
+async fn api_admin_opengfw_stats(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let (total_blocked, by_protocol) = services::opengfw::get_block_stats().await;
+
+    ok_response(json!({
+        "total_blocked": total_blocked,
+        "by_protocol": by_protocol,
+    })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/logs
+async fn api_admin_opengfw_logs(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let logs = services::opengfw::get_recent_logs(100).await;
+
+    ok_response(logs).into_response()
+}
+
+// POST /api/v1/admin/opengfw/refresh-rules
+async fn api_admin_opengfw_refresh(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let servers: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, ip, agent_key FROM servers WHERE is_active = 1 AND opengfw_enabled = 1 AND agent_installed = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut refreshed_servers = 0;
+    let mut results = Vec::new();
+
+    for (server_id, server_ip, agent_key) in servers {
+        let config = services::opengfw::get_server_opengfw_config(server_id).await;
+        if let Some(config) = config {
+            let rules = serde_json::to_string(&config.rules).unwrap_or_default();
+            let agent_url = format!("http://{}:19527/opengfw/config", server_ip);
+
+            let response = reqwest::Client::new()
+                .post(&agent_url)
+                .header("X-API-Key", &agent_key)
+                .header("Content-Type", "application/json")
+                .json(&json!({
+                    "enabled": config.enabled,
+                    "rules": rules,
+                }))
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {
+                    refreshed_servers += 1;
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "ok",
+                    }));
+                }
+                Ok(resp) => {
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "error",
+                        "message": format!("HTTP {}", resp.status()),
+                    }));
+                }
+                Err(err) => {
+                    results.push(json!({
+                        "server_ip": server_ip,
+                        "status": "error",
+                        "message": err.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    ok_response(json!({
+        "refreshed_servers": refreshed_servers,
+        "results": results,
+    })).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct ConfigPatch {
     pub key: String,
@@ -1403,6 +1647,13 @@ pub fn router(_state: AppState) -> Router<AppState> {
             "/v1/admin/config",
             get(api_admin_config).put(api_admin_config_save),
         )
+        .route(
+            "/v1/admin/opengfw/config",
+            get(api_admin_opengfw_config).put(api_admin_opengfw_config_save),
+        )
+        .route("/v1/admin/opengfw/stats", get(api_admin_opengfw_stats))
+        .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
+        .route("/v1/admin/opengfw/refresh-rules", post(api_admin_opengfw_refresh))
         .route("/v1/admin/orders", get(api_admin_orders))
         .route("/v1/admin/packages", get(api_admin_packages))
 }
