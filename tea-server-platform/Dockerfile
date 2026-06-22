@@ -1,11 +1,22 @@
 # Build stage
 FROM rust:bookworm AS builder
 WORKDIR /app
-COPY Cargo.toml Cargo.lock* ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release 2>/dev/null || true
-COPY . .
-RUN touch src/main.rs
+
+# Copy only Cargo files first for caching
+COPY Cargo.toml Cargo.lock ./
+
+# Create minimal src to build dependencies
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
+
+# Build dependencies (cached if Cargo files haven't changed)
+RUN cargo build --release --locked 2>/dev/null || true
+
+# Now copy actual source code
+COPY src/ ./src/
+COPY templates/ ./templates/
+COPY static/ ./static/
+
+# Build the actual project
 RUN cargo build --release
 
 # Runtime stage
