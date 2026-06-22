@@ -1,8 +1,8 @@
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{get, post, put, delete},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,25 @@ static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
 
 pub fn set_startup_time(t: chrono::DateTime<chrono::Utc>) {
     let _ = STARTUP_TIME.set(t);
+}
+
+// Query parameters for OpenGFW stats
+#[derive(Debug, Deserialize)]
+struct StatsQuery {
+    start_time: Option<String>,
+    end_time: Option<String>,
+    server_id: Option<i64>,
+    hours: Option<i64>,
+}
+
+// Query parameters for OpenGFW logs
+#[derive(Debug, Deserialize)]
+struct LogsQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    server_id: Option<i64>,
+    protocol: Option<String>,
+    username: Option<String>,
 }
 
 // ---- Helpers: Token extraction & auth ----
@@ -1336,28 +1355,44 @@ async fn api_admin_opengfw_config_save(
 }
 
 // GET /api/v1/admin/opengfw/stats
-async fn api_admin_opengfw_stats(headers: HeaderMap) -> impl IntoResponse {
+async fn api_admin_opengfw_stats(headers: HeaderMap, Query(params): Query<StatsQuery>) -> impl IntoResponse {
     match authenticate_admin(&headers).await {
         Ok(_) => {}
         Err(err) => return err.into_response(),
     };
 
-    let (total_blocked, by_protocol) = services::opengfw::get_block_stats().await;
+    let (total_blocked, by_protocol, by_server) = services::opengfw::get_block_stats(
+        params.start_time.clone(),
+        params.end_time.clone(),
+        params.server_id,
+    ).await;
+
+    let hourly_stats = services::opengfw::get_hourly_stats(params.hours.unwrap_or(24)).await;
+    let top_users = services::opengfw::get_top_users(10).await;
 
     ok_response(json!({
         "total_blocked": total_blocked,
         "by_protocol": by_protocol,
+        "by_server": by_server,
+        "hourly_stats": hourly_stats,
+        "top_users": top_users,
     })).into_response()
 }
 
 // GET /api/v1/admin/opengfw/logs
-async fn api_admin_opengfw_logs(headers: HeaderMap) -> impl IntoResponse {
+async fn api_admin_opengfw_logs(headers: HeaderMap, Query(params): Query<LogsQuery>) -> impl IntoResponse {
     match authenticate_admin(&headers).await {
         Ok(_) => {}
         Err(err) => return err.into_response(),
     };
 
-    let logs = services::opengfw::get_recent_logs(100).await;
+    let logs = services::opengfw::get_recent_logs(
+        params.limit.unwrap_or(100),
+        params.offset.unwrap_or(0),
+        params.server_id,
+        params.protocol,
+        params.username,
+    ).await;
 
     ok_response(logs).into_response()
 }
@@ -1428,6 +1463,110 @@ async fn api_admin_opengfw_refresh(headers: HeaderMap) -> impl IntoResponse {
         "refreshed_servers": refreshed_servers,
         "results": results,
     })).into_response()
+}
+
+// GET /api/v1/admin/opengfw/rules - Get all rules
+async fn api_admin_opengfw_rules_list(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let rules = services::opengfw::get_all_rules().await;
+    ok_response(rules).into_response()
+}
+
+// GET /api/v1/admin/opengfw/rules/templates - Get rule templates
+async fn api_admin_opengfw_rules_templates(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let templates = services::opengfw::get_rule_templates();
+    ok_response(templates).into_response()
+}
+
+// POST /api/v1/admin/opengfw/rules - Create new rule
+async fn api_admin_opengfw_rules_create(
+    headers: HeaderMap,
+    Json(rule): Json<OpenGFWRuleRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::add_rule(
+        rule.name,
+        rule.description,
+        rule.protocol,
+        rule.match_signature,
+        rule.action,
+    ).await {
+        Ok(id) => (StatusCode::OK, Json(json!({ "id": id, "message": "规则已创建" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "create_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// PUT /api/v1/admin/opengfw/rules/:id - Update rule
+async fn api_admin_opengfw_rules_update(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+    Json(rule): Json<OpenGFWRuleRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::update_rule(
+        rule_id,
+        rule.name,
+        rule.description,
+        rule.protocol,
+        rule.match_signature,
+        rule.action,
+        rule.is_active,
+    ).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": "规则已更新" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "update_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// DELETE /api/v1/admin/opengfw/rules/:id - Delete rule
+async fn api_admin_opengfw_rules_delete(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    match services::opengfw::delete_rule(rule_id).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": "规则已删除" }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "delete_failed".to_string(), message: e })).into_response(),
+    }
+}
+
+// POST /api/v1/admin/opengfw/rules/:id/toggle - Toggle rule active status
+async fn api_admin_opengfw_rules_toggle(
+    headers: HeaderMap,
+    Path(rule_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let active = body.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    match services::opengfw::toggle_rule(rule_id, active).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "message": if active { "规则已启用" } else { "规则已禁用" } }))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(ApiError { error: "toggle_failed".to_string(), message: e })).into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1654,6 +1793,13 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/admin/opengfw/stats", get(api_admin_opengfw_stats))
         .route("/v1/admin/opengfw/logs", get(api_admin_opengfw_logs))
         .route("/v1/admin/opengfw/refresh-rules", post(api_admin_opengfw_refresh))
+        // Rule management endpoints
+        .route("/v1/admin/opengfw/rules", get(api_admin_opengfw_rules_list))
+        .route("/v1/admin/opengfw/rules/templates", get(api_admin_opengfw_rules_templates))
+        .route("/v1/admin/opengfw/rules", post(api_admin_opengfw_rules_create))
+        .route("/v1/admin/opengfw/rules/:id", put(api_admin_opengfw_rules_update))
+        .route("/v1/admin/opengfw/rules/:id", delete(api_admin_opengfw_rules_delete))
+        .route("/v1/admin/opengfw/rules/:id/toggle", post(api_admin_opengfw_rules_toggle))
         .route("/v1/admin/orders", get(api_admin_orders))
         .route("/v1/admin/packages", get(api_admin_packages))
 }

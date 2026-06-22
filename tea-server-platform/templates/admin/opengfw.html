@@ -10,148 +10,257 @@
     </div>
 </div>
 
-<div class="row mb-4">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">全局设置</h5>
-            </div>
-            <div class="card-body">
-                <form id="opengfw-config-form">
-                    <div class="mb-3 form-check">
-                        <input type="checkbox" class="form-check-input" id="opengfw-enabled" name="enabled">
-                        <label class="form-check-label" for="opengfw-enabled">
-                            <strong>启用 OpenGFW</strong>
-                        </label>
-                    </div>
-                    <hr>
-                    <h6>阻止以下协议:</h6>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-vpn" name="block_vpn">
-                                <label class="form-check-label" for="block-vpn">VPN 通用检测</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-shadowsocks" name="block_shadowsocks">
-                                <label class="form-check-label" for="block-shadowsocks">Shadowsocks</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-wireguard" name="block_wireguard">
-                                <label class="form-check-label" for="block-wireguard">WireGuard</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-openvpn" name="block_openvpn">
-                                <label class="form-check-label" for="block-openvpn">OpenVPN</label>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-trojan" name="block_trojan">
-                                <label class="form-check-label" for="block-trojan">Trojan</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-vmess" name="block_vmess">
-                                <label class="form-check-label" for="block-vmess">VMess</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-vless" name="block_vless">
-                                <label class="form-check-label" for="block-vless">VLess</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-xray" name="block_xray">
-                                <label class="form-check-label" for="block-xray">Xray</label>
-                            </div>
-                            <div class="mb-2 form-check">
-                                <input type="checkbox" class="form-check-input" id="block-clash" name="block_clash">
-                                <label class="form-check-label" for="block-clash">Clash</label>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary mt-3">保存设置</button>
-                </form>
-            </div>
-        </div>
-    </div>
+<ul class="nav nav-tabs mb-4" id="opengfwTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button" role="tab">
+            <i class="bi bi-graph-up"></i> 概览
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules" type="button" role="tab">
+            <i class="bi bi-shield"></i> 规则管理
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs" type="button" role="tab">
+            <i class="bi bi-list-ul"></i> 阻止日志
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="servers-tab" data-bs-toggle="tab" data-bs-target="#servers" type="button" role="tab">
+            <i class="bi bi-server"></i> 服务器
+        </button>
+    </li>
+</ul>
 
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">阻止统计</h5>
-            </div>
-            <div class="card-body">
-                <div id="stats-loading" class="text-center">
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    加载中...
+<div class="tab-content" id="opengfwTabContent">
+    <!-- Overview Tab -->
+    <div class="tab-pane fade show active" id="overview" role="tabpanel">
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card bg-primary text-white">
+                    <div class="card-body text-center">
+                        <h3 class="mb-0" id="total-blocked">0</h3>
+                        <small>总阻止次数</small>
+                    </div>
                 </div>
-                <div id="stats-content" style="display:none;">
-                    <h3 class="text-danger" id="total-blocked">0</h3>
-                    <p class="text-muted">总阻止次数</p>
-                    <hr>
-                    <h6>按协议统计:</h6>
-                    <ul class="list-group" id="protocol-stats">
-                    </ul>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <h3 class="mb-0" id="active-rules">0</h3>
+                        <small>活跃规则</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-info text-white">
+                    <div class="card-body text-center">
+                        <h3 class="mb-0" id="enabled-servers">0</h3>
+                        <small>启用服务器</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-white">
+                    <div class="card-body text-center">
+                        <h3 class="mb-0" id="top-protocol">-</h3>
+                        <small>最高阻止协议</small>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5 class="mb-0">操作</h5>
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">按协议统计</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="protocol-chart" style="height: 250px;"></div>
+                        <ul class="list-group mt-3" id="protocol-stats"></ul>
+                    </div>
+                </div>
             </div>
-            <div class="card-body">
-                <button class="btn btn-warning" onclick="refreshAllServers()">
-                    刷新所有服务器规则
-                </button>
-                <div id="refresh-status" class="mt-2"></div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">按服务器统计</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group" id="server-stats"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Top 违规用户</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group" id="top-users"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">全局设置</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="opengfw-config-form">
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="opengfw-enabled" name="enabled">
+                                <label class="form-check-label" for="opengfw-enabled">
+                                    <strong>启用 OpenGFW</strong>
+                                </label>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">阻止类型</label>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-vpn" name="block_vpn">
+                                            <label class="form-check-label" for="block-vpn">VPN 通用检测</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-shadowsocks" name="block_shadowsocks">
+                                            <label class="form-check-label" for="block-shadowsocks">Shadowsocks</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-wireguard" name="block_wireguard">
+                                            <label class="form-check-label" for="block-wireguard">WireGuard</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-openvpn" name="block_openvpn">
+                                            <label class="form-check-label" for="block-openvpn">OpenVPN</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-trojan" name="block_trojan">
+                                            <label class="form-check-label" for="block-trojan">Trojan</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-vmess" name="block_vmess">
+                                            <label class="form-check-label" for="block-vmess">VMess/VLess/Xray</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="block-clash" name="block_clash">
+                                            <label class="form-check-label" for="block-clash">Clash</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">保存设置</button>
+                            <button type="button" class="btn btn-warning" onclick="refreshAllServers()">
+                                <i class="bi bi-arrow-clockwise"></i> 刷新规则
+                            </button>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-</div>
 
-<div class="row">
-    <div class="col-12">
-        <div class="card">
+    <!-- Rules Tab -->
+    <div class="tab-pane fade" id="rules" role="tabpanel">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">规则列表</h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="showTemplateModal()">
+                        <i class="bi bi-plus-circle"></i> 从模板添加
+                    </button>
+                    <button class="btn btn-sm btn-primary" onclick="showRuleModal()">
+                        <i class="bi bi-plus"></i> 自定义规则
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>状态</th>
+                                <th>名称</th>
+                                <th>协议</th>
+                                <th>匹配特征</th>
+                                <th>操作</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rules-table-body">
+                            <tr><td colspan="6" class="text-center">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logs Tab -->
+    <div class="tab-pane fade" id="logs" role="tabpanel">
+        <div class="card mb-4">
             <div class="card-header">
                 <h5 class="mb-0">阻止日志</h5>
             </div>
             <div class="card-body">
-                <div id="logs-loading" class="text-center">
-                    <div class="spinner-border spinner-border-sm" role="status"></div>
-                    加载中...
-                </div>
-                <div id="logs-content" style="display:none;">
-                    <div class="table-responsive">
-                        <table class="table table-sm table-striped">
-                            <thead>
-                                <tr>
-                                    <th>时间</th>
-                                    <th>用户</th>
-                                    <th>服务器</th>
-                                    <th>协议</th>
-                                    <th>源IP</th>
-                                    <th>目标IP</th>
-                                    <th>目标端口</th>
-                                </tr>
-                            </thead>
-                            <tbody id="logs-table-body">
-                            </tbody>
-                        </table>
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <select class="form-select" id="log-server-filter">
+                            <option value="">所有服务器</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select" id="log-protocol-filter">
+                            <option value="">所有协议</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <input type="text" class="form-control" id="log-user-filter" placeholder="用户名搜索">
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary" onclick="loadLogs()">筛选</button>
+                        <button class="btn btn-outline-secondary" onclick="clearLogFilters()">清除</button>
                     </div>
                 </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>用户</th>
+                                <th>服务器</th>
+                                <th>协议</th>
+                                <th>源IP</th>
+                                <th>目标IP</th>
+                                <th>目标端口</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-table-body">
+                            <tr><td colspan="7" class="text-center">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <nav>
+                    <ul class="pagination justify-content-center" id="logs-pagination"></ul>
+                </nav>
             </div>
         </div>
     </div>
-</div>
 
-<div class="row mt-4">
-    <div class="col-12">
+    <!-- Servers Tab -->
+    <div class="tab-pane fade" id="servers" role="tabpanel">
         <div class="card">
             <div class="card-header">
                 <h5 class="mb-0">已启用 OpenGFW 的服务器</h5>
             </div>
             <div class="card-body">
-                <p class="text-muted">以下服务器将在母机上启用 OpenGFW 防火墙</p>
                 <div class="table-responsive">
                     <table class="table table-sm">
                         <thead>
@@ -160,13 +269,96 @@
                                 <th>名称</th>
                                 <th>IP</th>
                                 <th>状态</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="servers-table-body">
-                            <tr><td colspan="4" class="text-center text-muted">加载中...</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted">加载中...</td></tr>
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rule Modal -->
+<div class="modal fade" id="ruleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="ruleModalTitle">添加规则</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="ruleForm">
+                    <input type="hidden" id="rule-id">
+                    <div class="mb-3">
+                        <label class="form-label">规则名称</label>
+                        <input type="text" class="form-control" id="rule-name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">描述</label>
+                        <input type="text" class="form-control" id="rule-description">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">协议标识</label>
+                        <input type="text" class="form-control" id="rule-protocol" required placeholder="如: shadowsocks, wireguard, openvpn">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">匹配特征</label>
+                        <input type="text" class="form-control" id="rule-signature" required placeholder="payload,0,0,0,0,0,0,0,0,0,17,0,51820">
+                        <small class="text-muted">OpenGFW 匹配规则，格式: payload,偏移,字节...</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">动作</label>
+                        <select class="form-select" id="rule-action">
+                            <option value="block">阻止 (block)</option>
+                            <option value="log">仅记录 (log)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="rule-active" checked>
+                        <label class="form-check-label" for="rule-active">启用此规则</label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveRule()">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Template Modal -->
+<div class="modal fade" id="templateModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">选择规则模板</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row" id="template-list"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Refresh Status Modal -->
+<div class="modal fade" id="refreshModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">刷新规则</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="refresh-status"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
             </div>
         </div>
     </div>
@@ -176,6 +368,19 @@
 {% block scripts %}
 <script>
 const API_BASE = '/api/v1';
+let ruleModal, templateModal, refreshModal;
+
+document.addEventListener('DOMContentLoaded', () => {
+    ruleModal = new bootstrap.Modal(document.getElementById('ruleModal'));
+    templateModal = new bootstrap.Modal(document.getElementById('templateModal'));
+    refreshModal = new bootstrap.Modal(document.getElementById('refreshModal'));
+    
+    loadConfig();
+    loadStats();
+    loadRules();
+    loadServers();
+    loadLogs();
+});
 
 async function loadConfig() {
     try {
@@ -190,24 +395,30 @@ async function loadConfig() {
         document.getElementById('block-wireguard').checked = data.block_wireguard;
         document.getElementById('block-openvpn').checked = data.block_openvpn;
         document.getElementById('block-trojan').checked = data.block_trojan;
-        document.getElementById('block-vmess').checked = data.block_vmess;
-        document.getElementById('block-vless').checked = data.block_vless;
-        document.getElementById('block-xray').checked = data.block_xray;
+        document.getElementById('block-vmess').checked = data.block_vmess || data.block_vless || data.block_xray;
         document.getElementById('block-clash').checked = data.block_clash;
 
-        // Render servers
+        document.getElementById('enabled-servers').textContent = data.servers_with_opengfw?.length || 0;
+
         const serversBody = document.getElementById('servers-table-body');
+        const serverFilter = document.getElementById('log-server-filter');
         if (data.servers_with_opengfw && data.servers_with_opengfw.length > 0) {
-            serversBody.innerHTML = data.servers_with_opengfw.map(s => `
-                <tr>
+            let html = '';
+            let filterOptions = '<option value="">所有服务器</option>';
+            data.servers_with_opengfw.forEach(s => {
+                html += `<tr>
                     <td>${s[0]}</td>
                     <td>${s[1]}</td>
                     <td>${s[2]}</td>
                     <td><span class="badge bg-success">已启用</span></td>
-                </tr>
-            `).join('');
+                    <td><button class="btn btn-sm btn-outline-primary" onclick="refreshServer(${s[0]}, '${s[2]}')">刷新</button></td>
+                </tr>`;
+                filterOptions += `<option value="${s[0]}">${s[1]} (${s[2]})</option>`;
+            });
+            serversBody.innerHTML = html;
+            serverFilter.innerHTML = filterOptions;
         } else {
-            serversBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无启用 OpenGFW 的服务器</td></tr>';
+            serversBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">暂无启用 OpenGFW 的服务器</td></tr>';
         }
     } catch (err) {
         console.error('Failed to load config:', err);
@@ -221,38 +432,124 @@ async function loadStats() {
         });
         const data = await resp.json();
 
-        document.getElementById('total-blocked').textContent = data.total_blocked;
-
-        const statsList = document.getElementById('protocol-stats');
+        document.getElementById('total-blocked').textContent = data.total_blocked || 0;
+        
+        const protocolStats = document.getElementById('protocol-stats');
         if (data.by_protocol && data.by_protocol.length > 0) {
-            statsList.innerHTML = data.by_protocol.map(p => `
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                    ${p[0]}
-                    <span class="badge bg-danger rounded-pill">${p[1]}</span>
-                </li>
-            `).join('');
+            let html = '';
+            data.by_protocol.forEach(p => {
+                html += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span class="badge bg-danger">${p[0]}</span>
+                    <span class="badge bg-secondary">${p[1]}</span>
+                </li>`;
+            });
+            protocolStats.innerHTML = html;
+            document.getElementById('top-protocol').textContent = data.by_protocol[0][0];
         } else {
-            statsList.innerHTML = '<li class="list-group-item text-muted">暂无阻止记录</li>';
+            protocolStats.innerHTML = '<li class="list-group-item text-muted">暂无阻止记录</li>';
+            document.getElementById('top-protocol').textContent = '-';
         }
 
-        document.getElementById('stats-loading').style.display = 'none';
-        document.getElementById('stats-content').style.display = 'block';
+        const serverStats = document.getElementById('server-stats');
+        if (data.by_server && data.by_server.length > 0) {
+            let html = '';
+            data.by_server.forEach(s => {
+                html += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    ${s[0]}
+                    <span class="badge bg-primary">${s[1]}</span>
+                </li>`;
+            });
+            serverStats.innerHTML = html;
+        } else {
+            serverStats.innerHTML = '<li class="list-group-item text-muted">暂无阻止记录</li>';
+        }
+
+        const topUsers = document.getElementById('top-users');
+        if (data.top_users && data.top_users.length > 0) {
+            let html = '';
+            data.top_users.forEach(u => {
+                html += `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    ${u[0]}
+                    <span class="badge bg-danger">${u[1]}</span>
+                </li>`;
+            });
+            topUsers.innerHTML = html;
+        } else {
+            topUsers.innerHTML = '<li class="list-group-item text-muted">暂无数据</li>';
+        }
+
+        document.getElementById('active-rules').textContent = data.by_protocol?.length || 0;
     } catch (err) {
         console.error('Failed to load stats:', err);
     }
 }
 
-async function loadLogs() {
+async function loadRules() {
     try {
-        const resp = await fetch(`${API_BASE}/admin/opengfw/logs`, {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/rules`, {
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        const tbody = document.getElementById('rules-table-body');
+        const protocolFilter = document.getElementById('log-protocol-filter');
+        let filterOptions = '<option value="">所有协议</option>';
+        
+        if (data && data.length > 0) {
+            let html = '';
+            data.forEach(r => {
+                const active = r.is_active ? 'bg-success' : 'bg-secondary';
+                const activeIcon = r.is_active ? '✓' : '✗';
+                html += `<tr>
+                    <td><span class="badge ${active}">${activeIcon}</span></td>
+                    <td>${r.name}</td>
+                    <td><span class="badge bg-info">${r.protocol}</span></td>
+                    <td><code>${r.match_signature || ''}</code></td>
+                    <td><span class="badge bg-${r.action === 'block' ? 'danger' : 'warning'}">${r.action}</span></td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary" onclick="toggleRule(${r.id}, ${!r.is_active})">
+                            ${r.is_active ? '禁用' : '启用'}
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="editRule(${r.id}, '${r.name}', '${r.description}', '${r.protocol}', '${r.match_signature || ''}', '${r.action}', ${r.is_active})">编辑</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteRule(${r.id})">删除</button>
+                    </td>
+                </tr>`;
+                filterOptions += `<option value="${r.protocol}">${r.name}</option>`;
+            });
+            tbody.innerHTML = html;
+            protocolFilter.innerHTML = filterOptions;
+            document.getElementById('active-rules').textContent = data.filter(r => r.is_active).length;
+        } else {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无规则</td></tr>';
+        }
+    } catch (err) {
+        console.error('Failed to load rules:', err);
+    }
+}
+
+async function loadLogs(page = 1) {
+    const serverId = document.getElementById('log-server-filter').value;
+    const protocol = document.getElementById('log-protocol-filter').value;
+    const username = document.getElementById('log-user-filter').value;
+    const limit = 50;
+    const offset = (page - 1) * limit;
+
+    let url = `${API_BASE}/admin/opengfw/logs?limit=${limit}&offset=${offset}`;
+    if (serverId) url += `&server_id=${serverId}`;
+    if (protocol) url += `&protocol=${encodeURIComponent(protocol)}`;
+    if (username) url += `&username=${encodeURIComponent(username)}`;
+
+    try {
+        const resp = await fetch(url, {
             headers: { 'Authorization': `Bearer ${getApiKey()}` }
         });
         const data = await resp.json();
 
         const tbody = document.getElementById('logs-table-body');
         if (data && data.length > 0) {
-            tbody.innerHTML = data.map(log => `
-                <tr>
+            let html = '';
+            data.forEach(log => {
+                html += `<tr>
                     <td>${log.blocked_at}</td>
                     <td>${log.username}</td>
                     <td>${log.server_name}</td>
@@ -260,17 +557,22 @@ async function loadLogs() {
                     <td>${log.src_ip || '-'}</td>
                     <td>${log.dst_ip || '-'}</td>
                     <td>${log.dst_port || '-'}</td>
-                </tr>
-            `).join('');
+                </tr>`;
+            });
+            tbody.innerHTML = html;
         } else {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无阻止记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无记录</td></tr>';
         }
-
-        document.getElementById('logs-loading').style.display = 'none';
-        document.getElementById('logs-content').style.display = 'block';
     } catch (err) {
         console.error('Failed to load logs:', err);
     }
+}
+
+function clearLogFilters() {
+    document.getElementById('log-server-filter').value = '';
+    document.getElementById('log-protocol-filter').value = '';
+    document.getElementById('log-user-filter').value = '';
+    loadLogs();
 }
 
 document.getElementById('opengfw-config-form').addEventListener('submit', async (e) => {
@@ -301,7 +603,6 @@ document.getElementById('opengfw-config-form').addEventListener('submit', async 
 
         if (resp.ok) {
             alert('配置已保存');
-            loadConfig();
         } else {
             alert('保存失败');
         }
@@ -311,8 +612,8 @@ document.getElementById('opengfw-config-form').addEventListener('submit', async 
 });
 
 async function refreshAllServers() {
-    const statusDiv = document.getElementById('refresh-status');
-    statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> 刷新中...';
+    document.getElementById('refresh-status').innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div><p>刷新中...</p></div>';
+    refreshModal.show();
 
     try {
         const resp = await fetch(`${API_BASE}/admin/opengfw/refresh-rules`, {
@@ -328,26 +629,166 @@ async function refreshAllServers() {
         if (data.results && data.results.length > 0) {
             html += '<ul class="list-unstyled small mt-2">';
             data.results.forEach(r => {
-                html += `<li>${r.server_ip}: ${r.status === 'ok' ? '✅ 成功' : '❌ 失败'}</li>`;
+                html += `<li class="${r.status === 'ok' ? 'text-success' : 'text-danger'}">${r.server_ip}: ${r.status === 'ok' ? '✅ 成功' : '❌ 失败 - ' + (r.message || '')}</li>`;
             });
             html += '</ul>';
         }
 
-        statusDiv.innerHTML = html;
+        document.getElementById('refresh-status').innerHTML = html;
     } catch (err) {
-        statusDiv.innerHTML = `<div class="alert alert-danger">刷新失败: ${err.message}</div>`;
+        document.getElementById('refresh-status').innerHTML = `<div class="alert alert-danger">刷新失败: ${err.message}</div>`;
     }
+}
+
+function showRuleModal(id = null) {
+    document.getElementById('rule-id').value = id || '';
+    document.getElementById('rule-name').value = '';
+    document.getElementById('rule-description').value = '';
+    document.getElementById('rule-protocol').value = '';
+    document.getElementById('rule-signature').value = '';
+    document.getElementById('rule-action').value = 'block';
+    document.getElementById('rule-active').checked = true;
+    document.getElementById('ruleModalTitle').textContent = id ? '编辑规则' : '添加规则';
+    ruleModal.show();
+}
+
+function editRule(id, name, description, protocol, signature, action, active) {
+    document.getElementById('rule-id').value = id;
+    document.getElementById('rule-name').value = name;
+    document.getElementById('rule-description').value = description;
+    document.getElementById('rule-protocol').value = protocol;
+    document.getElementById('rule-signature').value = signature;
+    document.getElementById('rule-action').value = action;
+    document.getElementById('rule-active').checked = active;
+    document.getElementById('ruleModalTitle').textContent = '编辑规则';
+    ruleModal.show();
+}
+
+async function saveRule() {
+    const id = document.getElementById('rule-id').value;
+    const rule = {
+        name: document.getElementById('rule-name').value,
+        description: document.getElementById('rule-description').value,
+        protocol: document.getElementById('rule-protocol').value,
+        match_signature: document.getElementById('rule-signature').value,
+        action: document.getElementById('rule-action').value,
+        is_active: document.getElementById('rule-active').checked
+    };
+
+    const url = id ? `${API_BASE}/admin/opengfw/rules/${id}` : `${API_BASE}/admin/opengfw/rules`;
+    const method = id ? 'PUT' : 'POST';
+
+    try {
+        const resp = await fetch(url, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${getApiKey()}`
+            },
+            body: JSON.stringify(rule)
+        });
+
+        if (resp.ok) {
+            ruleModal.hide();
+            loadRules();
+            alert('规则已保存');
+        } else {
+            alert('保存失败');
+        }
+    } catch (err) {
+        alert('保存失败: ' + err.message);
+    }
+}
+
+async function toggleRule(id, active) {
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/rules/${id}/toggle`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${getApiKey()}`
+            },
+            body: JSON.stringify({ active })
+        });
+
+        if (resp.ok) {
+            loadRules();
+        } else {
+            alert('操作失败');
+        }
+    } catch (err) {
+        alert('操作失败: ' + err.message);
+    }
+}
+
+async function deleteRule(id) {
+    if (!confirm('确定要删除此规则吗？')) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/rules/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+
+        if (resp.ok) {
+            loadRules();
+        } else {
+            alert('删除失败');
+        }
+    } catch (err) {
+        alert('删除失败: ' + err.message);
+    }
+}
+
+async function showTemplateModal() {
+    try {
+        const resp = await fetch(`${API_BASE}/admin/opengfw/rules/templates`, {
+            headers: { 'Authorization': `Bearer ${getApiKey()}` }
+        });
+        const data = await resp.json();
+
+        let html = '';
+        data.forEach(t => {
+            html += `<div class="col-md-6 mb-3">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h6 class="card-title">${t.name}</h6>
+                        <p class="card-text small text-muted">${t.description}</p>
+                        <code class="small d-block mb-2">${t.default_signature}</code>
+                        <button class="btn btn-sm btn-primary" onclick="addFromTemplate('${t.protocol}', '${t.name}', '${t.default_signature}')">
+                            添加
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+        });
+        document.getElementById('template-list').innerHTML = html;
+        templateModal.show();
+    } catch (err) {
+        alert('加载模板失败: ' + err.message);
+    }
+}
+
+function addFromTemplate(protocol, name, signature) {
+    templateModal.hide();
+    document.getElementById('rule-id').value = '';
+    document.getElementById('rule-name').value = name;
+    document.getElementById('rule-description').value = protocol + ' 协议';
+    document.getElementById('rule-protocol').value = protocol;
+    document.getElementById('rule-signature').value = signature;
+    document.getElementById('rule-action').value = 'block';
+    document.getElementById('rule-active').checked = true;
+    document.getElementById('ruleModalTitle').textContent = '添加规则';
+    ruleModal.show();
+}
+
+async function refreshServer(serverId, serverIp) {
+    alert(`刷新服务器 ${serverIp} 规则...`);
+    refreshAllServers();
 }
 
 function getApiKey() {
     return localStorage.getItem('api_key') || '';
 }
-
-// Load data on page load
-document.addEventListener('DOMContentLoaded', () => {
-    loadConfig();
-    loadStats();
-    loadLogs();
-});
 </script>
 {% endblock scripts %}

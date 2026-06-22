@@ -300,6 +300,7 @@ pub struct OpenGFWRule {
     pub name: String,
     pub description: String,
     pub protocol: String,
+    pub match_signature: Option<String>,
     pub action: String,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -343,7 +344,29 @@ pub struct OpenGFWConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenGFWRuleItem {
+    pub id: Option<i64>,
     pub name: String,
     pub protocol: String,
+    pub match_signature: Option<String>,
     pub action: String,
+}
+
+// Rule template for quick setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenGFWRuleTemplate {
+    pub protocol: String,
+    pub name: String,
+    pub description: String,
+    pub default_signature: String,
+}
+
+// Request to create/update a rule
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenGFWRuleRequest {
+    pub name: String,
+    pub description: String,
+    pub protocol: String,
+    pub match_signature: String,
+    pub action: String,
+    pub is_active: bool,
 }

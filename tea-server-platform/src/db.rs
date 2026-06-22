@@ -320,6 +320,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             name TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             protocol TEXT NOT NULL,
+            match_signature TEXT DEFAULT '',
             action TEXT NOT NULL DEFAULT 'block',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -338,6 +339,12 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // Add match_signature column if not exists (migration)
+    sqlx::query("ALTER TABLE opengfw_rules ADD COLUMN match_signature TEXT DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
 
     // Create balance_to_code_logs table
     sqlx::query(
@@ -387,6 +394,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             name TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
             protocol TEXT NOT NULL,
+            match_signature TEXT DEFAULT '',
             action TEXT NOT NULL DEFAULT 'block',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -395,6 +403,34 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // Add match_signature column if not exists (migration)
+    sqlx::query("ALTER TABLE opengfw_rules ADD COLUMN match_signature TEXT DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+
+    // Add missing columns to opengfw_logs (migration)
+    sqlx::query("ALTER TABLE opengfw_logs ADD COLUMN protocol TEXT DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE opengfw_logs ADD COLUMN src_ip TEXT DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE opengfw_logs ADD COLUMN dst_ip TEXT DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE opengfw_logs ADD COLUMN dst_port INTEGER DEFAULT 0")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE opengfw_logs ADD COLUMN blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+        .execute(pool)
+        .await
+        .ok();
 
     // Create OpenGFW blocked logs table
     sqlx::query(
