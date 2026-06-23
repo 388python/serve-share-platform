@@ -2,230 +2,309 @@
 
 {% block title %}{{ site_name }} - 机器详情 #{{ machine.id }}{% endblock title %}
 
-{% block styles %}
-{{ super() }}
-<style>
-/* WebSSH Terminal Styles */
-#ssh-terminal {
-    width: 100%;
-    height: 400px;
-    background: #1e1e1e;
-    border-radius: 6px;
-    padding: 10px;
-    font-family: 'Fira Code', 'Courier New', monospace;
-}
-.ssh-status {
-    font-size: 12px;
-    color: #888;
-}
-.ssh-status.connected { color: #28a745; }
-.ssh-status.disconnected { color: #dc3545; }
-.ssh-status.connecting { color: #ffc107; }
-</style>
-{% endblock styles %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+{% endblock head_extra %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>机器详情 #{{ machine.id }}</h2>
-        <a href="/machines" class="btn btn-outline-secondary">返回列表</a>
+<div class="page-header d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="bi bi-server me-2"></i>机器详情 #{{ machine.id }}</h2>
+        <span class="text-muted">查看和管理当前机器</span>
     </div>
+    <a href="/machines" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>返回列表
+    </a>
 </div>
 
-<div class="row">
-    <!-- 机器信息 -->
-    <div class="col-md-5">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">基本信息</h5>
+<div class="row g-4">
+    <!-- 左侧信息面板 -->
+    <div class="col-lg-5">
+        <!-- 机器信息卡片 -->
+        <div class="card border-0 shadow-sm mb-4 info-card">
+            <div class="card-header bg-gradient-primary text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-info-circle me-2"></i>基本信息</h5>
             </div>
-            <div class="card-body">
-                <table class="table table-sm">
-                    <tr><td>状态</td><td>
-                        {% if machine.status == "running" %}
-                        <span class="badge bg-success">运行中</span>
-                        {% elif machine.status == "pending" %}
-                        <span class="badge bg-info">创建中</span>
-                        {% elif machine.status == "failed" %}
-                        <span class="badge bg-danger">创建失败</span>
-                        {% else %}
-                        <span class="badge bg-secondary">已停止</span>
-                        {% endif %}
-                    </td></tr>
-                    <tr><td>CPU</td><td>{{ machine.cpu_cores }} 核</td></tr>
-                    <tr><td>内存</td><td>{{ machine.memory_gb }} GB</td></tr>
-                    <tr><td>磁盘</td><td>{{ machine.disk_gb }} GB</td></tr>
-                    <tr><td>虚拟化类型</td><td>{{ machine.virt_type }}</td></tr>
-                    <tr><td>系统镜像</td><td>{{ machine.image | default(value="ubuntu:22.04") }}</td></tr>
-                    <tr><td>应用镜像</td><td>{{ machine.app_image | default(value="无") }}</td></tr>
-                    <tr><td>创建时间</td><td>{{ machine.created_at }}</td></tr>
-                    <tr><td>过期时间</td><td>{{ machine.expires_at }}</td></tr>
+            <div class="card-body p-0">
+                <table class="table table-borderless mb-0 machine-info-table">
+                    <tr>
+                        <td class="text-muted ps-4"><i class="bi bi-activity me-2"></i>状态</td>
+                        <td class="pe-4">
+                            {% if machine.status == "running" %}
+                            <span class="badge bg-success px-3 py-2 rounded-pill">🟢 运行中</span>
+                            {% elif machine.status == "pending" %}
+                            <span class="badge bg-info px-3 py-2 rounded-pill">🔄 创建中</span>
+                            {% elif machine.status == "failed" %}
+                            <span class="badge bg-danger px-3 py-2 rounded-pill">❌ 创建失败</span>
+                            {% else %}
+                            <span class="badge bg-secondary px-3 py-2 rounded-pill">⏹ 已停止</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-cpu me-2"></i>CPU</td><td class="pe-4 fw-semibold">{{ machine.cpu_cores }} 核</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-memory me-2"></i>内存</td><td class="pe-4 fw-semibold">{{ machine.memory_gb }} GB</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-hdd me-2"></i>磁盘</td><td class="pe-4 fw-semibold">{{ machine.disk_gb }} GB</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-grid me-2"></i>虚拟化类型</td><td class="pe-4"><span class="badge bg-info bg-opacity-25 text-info px-3 py-2">{{ machine.virt_type | upper }}</span></td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-ubuntu me-2"></i>系统镜像</td><td class="pe-4"><code>{{ machine.image | default(value="ubuntu:22.04") }}</code></td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-box me-2"></i>应用镜像</td><td class="pe-4">{{ machine.app_image | default(value="<span class='text-muted'>无</span>") | safe }}</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-calendar me-2"></i>创建时间</td><td class="pe-4">{{ machine.created_at }}</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-clock me-2"></i>过期时间</td><td class="pe-4">{{ machine.expires_at }}</td></tr>
                 </table>
+            </div>
+        </div>
+
+        <!-- VPN 阻挡状态卡片 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-dark text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-shield-shaded me-2"></i>安全防护</h5>
+            </div>
+            <div class="card-body p-4">
+                <div class="d-flex align-items-center mb-3">
+                    <div class="shield-icon bg-success-subtle rounded-circle p-3 me-3">
+                        <i class="bi bi-shield-fill-check fs-3 text-success"></i>
+                    </div>
+                    <div>
+                        <h6 class="fw-bold mb-1">VPN / 代理协议阻挡</h6>
+                        <span class="badge bg-success px-3 py-2 rounded-pill">
+                            <i class="bi bi-check-circle me-1"></i>已启用
+                        </span>
+                    </div>
+                </div>
+                <p class="text-muted small mb-3">
+                    由 OpenGFW 防火墙提供支持，自动阻止以下协议流量：
+                </p>
+                <div class="d-flex flex-wrap gap-2">
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">VPN</span>
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">Shadowsocks</span>
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">WireGuard</span>
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">Trojan</span>
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">VMess</span>
+                    <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2">Clash</span>
+                </div>
             </div>
         </div>
 
         <!-- 服务器信息 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">服务器信息</h5>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-secondary bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-hdd-network me-2"></i>网络信息</h5>
             </div>
-            <div class="card-body">
-                <table class="table table-sm">
-                    <tr><td>服务器 IP</td><td>{{ server.ip if server else 'N/A' }}</td></tr>
-                    <tr><td>机器 IP</td><td><span id="machine-ip">获取中...</span></td></tr>
-                    <tr><td>SSH 端口</td><td>{{ machine.ssh_port | default(value="22") }}</td></tr>
-                </table>
+            <div class="card-body p-4">
+                <div class="mb-3">
+                    <div class="d-flex align-items-center p-3 bg-light rounded mb-2">
+                        <i class="bi bi-globe me-3 text-primary fs-5"></i>
+                        <div>
+                            <small class="text-muted d-block">服务器 IP</small>
+                            <strong>{{ server.ip if server else 'N/A' }}</strong>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center p-3 bg-light rounded mb-2">
+                        <i class="bi bi-laptop me-3 text-success fs-5"></i>
+                        <div>
+                            <small class="text-muted d-block">机器 IP</small>
+                            <strong id="machine-ip">获取中...</strong>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center p-3 bg-light rounded">
+                        <i class="bi bi-plug me-3 text-warning fs-5"></i>
+                        <div>
+                            <small class="text-muted d-block">SSH 端口</small>
+                            <strong>{{ machine.ssh_port | default(value="22") }}</strong>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- 操作按钮 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">快捷操作</h5>
+        <!-- 快捷操作 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-danger bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-lightning me-2"></i>快捷操作</h5>
             </div>
-            <div class="card-body">
+            <div class="card-body p-4">
                 {% if machine.status == "running" %}
                 <form method="post" action="/machines/{{ machine.id }}/stop" style="display:inline">
-                    <button type="submit" class="btn btn-warning">停止机器</button>
+                    <button type="submit" class="btn btn-warning w-100 mb-2">
+                        <i class="bi bi-stop-circle me-1"></i>停止机器
+                    </button>
                 </form>
                 {% endif %}
-                <form method="post" action="/machines/{{ machine.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
-                    <button type="submit" class="btn btn-danger">删除机器</button>
+                <form method="post" action="/machines/{{ machine.id }}/delete" style="display:inline" onsubmit="return confirm('⚠️ 确定要永久删除这台机器吗？所有数据将被清空！')">
+                    <button type="submit" class="btn btn-outline-danger w-100">
+                        <i class="bi bi-trash me-1"></i>删除机器
+                    </button>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- WebSSH 终端 -->
-    <div class="col-md-7">
-        <div class="card mb-4">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-terminal"></i> WebSSH 终端</h5>
-                <div>
-                    <span class="ssh-status" id="ssh-status">未连接</span>
-                    <button class="btn btn-sm btn-primary" id="ssh-connect" onclick="connectSSH()">
-                        <i class="bi bi-plug"></i> 连接
+    <!-- 右侧操作面板 -->
+    <div class="col-lg-7">
+        <!-- WebSSH 终端 -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-dark text-white border-0 py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-terminal me-2"></i>WebSSH 终端</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="ssh-status-badge" id="ssh-status">未连接</span>
+                    <button class="btn btn-sm btn-success" id="ssh-connect" onclick="connectSSH()">
+                        <i class="bi bi-plug me-1"></i>连接
                     </button>
                     <button class="btn btn-sm btn-secondary" id="ssh-disconnect" onclick="disconnectSSH()" style="display:none;">
-                        <i class="bi bi-plug-fill"></i> 断开
+                        <i class="bi bi-plug-fill me-1"></i>断开
                     </button>
                 </div>
             </div>
-            <div class="card-body p-0">
+            <div class="card-body p-0 ssh-terminal-wrapper">
                 <div id="ssh-terminal"></div>
             </div>
-            <div class="card-footer text-muted">
-                <small>提示：用户名 root，密码可通过下方"获取密码"按钮获取</small>
+            <div class="card-footer bg-dark-subtle border-0 text-muted py-2">
+                <small><i class="bi bi-info-circle me-1"></i>用户名 root，密码点击下方「获取密码」按钮查看</small>
             </div>
         </div>
 
         <!-- SSH 连接信息 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">SSH 连接信息</h5>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-info bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-key me-2"></i>SSH 连接信息</h5>
             </div>
-            <div class="card-body">
+            <div class="card-body p-4">
                 {% if machine.status == "running" %}
-                <div class="mb-3">
-                    <label class="form-label fw-bold">连接参数</label>
-                    <div class="input-group mb-2">
-                        <span class="input-group-text">主机</span>
-                        <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" readonly>
-                        <span class="input-group-text">端口</span>
-                        <input type="text" class="form-control" style="max-width: 80px;" id="ssh-port" value="{{ machine.ssh_port | default(value="22") }}" readonly>
-                        <span class="input-group-text">用户</span>
-                        <input type="text" class="form-control" id="ssh-user" value="root" readonly>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
+                            <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" placeholder="主机地址" readonly>
+                        </div>
                     </div>
-                    <div class="input-group">
-                        <span class="input-group-text">密码</span>
-                        <input type="password" class="form-control" id="ssh-password" placeholder="点击下方按钮获取密码">
-                        <button class="btn btn-outline-secondary" type="button" onclick="fetchPassword()">获取密码</button>
-                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">显示</button>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
+                            <input type="text" class="form-control" id="ssh-port" value="{{ machine.ssh_port | default(value="22") }}" readonly>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                            <input type="text" class="form-control" id="ssh-user" value="root" readonly>
+                        </div>
                     </div>
                 </div>
-                <div class="alert alert-info small">
-                    <strong>本地 SSH 命令：</strong>
-                    <code>ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip if server else '机器IP' }}</code>
-                    <button class="btn btn-sm btn-outline-info ms-2" onclick="copySSHCommand()">复制</button>
+                <div class="input-group mb-3">
+                    <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+                    <input type="password" class="form-control" id="ssh-password" placeholder="点击右侧按钮获取密码">
+                    <button class="btn btn-outline-primary" type="button" onclick="fetchPassword()">
+                        <i class="bi bi-eye me-1"></i>获取密码
+                    </button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
+                        <i class="bi bi-eye-slash"></i>
+                    </button>
+                </div>
+                <div class="alert alert-info d-flex justify-content-between align-items-center py-2 mb-0">
+                    <div>
+                        <i class="bi bi-info-circle me-1"></i>
+                        <strong>SSH 命令：</strong>
+                        <code class="user-select-all">ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip if server else '机器IP' }}</code>
+                    </div>
+                    <button class="btn btn-sm btn-outline-info ms-2" onclick="copySSHCommand()">
+                        <i class="bi bi-copy"></i>
+                    </button>
                 </div>
                 {% else %}
-                <p class="text-muted">机器未运行，无法连接</p>
+                <div class="text-center py-4">
+                    <i class="bi bi-plug text-muted" style="font-size: 2rem;"></i>
+                    <p class="text-muted mt-2 mb-0">机器未运行，无法连接</p>
+                </div>
                 {% endif %}
             </div>
         </div>
 
         <!-- 重装系统 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">重装系统</h5>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-warning bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-arrow-repeat me-2"></i>重装系统</h5>
             </div>
-            <div class="card-body">
+            <div class="card-body p-4">
+                <div class="alert alert-warning d-flex align-items-center mb-3">
+                    <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
+                    <span>重装将清空所有数据，此操作不可恢复！</span>
+                </div>
                 <form id="reinstall-form">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">系统镜像</label>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-medium"><i class="bi bi-ubuntu me-1"></i>系统镜像</label>
                             <select class="form-select" id="reinstall-image">
-                                <option value="ubuntu:22.04">Ubuntu 22.04 LTS</option>
-                                <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
-                                <option value="debian:12">Debian 12</option>
-                                <option value="debian:11">Debian 11</option>
-                                <option value="centos:9">CentOS Stream 9</option>
-                                <option value="alpine:3.19">Alpine Linux 3.19</option>
+                                <option value="ubuntu:22.04">🐧 Ubuntu 22.04 LTS</option>
+                                <option value="ubuntu:24.04">🐧 Ubuntu 24.04 LTS</option>
+                                <option value="images:debian/12">🔷 Debian 12</option>
+                                <option value="images:debian/11">🔷 Debian 11</option>
+                                <option value="images:centos/9-Stream">🔴 CentOS Stream 9</option>
+                                <option value="images:alpine/3.19">💠 Alpine Linux 3.19</option>
                             </select>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">应用镜像</label>
+                        <div class="col-md-6">
+                            <label class="form-label fw-medium"><i class="bi bi-box me-1"></i>应用镜像</label>
                             <select class="form-select" id="reinstall-app">
-                                <option value="">无应用</option>
-                                <option value="mc">Minecraft</option>
-                                <option value="sub2api">Sub2API</option>
-                                <option value="newapi">New API</option>
-                                <option value="cliproxyapi">CLI Proxy</option>
-                                <option value="xray">Xray</option>
-                                <option value="v2ray">V2Ray</option>
-                                <option value="nginx">Nginx</option>
+                                <option value="">🔰 无应用</option>
+                                <option value="mc">🎮 Minecraft</option>
+                                <option value="sub2api">🔄 Sub2API</option>
+                                <option value="newapi">⚡ New API</option>
+                                <option value="cliproxyapi">🔗 CLI Proxy</option>
+                                <option value="xray">📡 Xray</option>
+                                <option value="v2ray">📡 V2Ray</option>
+                                <option value="nginx">🌐 Nginx</option>
                             </select>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-warning w-100" onclick="return confirm('确定要重装系统吗？所有数据将被清空！')">
-                        <i class="bi bi-arrow-repeat"></i> 重装系统
+                    <div class="form-check form-switch mt-3 mb-3">
+                        <input class="form-check-input" type="checkbox" id="reinstall-vpn" checked>
+                        <label class="form-check-label fw-medium" for="reinstall-vpn">
+                            <i class="bi bi-shield-check text-success me-1"></i>启用 VPN / 代理协议阻挡
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100 fw-semibold py-2" onclick="return confirm('⚠️ 确定要重装系统吗？所有数据将被清空！')">
+                        <i class="bi bi-arrow-repeat me-1"></i>确认重装系统
                     </button>
                 </form>
             </div>
         </div>
 
         <!-- 应用管理 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">应用管理</h5>
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-success bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-app me-2"></i>应用管理</h5>
             </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">安装应用</label>
+            <div class="card-body p-4">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-8">
+                        <label class="form-label fw-medium"><i class="bi bi-download me-1"></i>安装新应用</label>
                         <select class="form-select" id="install-app">
                             <option value="">选择应用...</option>
-                            <option value="mc">Minecraft Server</option>
-                            <option value="sub2api">Subscription Converter</option>
-                            <option value="newapi">New API</option>
-                            <option value="cliproxyapi">CLI Proxy API</option>
-                            <option value="xray">Xray Core</option>
-                            <option value="v2ray">V2Ray</option>
-                            <option value="nginx">Nginx</option>
-                            <option value="mysql">MySQL</option>
-                            <option value="redis">Redis</option>
+                            <option value="mc">🎮 Minecraft Server</option>
+                            <option value="sub2api">🔄 Subscription Converter</option>
+                            <option value="newapi">⚡ New API</option>
+                            <option value="cliproxyapi">🔗 CLI Proxy API</option>
+                            <option value="xray">📡 Xray Core</option>
+                            <option value="v2ray">📡 V2Ray</option>
+                            <option value="nginx">🌐 Nginx</option>
+                            <option value="mysql">🗄️ MySQL</option>
+                            <option value="redis">⚡ Redis</option>
                         </select>
                     </div>
-                    <div class="col-md-6 mb-3 d-flex align-items-end">
-                        <button class="btn btn-success w-100" onclick="installApp()">
-                            <i class="bi bi-download"></i> 安装应用
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button class="btn btn-success w-100 py-2" onclick="installApp()">
+                            <i class="bi bi-download me-1"></i>安装
                         </button>
                     </div>
                 </div>
                 {% if machine.app_image and machine.app_image != '' %}
-                <div class="alert alert-warning">
-                    当前应用: <strong>{{ machine.app_image }}</strong>
-                    <button class="btn btn-sm btn-outline-danger ms-2" onclick="uninstallApp()">卸载</button>
+                <div class="d-flex align-items-center justify-content-between p-3 bg-light rounded">
+                    <div>
+                        <i class="bi bi-check-circle text-success me-1"></i>
+                        当前应用: <strong>{{ machine.app_image }}</strong>
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger" onclick="uninstallApp()">
+                        <i class="bi bi-trash me-1"></i>卸载
+                    </button>
                 </div>
                 {% endif %}
             </div>
@@ -287,7 +366,7 @@ function initTerminal() {
     });
     
     term.write('WebSSH 终端准备就绪\r\n');
-    term.write('点击"连接"按钮建立连接\r\n');
+    term.write('点击「连接」按钮建立连接\r\n');
 }
 
 async function fetchPassword() {
@@ -338,14 +417,23 @@ function copySSHCommand() {
     const host = document.getElementById('ssh-host').value;
     const port = document.getElementById('ssh-port').value;
     const cmd = `ssh -p ${port} root@${host}`;
-    navigator.clipboard.writeText(cmd);
-    alert('已复制 SSH 命令');
+    navigator.clipboard.writeText(cmd).then(() => {
+        const btn = event.target;
+        btn.innerHTML = '<i class="bi bi-check"></i>';
+        setTimeout(() => { btn.innerHTML = '<i class="bi bi-copy"></i>'; }, 2000);
+    });
 }
 
 function updateStatus(status) {
     const el = document.getElementById('ssh-status');
-    el.textContent = status;
-    el.className = 'ssh-status ' + status;
+    const statusMap = {
+        'connected': { text: '🟢 已连接', class: 'ssh-status-badge connected' },
+        'connecting': { text: '🟡 连接中', class: 'ssh-status-badge connecting' },
+        'disconnected': { text: '🔴 未连接', class: 'ssh-status-badge disconnected' },
+    };
+    const s = statusMap[status] || { text: '⚪ ' + status, class: 'ssh-status-badge' };
+    el.textContent = s.text;
+    el.className = s.class;
     
     const connectBtn = document.getElementById('ssh-connect');
     const disconnectBtn = document.getElementById('ssh-disconnect');
@@ -378,7 +466,7 @@ async function connectSSH() {
     
     updateStatus('connecting');
     term.clear();
-    term.write(`正在连接到 ${user}@${host}:${port}...\r\n`);
+    term.write(`\x1b[33m正在连接到 ${user}@${host}:${port}...\x1b[0m\r\n`);
     
     // Close existing connection
     if (socket) {
@@ -386,15 +474,14 @@ async function connectSSH() {
     }
     
     // Use WebSocket proxy to backend
-    // The backend will proxy SSH connection
-    const wsUrl = `wss://${window.location.host}/ws/ssh/${MACHINE_ID}`;
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/ssh/${MACHINE_ID}`;
     
     try {
         socket = new WebSocket(wsUrl);
         
         socket.onopen = () => {
             updateStatus('connected');
-            term.write('\r\n\x1b[32m连接成功!\x1b[0m\r\n\r\n');
+            term.write('\r\n\x1b[32m✅ 连接成功!\x1b[0m\r\n\r\n');
             
             // Send auth info
             socket.send(JSON.stringify({
@@ -412,9 +499,9 @@ async function connectSSH() {
                 if (msg.type === 'data') {
                     term.write(msg.data);
                 } else if (msg.type === 'error') {
-                    term.write('\r\n\x1b[31m错误: ' + msg.message + '\x1b[0m\r\n');
+                    term.write('\r\n\x1b[31m❌ 错误: ' + msg.message + '\x1b[0m\r\n');
                 } else if (msg.type === 'close') {
-                    term.write('\r\n\x1b[33m连接已关闭\x1b[0m\r\n');
+                    term.write('\r\n\x1b[33m🔌 连接已关闭\x1b[0m\r\n');
                     updateStatus('disconnected');
                 }
             } catch (e) {
@@ -423,14 +510,14 @@ async function connectSSH() {
             }
         };
         
-        socket.onerror = (error) => {
-            term.write('\r\n\x1b[31mWebSocket 错误\x1b[0m\r\n');
+        socket.onerror = () => {
+            term.write('\r\n\x1b[31m❌ WebSocket 连接错误\x1b[0m\r\n');
             updateStatus('disconnected');
         };
         
         socket.onclose = () => {
             updateStatus('disconnected');
-            term.write('\r\n\x1b[33m连接已断开\x1b[0m\r\n');
+            term.write('\r\n\x1b[33m🔌 连接已断开\x1b[0m\r\n');
         };
         
         // Handle terminal input
@@ -448,7 +535,7 @@ async function connectSSH() {
         });
         
     } catch (err) {
-        term.write('\r\n\x1b[31m连接失败: ' + err.message + '\x1b[0m\r\n');
+        term.write('\r\n\x1b[31m❌ 连接失败: ' + err.message + '\x1b[0m\r\n');
         updateStatus('disconnected');
     }
 }
@@ -460,7 +547,7 @@ function disconnectSSH() {
     }
     updateStatus('disconnected');
     if (term) {
-        term.write('\r\n\x1b[33m已断开连接\x1b[0m\r\n');
+        term.write('\r\n\x1b[33m🔌 已断开连接\x1b[0m\r\n');
     }
 }
 
@@ -476,6 +563,7 @@ document.getElementById('reinstall-form').addEventListener('submit', async (e) =
     
     const image = document.getElementById('reinstall-image').value;
     const app = document.getElementById('reinstall-app').value;
+    const vpn = document.getElementById('reinstall-vpn').checked;
     
     try {
         const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/reinstall`, {
@@ -484,18 +572,18 @@ document.getElementById('reinstall-form').addEventListener('submit', async (e) =
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${API_KEY}`
             },
-            body: JSON.stringify({ image, app_image: app })
+            body: JSON.stringify({ image, app_image: app, vpn_protect: vpn })
         });
         const data = await resp.json();
         
         if (data.status === 'created' || data.status === 'success') {
-            alert('系统重装成功！');
+            alert('✅ 系统重装成功！');
             location.reload();
         } else {
-            alert('重装失败: ' + (data.error || '未知错误'));
+            alert('❌ 重装失败: ' + (data.error || '未知错误'));
         }
     } catch (err) {
-        alert('重装失败: ' + err.message);
+        alert('❌ 重装失败: ' + err.message);
     }
 });
 
@@ -518,13 +606,13 @@ async function installApp() {
         const data = await resp.json();
         
         if (data.status === 'installed') {
-            alert('应用安装成功！端口: ' + data.ports.join(', '));
+            alert('✅ 应用安装成功！端口: ' + data.ports.join(', '));
             location.reload();
         } else {
-            alert('安装失败: ' + (data.error || '未知错误'));
+            alert('❌ 安装失败: ' + (data.error || '未知错误'));
         }
     } catch (err) {
-        alert('安装失败: ' + err.message);
+        alert('❌ 安装失败: ' + err.message);
     }
 }
 
@@ -546,13 +634,13 @@ async function uninstallApp() {
         const data = await resp.json();
         
         if (data.status === 'uninstalled') {
-            alert('应用已卸载');
+            alert('✅ 应用已卸载');
             location.reload();
         } else {
-            alert('卸载失败: ' + (data.error || '未知错误'));
+            alert('❌ 卸载失败: ' + (data.error || '未知错误'));
         }
     } catch (err) {
-        alert('卸载失败: ' + err.message);
+        alert('❌ 卸载失败: ' + err.message);
     }
 }
 </script>

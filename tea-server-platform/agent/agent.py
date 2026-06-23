@@ -23,10 +23,10 @@ OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
 SYSTEM_IMAGES = {
     "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2"},
     "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2"},
-    "debian:12": {"lxd": "debian:12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2"},
-    "debian:11": {"lxd": "debian:11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2"},
-    "centos:9": {"lxd": "centos:9-stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2"},
-    "alpine:3.19": {"lxd": "alpine:3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2"},
+    "debian:12": {"lxd": "images:debian/12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2"},
+    "debian:11": {"lxd": "images:debian/11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2"},
+    "centos:9": {"lxd": "images:centos/9-Stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2"},
+    "alpine:3.19": {"lxd": "images:alpine/3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2"},
 }
 
 # 应用镜像配置
