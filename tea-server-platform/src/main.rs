@@ -279,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines/auto", get(handlers::auto_select_machine))
         .route("/machines/create", post(handlers::create_machine))
         .route("/machines", get(handlers::my_machines))
+        .route("/machines/:id", get(handlers::machine_detail))
         .route("/machines/:id/stop", post(handlers::stop_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))

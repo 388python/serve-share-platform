@@ -77,6 +77,32 @@ pub struct Machine {
     pub created_at: DateTime<Utc>,
     pub settled: bool,
     pub used_hours: f64,
+    // 新增字段
+    pub image: Option<String>,        // 系统镜像，如 ubuntu:22.04, debian:12
+    pub app_image: Option<String>,    // 应用镜像，如 mc, sub2api, newapi, cliproxyapi
+    pub web_port: Option<i32>,        // Web 控制面板端口
+    pub vnc_port: Option<i32>,        // VNC 端口
+    pub root_password: Option<String>, // root 密码（加密存储）
+}
+
+// 应用镜像定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppImage {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub docker_image: String,
+    pub default_port: i32,
+    pub requires_docker: bool,
+}
+
+// 系统镜像定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemImage {
+    pub id: String,
+    pub name: String,
+    pub lxd_alias: String,
+    pub kvm_base_image: String,
 }
 
 // Table: orders

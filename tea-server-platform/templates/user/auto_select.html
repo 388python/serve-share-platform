@@ -32,6 +32,33 @@
                         <label for="hours" class="form-label">时长 (小时)</label>
                         <input type="number" class="form-control" id="hours" name="hours" value="24" min="1">
                     </div>
+                    <div class="mb-3">
+                        <label for="image" class="form-label">系统镜像</label>
+                        <select class="form-select" id="image" name="image">
+                            <option value="ubuntu:22.04">Ubuntu 22.04 LTS (推荐)</option>
+                            <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
+                            <option value="debian:12">Debian 12 (Bookworm)</option>
+                            <option value="debian:11">Debian 11 (Bullseye)</option>
+                            <option value="centos:9">CentOS Stream 9</option>
+                            <option value="alpine:3.19">Alpine Linux 3.19 (轻量)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="app_image" class="form-label">应用镜像（可选）</label>
+                        <select class="form-select" id="app_image" name="app_image">
+                            <option value="">无应用（纯净系统）</option>
+                            <option value="mc">Minecraft Server</option>
+                            <option value="sub2api">Subscription Converter</option>
+                            <option value="newapi">New API</option>
+                            <option value="cliproxyapi">CLI Proxy API</option>
+                            <option value="xray">Xray Core</option>
+                            <option value="v2ray">V2Ray</option>
+                            <option value="nginx">Nginx Web Server</option>
+                            <option value="mysql">MySQL Database</option>
+                            <option value="redis">Redis Cache</option>
+                        </select>
+                        <small class="text-muted">选择应用镜像后，系统会在创建机器时自动安装该应用</small>
+                    </div>
                     <button type="submit" class="btn btn-primary w-100">查找可用服务器</button>
                 </form>
             </div>
@@ -71,6 +98,8 @@
                     <input type="hidden" name="memory_gb" value="{{ memory_gb }}">
                     <input type="hidden" name="disk_gb" value="{{ disk_gb }}">
                     <input type="hidden" name="hours" value="{{ hours }}">
+                    <input type="hidden" name="image" value="{{ image | default(value='ubuntu:22.04') }}">
+                    <input type="hidden" name="app_image" value="{{ app_image | default(value='') }}">
                     <button type="submit" class="btn btn-success w-100">确认创建</button>
                 </form>
             </div>

@@ -54,7 +54,8 @@
                                 <td>{{ m.ssh_port | default(value="N/A") }}</td>
                                 <td>
                                     {% if m.status == "running" %}
-                                    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#sshModal{{ m.id }}">连接</button>
+                                    <a href="/machines/{{ m.id }}" class="btn btn-sm btn-primary">详情</a>
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#sshModal{{ m.id }}">连接</button>
                                     <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
                                         <button type="submit" class="btn btn-sm btn-warning">停止</button>
                                     </form>

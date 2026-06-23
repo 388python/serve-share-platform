@@ -8,6 +8,9 @@ import re
 import threading
 import time
 import urllib.request
+import hashlib
+import random
+import string
 
 API_KEY = os.environ.get("AGENT_API_KEY")
 if not API_KEY:
@@ -15,6 +18,83 @@ if not API_KEY:
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
 PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
+
+# 系统镜像映射
+SYSTEM_IMAGES = {
+    "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2"},
+    "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2"},
+    "debian:12": {"lxd": "debian:12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2"},
+    "debian:11": {"lxd": "debian:11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2"},
+    "centos:9": {"lxd": "centos:9-stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2"},
+    "alpine:3.19": {"lxd": "alpine:3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2"},
+}
+
+# 应用镜像配置
+APP_IMAGES = {
+    "mc": {
+        "name": "Minecraft Server",
+        "docker_image": "itzg/minecraft-server",
+        "ports": [25565],
+        "env": {"EULA": "TRUE"},
+        "setup_cmd": None,
+    },
+    "sub2api": {
+        "name": "Subscription Converter",
+        "docker_image": "tindy2013/subconverter",
+        "ports": [25500],
+        "env": {},
+        "setup_cmd": None,
+    },
+    "newapi": {
+        "name": "New API (One API Fork)",
+        "docker_image": "calciumion/new-api",
+        "ports": [3000],
+        "env": {"SQL_DSN": "", "SESSION_SECRET": "random_secret"},
+        "setup_cmd": "docker run -d --name newapi -p 3000:3000 -v /opt/newapi:/data -e SESSION_SECRET=random_secret calciumion/new-api",
+    },
+    "cliproxyapi": {
+        "name": "CLI Proxy API",
+        "docker_image": "ghcr.io/metacubx/cliproxyapi:latest",
+        "ports": [8080],
+        "env": {},
+        "setup_cmd": None,
+    },
+    "xray": {
+        "name": "Xray Core",
+        "docker_image": "teddysun/xray",
+        "ports": [443, 80],
+        "env": {},
+        "setup_cmd": None,
+    },
+    "v2ray": {
+        "name": "V2Ray",
+        "docker_image": "v2fly/v2fly-core",
+        "ports": [443, 10000],
+        "env": {},
+        "setup_cmd": None,
+    },
+    "nginx": {
+        "name": "Nginx Web Server",
+        "docker_image": "nginx:alpine",
+        "ports": [80, 443],
+        "env": {},
+        "setup_cmd": None,
+    },
+    "mysql": {
+        "name": "MySQL Database",
+        "docker_image": "mysql:8.0",
+        "ports": [3306],
+        "env": {"MYSQL_ROOT_PASSWORD": "rootpass123"},
+        "setup_cmd": None,
+    },
+    "redis": {
+        "name": "Redis Cache",
+        "docker_image": "redis:alpine",
+        "ports": [6379],
+        "env": {},
+        "setup_cmd": None,
+    },
+}
 
 def _parse_memory_value(line):
     """Parse memory value with unit and convert to MB"""
@@ -32,6 +112,11 @@ def _parse_memory_value(line):
             return value / (1024 * 1024)
     return 0
 
+def generate_password(length=12):
+    """Generate random password"""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
 class AgentHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
         api_key = self.headers.get("X-API-Key", "")
@@ -44,7 +129,6 @@ class AgentHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode())
 
     def _get_virt_type_from_name(self, name):
-        """Determine virt type from container/VM name prefix or name pattern"""
         if name.startswith("machine-"):
             return "lxd"
         return VIRT_TYPE
@@ -58,6 +142,10 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         if path == "/status":
             self._send_json({"status": "ok", "virt_type": VIRT_TYPE})
+        elif path == "/images":
+            self._handle_get_images()
+        elif path == "/app-images":
+            self._handle_get_app_images()
         elif path == "/ports":
             self._handle_get_ports()
         elif path == "/processes":
@@ -65,6 +153,12 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/traffic/"):
             machine_id = path.split("/")[-1]
             self._handle_get_traffic(machine_id)
+        elif path.startswith("/machine/"):
+            name = path.split("/")[-1]
+            self._handle_get_machine_info(name)
+        elif path.startswith("/console/"):
+            name = path.split("/")[-1]
+            self._handle_get_console(name)
         elif path == "/opengfw/status":
             self._handle_opengfw_status()
         elif path == "/opengfw/install":
@@ -78,8 +172,112 @@ class AgentHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, 404)
 
+    def _handle_get_images(self):
+        """Get available system images"""
+        self._send_json({"images": list(SYSTEM_IMAGES.keys())})
+
+    def _handle_get_app_images(self):
+        """Get available application images"""
+        apps = []
+        for id, config in APP_IMAGES.items():
+            apps.append({
+                "id": id,
+                "name": config["name"],
+                "docker_image": config["docker_image"],
+                "ports": config["ports"],
+            })
+        self._send_json({"app_images": apps})
+
+    def _handle_get_machine_info(self, name):
+        """Get machine info including ports and status"""
+        try:
+            virt = self._get_virt_type_from_name(name)
+            
+            if virt == "lxd":
+                result = subprocess.run(
+                    ["lxc", "list", name, "--format", "json"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    data = json.loads(result.stdout)
+                    if data:
+                        info = data[0]
+                        status = info.get("status", "unknown")
+                        ipv4 = ""
+                        for addr in info.get("state", {}).get("network", {}).values():
+                            for a in addr.get("addresses", []):
+                                if a.get("family") == "inet":
+                                    ipv4 = a.get("address", "")
+                                    break
+                        
+                        # Get SSH port (from NAT mapping if exists)
+                        ssh_port = 22
+                        
+                        self._send_json({
+                            "name": name,
+                            "status": status,
+                            "ip": ipv4,
+                            "ssh_port": ssh_port,
+                            "virt_type": virt,
+                        })
+                    else:
+                        self._send_json({"error": "machine not found"}, 404)
+                else:
+                    self._send_json({"error": result.stderr}, 500)
+            else:
+                # KVM
+                result = subprocess.run(
+                    ["virsh", "dominfo", name],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    status = "running" if "running" in result.stdout else "stopped"
+                    self._send_json({
+                        "name": name,
+                        "status": status,
+                        "ssh_port": 22,
+                        "virt_type": virt,
+                    })
+                else:
+                    self._send_json({"error": "machine not found"}, 404)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_get_console(self, name):
+        """Get console access info (web terminal port)"""
+        try:
+            # Check if novnc is running for this machine
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"name=novnc-{name}", "--format", "{{.Ports}}"],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            web_port = 0
+            if result.returncode == 0 and result.stdout:
+                match = re.search(r'0.0.0.0:(\d+)', result.stdout)
+                if match:
+                    web_port = int(match.group(1))
+            
+            if web_port == 0:
+                # Start novnc container
+                web_port = random.randint(6080, 6999)
+                subprocess.run([
+                    "docker", "run", "-d", "--name", f"novnc-{name}",
+                    "-p", f"{web_port}:6080",
+                    "-e", f"VNC_HOST={name}",
+                    "dorowu/ubuntu-desktop-lxde-vnc"
+                ], capture_output=True, timeout=30)
+            
+            self._send_json({
+                "name": name,
+                "web_port": web_port,
+                "web_url": f"http://{os.environ.get('HOST_IP', 'localhost')}:{web_port}",
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _handle_get_ports(self):
-        """Get listening ports - used for VPN detection"""
+        """Get listening ports"""
         try:
             result = subprocess.run(
                 ["ss", "-tlnp"],
@@ -102,7 +300,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e), "listening_ports": []})
 
     def _handle_get_processes(self):
-        """Get running processes - used for VPN detection"""
+        """Get running processes"""
         try:
             result = subprocess.run(
                 ["ps", "aux"],
@@ -122,7 +320,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e), "processes": []})
 
     def _handle_get_traffic(self, machine_id):
-        """Get traffic stats for a machine - used for bandwidth monitoring"""
+        """Get traffic stats"""
         container_name = f"machine-{machine_id}"
         try:
             result = subprocess.run(
@@ -153,22 +351,13 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(e), "bandwidth_mbps": 0})
 
     def _handle_opengfw_status(self):
-        """Get OpenGFW installation and running status on host"""
+        """Get OpenGFW status"""
         try:
             opengfw_exists = os.path.exists("/usr/local/bin/opengfw")
-
-            result = subprocess.run(
-                ["pgrep", "-f", "opengfw"],
-                capture_output=True, text=True
-            )
+            result = subprocess.run(["pgrep", "-f", "opengfw"], capture_output=True, text=True)
             opengfw_running = result.returncode == 0
-
             config_exists = os.path.exists("/etc/opengfw/config.yaml")
-
-            nft_result = subprocess.run(
-                ["nft", "list", "table", "opengfw"],
-                capture_output=True, text=True
-            )
+            nft_result = subprocess.run(["nft", "list", "table", "opengfw"], capture_output=True, text=True)
             nft_rules_exist = nft_result.returncode == 0
 
             self._send_json({
@@ -176,13 +365,12 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "running": opengfw_running,
                 "configured": config_exists,
                 "nft_rules_active": nft_rules_exist,
-                "message": "OpenGFW status on host machine"
             })
         except Exception as e:
             self._send_json({"error": str(e), "installed": False, "running": False})
 
     def _handle_opengfw_install(self):
-        """Install OpenGFW on the host machine"""
+        """Install OpenGFW"""
         try:
             subprocess.run(["apt-get", "update", "-qq"], capture_output=True, timeout=120)
             subprocess.run([
@@ -192,7 +380,6 @@ class AgentHandler(BaseHTTPRequestHandler):
 
             work_dir = "/tmp/opengfw-build"
             os.makedirs(work_dir, exist_ok=True)
-
             subprocess.run(["rm", "-rf", work_dir], capture_output=True)
             subprocess.run(
                 ["git", "clone", "https://github.com/chika0801/opengfw.git", work_dir],
@@ -206,48 +393,35 @@ class AgentHandler(BaseHTTPRequestHandler):
             )
 
             if build_result.returncode != 0:
-                self._send_json({
-                    "status": "error",
-                    "error": f"Build failed: {build_result.stderr.decode() if isinstance(build_result.stderr, bytes) else build_result.stderr}"
-                })
+                self._send_json({"status": "error", "error": build_result.stderr})
                 return
 
             subprocess.run(["chmod", "+x", "/usr/local/bin/opengfw"], capture_output=True)
-
             os.makedirs("/etc/opengfw", exist_ok=True)
-
             subprocess.run(["systemctl", "enable", "nftables"], capture_output=True)
             subprocess.run(["systemctl", "start", "nftables"], capture_output=True)
 
-            self._send_json({
-                "status": "installed",
-                "message": "OpenGFW installed successfully on host machine"
-            })
+            self._send_json({"status": "installed"})
         except Exception as e:
             self._send_json({"status": "error", "error": str(e)})
 
     def _handle_opengfw_config(self):
-        """Configure OpenGFW with rules from platform"""
+        """Configure OpenGFW"""
         try:
             req = urllib.request.Request(
                 f"{PLATFORM_URL}/api/v1/opengfw/config",
                 headers={"X-API-Key": API_KEY},
                 method="GET"
             )
-
             with urllib.request.urlopen(req, timeout=10) as response:
                 config = json.loads(response.read().decode())
 
             if not config.get("enabled"):
-                self._send_json({
-                    "status": "disabled",
-                    "message": "OpenGFW is disabled on platform"
-                })
+                self._send_json({"status": "disabled"})
                 return
 
             rules = config.get("rules", [])
             yaml_content = self._generate_opengfw_yaml(rules)
-
             with open("/etc/opengfw/config.yaml", "w") as f:
                 f.write(yaml_content)
 
@@ -256,37 +430,22 @@ class AgentHandler(BaseHTTPRequestHandler):
             subprocess.run(["pkill", "-f", "opengfw"], capture_output=True)
             subprocess.Popen(
                 ["/usr/local/bin/opengfw", "-c", "/etc/opengfw/config.yaml"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
 
-            self._send_json({
-                "status": "configured",
-                "rules_count": len(rules),
-                "message": "OpenGFW configured and restarted"
-            })
+            self._send_json({"status": "configured", "rules_count": len(rules)})
         except Exception as e:
             self._send_json({"status": "error", "error": str(e)})
 
     def _generate_opengfw_yaml(self, rules):
-        """Generate OpenGFW YAML configuration"""
+        """Generate OpenGFW YAML"""
         actions = []
         for rule in rules:
             proto = rule.get("protocol", "")
             action = rule.get("action", "block")
-
-            if proto == "shadowsocks":
-                actions.append(f'  - id: "block_shadowsocks"\n    match: "payload,56,0,0,0,0,0,0,0,0,6,0xff,0x17"\n    action: {action}')
-            elif proto == "wireguard":
-                actions.append(f'  - id: "block_wireguard"\n    match: "payload,0,0,0,0,0,0,0,0,0,17,0,51820"\n    action: {action}')
-            elif proto == "openvpn":
-                actions.append(f'  - id: "block_openvpn"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,1194"\n    action: {action}')
-            elif proto == "trojan":
-                actions.append(f'  - id: "block_trojan"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,443"\n    action: {action}')
-            elif proto in ["vmess", "vless", "xray"]:
-                actions.append(f'  - id: "block_{proto}"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,80"\n    action: {action}')
-            elif proto == "clash":
-                actions.append(f'  - id: "block_clash"\n    match: "payload,0,0,0,0,0,0,0,0,0,6,0,7890"\n    action: {action}')
+            sig = rule.get("match_signature", "")
+            if sig:
+                actions.append(f'  - id: "block_{proto}"\n    match: "{sig}"\n    action: {action}')
 
         yaml = f'''listen: ":4480"
 log:
@@ -298,7 +457,7 @@ actions:
         return yaml
 
     def _apply_nftables_rules(self, rules):
-        """Apply nftables rules on host to filter traffic to containers"""
+        """Apply nftables rules"""
         try:
             nft_script = '''
 flush ruleset
@@ -317,114 +476,23 @@ table ip opengfw {
     }
 }
 '''
-
             subprocess.run(["bash", "-c", f"echo '{nft_script}' | nft -f -"], capture_output=True)
-
         except Exception as e:
-            print(f"NFTables configuration error: {e}")
+            print(f"NFTables error: {e}")
 
     def _handle_opengfw_refresh(self):
-        """Refresh OpenGFW configuration from platform"""
         self._handle_opengfw_config()
 
     def _handle_opengfw_uninstall(self):
-        """Uninstall OpenGFW from host (admin only)"""
+        """Uninstall OpenGFW"""
         try:
             subprocess.run(["pkill", "-f", "opengfw"], capture_output=True)
-
             subprocess.run(["rm", "-f", "/usr/local/bin/opengfw"], capture_output=True)
-
             subprocess.run(["rm", "-rf", "/etc/opengfw"], capture_output=True)
-
             subprocess.run(["nft", "delete", "table", "ip", "opengfw"], capture_output=True)
-
-            self._send_json({
-                "status": "uninstalled",
-                "message": "OpenGFW removed from host machine"
-            })
+            self._send_json({"status": "uninstalled"})
         except Exception as e:
             self._send_json({"status": "error", "error": str(e)})
-
-    def _get_machine_stats(self, machine_name):
-        """Get CPU, memory, disk stats for a container"""
-        try:
-            result = subprocess.run(
-                ["lxc", "info", machine_name],
-                capture_output=True, text=True, timeout=10
-            )
-            
-            cpu_usage = 0.0
-            memory_used = 0.0
-            memory_total = 0.0
-            uptime = 0
-            
-            for line in result.stdout.split("\n"):
-                line = line.strip()
-                if "CPU usage:" in line:
-                    match = re.search(r'(\d+\.?\d*)', line)
-                    if match:
-                        cpu_usage = float(match.group(1))
-                elif "Memory usage:" in line:
-                    memory_used = _parse_memory_value(line)
-                elif "Memory:" in line:
-                    memory_total = _parse_memory_value(line)
-            
-            disk_used = 0
-            disk_total = 0
-            try:
-                disk_result = subprocess.run(
-                    ["lxc", "exec", machine_name, "--", "df", "-h", "/"],
-                    capture_output=True, text=True, timeout=10
-                )
-                for line in disk_result.stdout.split("\n"):
-                    match = re.search(r'/dev/\w+\s+(\d+(\.\d+)?)([GM])\s+(\d+(\.\d+)?)([GM])', line)
-                    if match:
-                        disk_total_val = float(match.group(1))
-                        disk_total_unit = match.group(3)
-                        disk_used_val = float(match.group(4))
-                        disk_used_unit = match.group(6)
-                        
-                        if disk_total_unit == 'G':
-                            disk_total = disk_total_val
-                        else:
-                            disk_total = disk_total_val / 1024
-                            
-                        if disk_used_unit == 'G':
-                            disk_used = disk_used_val
-                        else:
-                            disk_used = disk_used_val / 1024
-                        break
-            except:
-                pass
-            
-            try:
-                proc_result = subprocess.run(
-                    ["lxc", "exec", machine_name, "--", "ps", "aux"],
-                    capture_output=True, text=True, timeout=10
-                )
-                process_count = len(proc_result.stdout.strip().split("\n")) - 1
-            except:
-                process_count = 0
-            
-            return {
-                "cpu_usage_percent": cpu_usage,
-                "memory_used_mb": memory_used,
-                "memory_total_mb": memory_total,
-                "disk_used_gb": disk_used,
-                "disk_total_gb": disk_total if disk_total > 0 else 10.0,
-                "uptime_seconds": uptime,
-                "process_count": process_count
-            }
-        except Exception as e:
-            return {
-                "cpu_usage_percent": 0,
-                "memory_used_mb": 0,
-                "memory_total_mb": 0,
-                "disk_used_gb": 0,
-                "disk_total_gb": 0,
-                "uptime_seconds": 0,
-                "process_count": 0
-            }
 
     def do_POST(self):
         if not self._check_auth():
@@ -441,43 +509,112 @@ table ip opengfw {
         elif path.startswith("/stop/"):
             name = path.split("/")[-1]
             self._handle_stop(name)
+        elif path.startswith("/reinstall/"):
+            name = path.split("/")[-1]
+            self._handle_reinstall(name, body)
+        elif path.startswith("/exec/"):
+            name = path.split("/")[-1]
+            self._handle_exec(name, body)
+        elif path.startswith("/app-install/"):
+            name = path.split("/")[-1]
+            self._handle_app_install(name, body)
+        elif path.startswith("/app-uninstall/"):
+            name = path.split("/")[-1]
+            self._handle_app_uninstall(name, body)
         else:
             self._send_json({"error": "not found"}, 404)
 
     def _handle_create(self, body):
+        """Create VM/container with image and app support"""
         name = body.get("name", f"vm-{body.get('cpu','1')}-{body.get('memory','1024')}")
         cpu = body.get("cpu", 1)
         memory = body.get("memory", 1024)
         disk = body.get("disk", 10)
         virt = body.get("virt_type", VIRT_TYPE)
+        image = body.get("image", "ubuntu:22.04")
+        app_image = body.get("app_image", "")
+        
+        # Generate root password
+        root_password = generate_password(16)
 
         if virt == "lxd":
+            # Get LXD image alias
+            lxd_image = SYSTEM_IMAGES.get(image, {}).get("lxd", "ubuntu:22.04")
+            
             cmd = [
-                "lxc", "launch", "ubuntu:22.04", name,
+                "lxc", "launch", lxd_image, name,
                 "-c", f"limits.cpu={cpu}",
                 "-c", f"limits.memory={memory}MB",
                 "-c", f"limits.disk={disk}GB"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
+            
             if result.returncode != 0:
+                # Try without disk limit
                 cmd = [
-                    "lxc", "launch", "ubuntu:22.04", name,
+                    "lxc", "launch", lxd_image, name,
                     "-c", f"limits.cpu={cpu}",
                     "-c", f"limits.memory={memory}MB"
                 ]
                 result = subprocess.run(cmd, capture_output=True, text=True)
-            self._send_json({
-                "status": "created" if result.returncode == 0 else "error",
-                "output": result.stdout,
-                "error": result.stderr
-            })
+            
+            if result.returncode == 0:
+                # Set root password
+                subprocess.run([
+                    "lxc", "exec", name, "--", 
+                    "bash", "-c", f"echo 'root:{root_password}' | chpasswd"
+                ], capture_output=True, timeout=30)
+                
+                # Install Docker if app_image requires it
+                if app_image and APP_IMAGES.get(app_image, {}).get("docker_image"):
+                    subprocess.run([
+                        "lxc", "exec", name, "--",
+                        "bash", "-c", "apt-get update && apt-get install -y docker.io && systemctl start docker"
+                    ], capture_output=True, timeout=120)
+                    
+                    # Install the app
+                    app_config = APP_IMAGES.get(app_image, {})
+                    if app_config:
+                        docker_cmd = [
+                            "lxc", "exec", name, "--",
+                            "docker", "run", "-d",
+                            "--name", app_image,
+                        ]
+                        for port in app_config.get("ports", []):
+                            docker_cmd.extend(["-p", f"{port}:{port}"])
+                        for key, val in app_config.get("env", {}).items():
+                            docker_cmd.extend(["-e", f"{key}={val}"])
+                        docker_cmd.append(app_config["docker_image"])
+                        subprocess.run(docker_cmd, capture_output=True, timeout=60)
+                
+                # Get IP
+                ip_result = subprocess.run(
+                    ["lxc", "list", name, "--format", "csv", "-c", "4"],
+                    capture_output=True, text=True, timeout=10
+                )
+                ip = ip_result.stdout.strip() if ip_result.returncode == 0 else ""
+                
+                self._send_json({
+                    "status": "created",
+                    "ip": ip,
+                    "ssh_port": 22,
+                    "root_password": root_password,
+                    "image": image,
+                    "app_image": app_image,
+                    "output": result.stdout,
+                })
+            else:
+                self._send_json({
+                    "status": "error",
+                    "error": result.stderr
+                })
 
         elif virt == "kvm":
+            kvm_base = SYSTEM_IMAGES.get(image, {}).get("kvm", "/var/lib/libvirt/images/base-ubuntu.qcow2")
             disk_path = f"/var/lib/libvirt/images/{name}.qcow2"
 
             subprocess.run(
-                ["qemu-img", "create", "-f", "qcow2", "-b",
-                 "/var/lib/libvirt/images/base-ubuntu.qcow2", "-F", "qcow2", disk_path],
+                ["qemu-img", "create", "-f", "qcow2", "-b", kvm_base, "-F", "qcow2", disk_path],
                 capture_output=True, timeout=30
             )
 
@@ -490,19 +627,41 @@ table ip opengfw {
                 "--boot", "hd",
                 "--os-variant", "ubuntu22.04",
                 "--noautoconsole",
-                "--graphics", "none"
+                "--graphics", "vnc,listen=0.0.0.0,port=-1",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
-            self._send_json({
-                "status": "created" if result.returncode == 0 else "error",
-                "output": result.stdout,
-                "error": result.stderr
-            })
+            
+            if result.returncode == 0:
+                # Get VNC port
+                vnc_result = subprocess.run(
+                    ["virsh", "vncdisplay", name],
+                    capture_output=True, text=True, timeout=10
+                )
+                vnc_port = 5900
+                if vnc_result.returncode == 0:
+                    match = re.search(r':(\d+)', vnc_result.stdout)
+                    if match:
+                        vnc_port = 5900 + int(match.group(1))
+                
+                self._send_json({
+                    "status": "created",
+                    "ssh_port": 22,
+                    "vnc_port": vnc_port,
+                    "root_password": root_password,
+                    "image": image,
+                    "app_image": app_image,
+                    "output": result.stdout,
+                })
+            else:
+                self._send_json({
+                    "status": "error",
+                    "error": result.stderr
+                })
         else:
             self._send_json({"error": f"unsupported virt_type: {virt}"})
 
     def _handle_stop(self, name):
-        """Stop a running VM/container"""
+        """Stop VM/container"""
         if not name:
             self._send_json({"error": "name required"}, 400)
             return
@@ -517,11 +676,140 @@ table ip opengfw {
             cmd = ["virsh", "undefine", name, "--nvram"]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Also stop any associated novnc container
+        subprocess.run(["docker", "rm", "-f", f"novnc-{name}"], capture_output=True)
+        
         self._send_json({
             "status": "stopped" if result.returncode == 0 else "error",
             "output": result.stdout,
             "error": result.stderr
         })
+
+    def _handle_reinstall(self, name, body):
+        """Reinstall VM/container with new image"""
+        image = body.get("image", "ubuntu:22.04")
+        app_image = body.get("app_image", "")
+        
+        # First stop and delete
+        self._handle_stop(name)
+        
+        # Then recreate with new image
+        time.sleep(2)
+        
+        # Get original specs from platform
+        try:
+            req = urllib.request.Request(
+                f"{PLATFORM_URL}/api/v1/machine/{name.replace('machine-', '')}",
+                headers={"X-API-Key": API_KEY},
+                method="GET"
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                machine_info = json.loads(response.read().decode())
+            
+            create_body = {
+                "name": name,
+                "cpu": machine_info.get("cpu_cores", 1),
+                "memory": int(machine_info.get("memory_gb", 1) * 1024),
+                "disk": machine_info.get("disk_gb", 10),
+                "virt_type": machine_info.get("virt_type", VIRT_TYPE),
+                "image": image,
+                "app_image": app_image,
+            }
+            self._handle_create(create_body)
+        except Exception as e:
+            self._send_json({"status": "error", "error": str(e)})
+
+    def _handle_exec(self, name, body):
+        """Execute command in VM/container"""
+        command = body.get("command", "")
+        if not command:
+            self._send_json({"error": "command required"}, 400)
+            return
+        
+        virt = self._get_virt_type_from_name(name)
+        
+        if virt == "lxd":
+            result = subprocess.run(
+                ["lxc", "exec", name, "--", "bash", "-c", command],
+                capture_output=True, text=True, timeout=60
+            )
+        else:
+            # KVM - use ssh or guestfish
+            result = subprocess.run(
+                ["virsh", "qemu-agent-command", name, f"'{command}'"],
+                capture_output=True, text=True, timeout=60
+            )
+        
+        self._send_json({
+            "status": "success" if result.returncode == 0 else "error",
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        })
+
+    def _handle_app_install(self, name, body):
+        """Install application in VM/container"""
+        app_image = body.get("app_image", "")
+        if not app_image:
+            self._send_json({"error": "app_image required"}, 400)
+            return
+        
+        app_config = APP_IMAGES.get(app_image)
+        if not app_config:
+            self._send_json({"error": f"unknown app: {app_image}"}, 400)
+            return
+        
+        virt = self._get_virt_type_from_name(name)
+        
+        if virt == "lxd":
+            # Ensure Docker is installed
+            subprocess.run([
+                "lxc", "exec", name, "--",
+                "bash", "-c", "apt-get update -qq && apt-get install -y -qq docker.io && systemctl start docker"
+            ], capture_output=True, timeout=120)
+            
+            # Run the app container
+            docker_cmd = ["lxc", "exec", name, "--", "docker", "run", "-d", "--name", app_image]
+            for port in app_config.get("ports", []):
+                docker_cmd.extend(["-p", f"{port}:{port}"])
+            for key, val in app_config.get("env", {}).items():
+                docker_cmd.extend(["-e", f"{key}={val}"])
+            docker_cmd.append(app_config["docker_image"])
+            
+            result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=60)
+            
+            self._send_json({
+                "status": "installed" if result.returncode == 0 else "error",
+                "app_name": app_config["name"],
+                "ports": app_config["ports"],
+                "output": result.stdout,
+                "error": result.stderr,
+            })
+        else:
+            self._send_json({"error": "KVM app install not supported yet"}, 400)
+
+    def _handle_app_uninstall(self, name, body):
+        """Uninstall application from VM/container"""
+        app_image = body.get("app_image", "")
+        if not app_image:
+            self._send_json({"error": "app_image required"}, 400)
+            return
+        
+        virt = self._get_virt_type_from_name(name)
+        
+        if virt == "lxd":
+            result = subprocess.run([
+                "lxc", "exec", name, "--",
+                "docker", "rm", "-f", app_image
+            ], capture_output=True, text=True, timeout=30)
+            
+            self._send_json({
+                "status": "uninstalled" if result.returncode == 0 else "error",
+                "output": result.stdout,
+                "error": result.stderr,
+            })
+        else:
+            self._send_json({"error": "KVM app uninstall not supported yet"}, 400)
 
     def do_DELETE(self):
         if not self._check_auth():
@@ -535,24 +823,10 @@ table ip opengfw {
             self._send_json({"error": "name required"}, 400)
             return
 
-        virt = self._get_virt_type_from_name(name)
-
-        if virt == "lxd":
-            subprocess.run(["lxc", "stop", name], capture_output=True)
-            cmd = ["lxc", "delete", "--force", name]
-        else:
-            subprocess.run(["virsh", "destroy", name], capture_output=True)
-            cmd = ["virsh", "undefine", name, "--nvram", "--delete-all-storage"]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        self._send_json({
-            "status": "deleted" if result.returncode == 0 else "error",
-            "output": result.stdout,
-            "error": result.stderr
-        })
+        self._handle_stop(name)
 
 def report_stats_loop():
-    """Background thread to report machine stats to platform"""
+    """Background thread to report stats"""
     while True:
         try:
             result = subprocess.run(
@@ -565,7 +839,6 @@ def report_stats_loop():
                     continue
                 machine_name = line.strip()
                 
-                stats = {}
                 try:
                     info_result = subprocess.run(
                         ["lxc", "info", machine_name],
@@ -587,41 +860,13 @@ def report_stats_loop():
                         elif "Memory:" in info_line:
                             memory_total = _parse_memory_value(info_line)
                     
-                    try:
-                        disk_result = subprocess.run(
-                            ["lxc", "exec", machine_name, "--", "df", "-BG", "/"],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        disk_used = 0
-                        disk_total = 0
-                        for dline in disk_result.stdout.strip().split("\n"):
-                            if dline.startswith("/dev"):
-                                parts = dline.split()
-                                if len(parts) >= 3:
-                                    disk_used = int(parts[2].replace("G", ""))
-                                    disk_total = int(parts[1].replace("G", ""))
-                                    break
-                    except:
-                        disk_used = 0
-                        disk_total = 0
-                    
                     stats = {
                         "machine_name": machine_name,
                         "cpu_usage_percent": cpu_usage,
                         "memory_used_mb": memory_used,
                         "memory_total_mb": memory_total,
-                        "disk_used_gb": float(disk_used),
-                        "disk_total_gb": float(disk_total) if disk_total > 0 else 10.0,
-                        "bandwidth_rx_mbps": 0,
-                        "bandwidth_tx_mbps": 0,
-                        "uptime_seconds": 0,
-                        "process_count": 0
                     }
-                except Exception as e:
-                    continue
-                
-                try:
-                    import urllib.request
+                    
                     data = json.dumps(stats).encode()
                     req = urllib.request.Request(
                         f"{PLATFORM_URL}/api/v1/agent/stats",
@@ -632,31 +877,25 @@ def report_stats_loop():
                     with urllib.request.urlopen(req, timeout=10) as response:
                         pass
                 except Exception as e:
-                    print(f"Failed to report stats for {machine_name}: {e}")
+                    print(f"Stats error for {machine_name}: {e}")
         except Exception as e:
-            print(f"Stats reporting error: {e}")
+            print(f"Stats loop error: {e}")
         
         time.sleep(60)
 
 def detect_hardware():
-    """Detect hardware specs of the host machine"""
+    """Detect hardware specs"""
     hardware = {}
 
     try:
-        result = subprocess.run(
-            ["nproc", "--all"],
-            capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["nproc", "--all"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             hardware["cpu_cores"] = int(result.stdout.strip())
     except:
         pass
 
     try:
-        result = subprocess.run(
-            ["grep", "MemTotal", "/proc/meminfo"],
-            capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["grep", "MemTotal", "/proc/meminfo"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             parts = result.stdout.strip().split()
             if len(parts) >= 2 and parts[1].isdigit():
@@ -666,10 +905,7 @@ def detect_hardware():
         pass
 
     try:
-        result = subprocess.run(
-            ["df", "-BG", "/"],
-            capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["df", "-BG", "/"], capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             lines = result.stdout.strip().split("\n")
             if len(lines) >= 2:
@@ -681,26 +917,12 @@ def detect_hardware():
     except:
         pass
 
-    try:
-        result = subprocess.run(
-            ["bash", "-c", "cat /etc/os-release 2>/dev/null | grep -E '^NAME=|^VERSION=' | tr '\\n' ' ' | sed 's/NAME=//;s/VERSION=//g' | tr -d '\"' || uname -srm"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            hardware["linux_version"] = result.stdout.strip()
-    except:
-        pass
-
     return hardware
 
-
 def register_with_platform():
-    """Register this agent with the platform and report hardware specs"""
+    """Register agent with platform"""
     hardware = detect_hardware()
-    payload = {
-        "virt_type": VIRT_TYPE,
-        "platform_url": PLATFORM_URL,
-    }
+    payload = {"virt_type": VIRT_TYPE, "platform_url": PLATFORM_URL}
     payload.update(hardware)
 
     try:
@@ -722,10 +944,9 @@ def register_with_platform():
         )
         with urllib.request.urlopen(req, timeout=15) as response:
             result = json.loads(response.read().decode())
-            print(f"[agent] Registered with platform: {result}")
+            print(f"[agent] Registered: {result}")
     except Exception as e:
-        print(f"[agent] Failed to register with platform: {e}")
-
+        print(f"[agent] Register failed: {e}")
 
 if __name__ == "__main__":
     register_thread = threading.Thread(target=register_with_platform, daemon=True)

@@ -15,6 +15,8 @@ pub struct MachineProvisioningJob {
     pub regular_used: f64,
     pub bonus_used: f64,
     pub used_hours: f64,
+    pub image: String,        // 系统镜像
+    pub app_image: String,    // 应用镜像
 }
 
 pub fn spawn_agent_create_job(job: MachineProvisioningJob) {
@@ -50,6 +52,8 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
         "memory": (job.memory_gb * 1024.0) as i64,
         "disk": job.disk_gb,
         "virt_type": job.virt_type,
+        "image": job.image,
+        "app_image": job.app_image,
     });
 
     let max_retries = 3;

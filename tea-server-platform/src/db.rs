@@ -263,6 +263,11 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "is_premium INTEGER NOT NULL DEFAULT 0",
         "premium_expires_at DATETIME",
         "linux_version TEXT NOT NULL DEFAULT ''",
+        "image TEXT DEFAULT 'ubuntu:22.04'",
+        "app_image TEXT DEFAULT ''",
+        "web_port INTEGER DEFAULT 0",
+        "vnc_port INTEGER DEFAULT 0",
+        "root_password TEXT DEFAULT ''",
     ];
     for col in &machine_cols {
         let _ = sqlx::query(&format!("ALTER TABLE machines ADD COLUMN {}", col))

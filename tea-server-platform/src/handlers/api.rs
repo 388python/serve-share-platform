@@ -1752,6 +1752,439 @@ async fn api_buy_premium(
 }
 
 // ==============================
+// Machine Operations API
+// ==============================
+
+// GET /api/v1/images - Get available system images
+async fn api_images_list() -> impl IntoResponse {
+    let images = vec![
+        json!({"id": "ubuntu:22.04", "name": "Ubuntu 22.04 LTS"}),
+        json!({"id": "ubuntu:24.04", "name": "Ubuntu 24.04 LTS"}),
+        json!({"id": "debian:12", "name": "Debian 12 (Bookworm)"}),
+        json!({"id": "debian:11", "name": "Debian 11 (Bullseye)"}),
+        json!({"id": "centos:9", "name": "CentOS Stream 9"}),
+        json!({"id": "alpine:3.19", "name": "Alpine Linux 3.19"}),
+    ];
+    ok_response(json!({"images": images}))
+}
+
+// GET /api/v1/app-images - Get available application images
+async fn api_app_images_list() -> impl IntoResponse {
+    let apps = vec![
+        json!({"id": "mc", "name": "Minecraft Server", "docker_image": "itzg/minecraft-server", "ports": [25565]}),
+        json!({"id": "sub2api", "name": "Subscription Converter", "docker_image": "tindy2013/subconverter", "ports": [25500]}),
+        json!({"id": "newapi", "name": "New API", "docker_image": "calciumion/new-api", "ports": [3000]}),
+        json!({"id": "cliproxyapi", "name": "CLI Proxy API", "docker_image": "ghcr.io/metacubx/cliproxyapi", "ports": [8080]}),
+        json!({"id": "xray", "name": "Xray Core", "docker_image": "teddysun/xray", "ports": [443, 80]}),
+        json!({"id": "v2ray", "name": "V2Ray", "docker_image": "v2fly/v2fly-core", "ports": [443, 10000]}),
+        json!({"id": "nginx", "name": "Nginx", "docker_image": "nginx:alpine", "ports": [80, 443]}),
+        json!({"id": "mysql", "name": "MySQL", "docker_image": "mysql:8.0", "ports": [3306]}),
+        json!({"id": "redis", "name": "Redis", "docker_image": "redis:alpine", "ports": [6379]}),
+    ];
+    ok_response(json!({"app_images": apps}))
+}
+
+// GET /api/v1/machines/:id - Get machine detail
+async fn api_machine_detail(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<Machine> = sqlx::query_as(
+        "SELECT * FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some(m) => {
+            // Get server info
+            let server: Option<Server> = sqlx::query_as(
+                "SELECT * FROM servers WHERE id = ?"
+            )
+            .bind(m.server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            ok_response(json!({
+                "machine": m,
+                "server": server,
+            }))
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// GET /api/v1/machines/:id/console - Get web console access
+async fn api_machine_console(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String, String)> = sqlx::query_as(
+        "SELECT id, server_id, virt_type, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, virt_type, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            // Get server IP and agent key
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/console/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .get(&url)
+                        .header("X-API-Key", &agent_key)
+                        .timeout(std::time::Duration::from_secs(10))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            ok_response(data)
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/exec - Execute command in machine
+async fn api_machine_exec(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let command = body.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    if command.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "command required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/exec/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"command": command}))
+                        .timeout(std::time::Duration::from_secs(60))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            ok_response(data)
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/reinstall - Reinstall machine
+async fn api_machine_reinstall(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let image = body.get("image").and_then(|v| v.as_str()).unwrap_or("ubuntu:22.04");
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, _status)) => {
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/reinstall/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"image": image, "app_image": app_image}))
+                        .timeout(std::time::Duration::from_secs(120))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Update image in database
+                            sqlx::query("UPDATE machines SET image = ?, app_image = ? WHERE id = ?")
+                                .bind(image)
+                                .bind(app_image)
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            ok_response(data)
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "reinstall failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/app-install - Install app in machine
+async fn api_machine_app_install(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+
+    if app_image.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "app_image required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/app-install/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"app_image": app_image}))
+                        .timeout(std::time::Duration::from_secs(120))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Update app_image in database
+                            sqlx::query("UPDATE machines SET app_image = ? WHERE id = ?")
+                                .bind(app_image)
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            ok_response(data)
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app install failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/app-uninstall - Uninstall app from machine
+async fn api_machine_app_uninstall(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+
+    if app_image.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "app_image required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/app-uninstall/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"app_image": app_image}))
+                        .timeout(std::time::Duration::from_secs(30))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Clear app_image in database
+                            sqlx::query("UPDATE machines SET app_image = '' WHERE id = ?")
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            ok_response(data)
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app uninstall failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// ==============================
 // Router builder
 // ==============================
 
@@ -1802,4 +2235,13 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/admin/opengfw/rules/:id/toggle", post(api_admin_opengfw_rules_toggle))
         .route("/v1/admin/orders", get(api_admin_orders))
         .route("/v1/admin/packages", get(api_admin_packages))
+        // Machine operations
+        .route("/v1/images", get(api_images_list))
+        .route("/v1/app-images", get(api_app_images_list))
+        .route("/v1/machines/:id", get(api_machine_detail))
+        .route("/v1/machines/:id/console", get(api_machine_console))
+        .route("/v1/machines/:id/exec", post(api_machine_exec))
+        .route("/v1/machines/:id/reinstall", post(api_machine_reinstall))
+        .route("/v1/machines/:id/app-install", post(api_machine_app_install))
+        .route("/v1/machines/:id/app-uninstall", post(api_machine_app_uninstall))
 }

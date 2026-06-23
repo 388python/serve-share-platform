@@ -600,6 +600,8 @@ pub struct CreateMachineForm {
     pub disk_gb: f64,
     pub virt_type: Option<String>,
     pub duration_days: Option<i32>,
+    pub image: Option<String>,      // 系统镜像
+    pub app_image: Option<String>,  // 应用镜像
 }
 
 pub async fn create_machine(
@@ -735,6 +737,9 @@ pub async fn create_machine(
 
     // 调用 Agent 创建 VM（使用 machine_lifecycle 服务，含重试和退款）
     let machine_name = format!("machine-{}", machine_id);
+    let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+    let app_image = form.app_image.unwrap_or_default();
+    
     services::machine_lifecycle::spawn_agent_create_job(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
@@ -749,6 +754,8 @@ pub async fn create_machine(
             regular_used: cost,
             bonus_used: 0.0,
             used_hours: hours,
+            image,
+            app_image,
         },
     );
 
@@ -835,6 +842,53 @@ pub async fn delete_machine(
         .await;
 
     Redirect::to("/machines").into_response()
+}
+
+pub async fn machine_detail(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    
+    // Get machine owned by this user
+    let machine: Option<Machine> = sqlx::query_as(
+        "SELECT * FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if machine.is_none() {
+        return Err(Redirect::to("/machines?error=not_found"));
+    }
+
+    let m = machine.unwrap();
+    
+    // Get server info
+    let server: Option<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE id = ?"
+    )
+    .bind(m.server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("machine", &m);
+    ctx.insert("server", &server);
+
+    let rendered = state
+        .templates
+        .render("user/machine_detail.html", &ctx)
+        .unwrap_or_else(|_| "Template error".to_string());
+
+    Ok(Html(rendered))
 }
 
 pub async fn machine_connect(

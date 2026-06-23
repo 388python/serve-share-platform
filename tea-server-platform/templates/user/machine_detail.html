@@ -1,0 +1,382 @@
+{% extends "components/base.html" %}
+
+{% block title %}{{ site_name }} - 机器详情 #{{ machine.id }}{% endblock title %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>机器详情 #{{ machine.id }}</h2>
+        <a href="/machines" class="btn btn-outline-secondary">返回列表</a>
+    </div>
+</div>
+
+<div class="row">
+    <!-- 机器信息 -->
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">基本信息</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr><td>状态</td><td>
+                        {% if machine.status == "running" %}
+                        <span class="badge bg-success">运行中</span>
+                        {% elif machine.status == "pending" %}
+                        <span class="badge bg-info">创建中</span>
+                        {% elif machine.status == "failed" %}
+                        <span class="badge bg-danger">创建失败</span>
+                        {% else %}
+                        <span class="badge bg-secondary">已停止</span>
+                        {% endif %}
+                    </td></tr>
+                    <tr><td>CPU</td><td>{{ machine.cpu_cores }} 核</td></tr>
+                    <tr><td>内存</td><td>{{ machine.memory_gb }} GB</td></tr>
+                    <tr><td>磁盘</td><td>{{ machine.disk_gb }} GB</td></tr>
+                    <tr><td>虚拟化类型</td><td>{{ machine.virt_type }}</td></tr>
+                    <tr><td>系统镜像</td><td>{{ machine.image | default(value="ubuntu:22.04") }}</td></tr>
+                    <tr><td>应用镜像</td><td>{{ machine.app_image | default(value="无") }}</td></tr>
+                    <tr><td>创建时间</td><td>{{ machine.created_at }}</td></tr>
+                    <tr><td>过期时间</td><td>{{ machine.expires_at }}</td></tr>
+                    <tr><td>核时/小时</td><td>{{ machine.core_hours_per_hour }}</td></tr>
+                    <tr><td>已使用核时</td><td>{{ machine.regular_core_hours_used }}</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <!-- 服务器信息 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">服务器信息</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr><td>服务器 ID</td><td>{{ server.id }}</td></tr>
+                    <tr><td>服务器名称</td><td>{{ server.name }}</td></tr>
+                    <tr><td>服务器 IP</td><td>{{ server.ip }}</td></tr>
+                    <tr><td>SSH 端口</td><td>{{ machine.ssh_port | default(value="22") }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 操作面板 -->
+    <div class="col-md-6">
+        <!-- Web 控制台 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Web 控制台</h5>
+            </div>
+            <div class="card-body">
+                {% if machine.status == "running" %}
+                <button class="btn btn-primary w-100" onclick="openConsole()">
+                    <i class="bi bi-terminal"></i> 打开 Web 终端
+                </button>
+                <p class="text-muted small mt-2">通过浏览器直接访问机器终端</p>
+                {% else %}
+                <p class="text-muted">机器未运行，无法打开控制台</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- SSH 连接 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">SSH 连接</h5>
+            </div>
+            <div class="card-body">
+                {% if machine.status == "running" %}
+                <div class="mb-3">
+                    <label class="form-label">连接命令</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="ssh-command" value="ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip }}" readonly>
+                        <button class="btn btn-outline-secondary" onclick="copySSH()">复制</button>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Root 密码</label>
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="root-password" value="{{ machine.root_password | default(value="") }}" readonly>
+                        <button class="btn btn-outline-secondary" onclick="togglePassword()">显示</button>
+                        <button class="btn btn-outline-secondary" onclick="copyPassword()">复制</button>
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-muted">机器未运行</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 重装系统 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">重装系统</h5>
+            </div>
+            <div class="card-body">
+                <form id="reinstall-form">
+                    <div class="mb-3">
+                        <label class="form-label">系统镜像</label>
+                        <select class="form-select" id="reinstall-image">
+                            <option value="ubuntu:22.04">Ubuntu 22.04 LTS</option>
+                            <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
+                            <option value="debian:12">Debian 12 (Bookworm)</option>
+                            <option value="debian:11">Debian 11 (Bullseye)</option>
+                            <option value="centos:9">CentOS Stream 9</option>
+                            <option value="alpine:3.19">Alpine Linux 3.19</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">应用镜像（可选）</label>
+                        <select class="form-select" id="reinstall-app">
+                            <option value="">无应用</option>
+                            <option value="mc">Minecraft Server</option>
+                            <option value="sub2api">Subscription Converter</option>
+                            <option value="newapi">New API</option>
+                            <option value="cliproxyapi">CLI Proxy API</option>
+                            <option value="xray">Xray Core</option>
+                            <option value="v2ray">V2Ray</option>
+                            <option value="nginx">Nginx</option>
+                            <option value="mysql">MySQL</option>
+                            <option value="redis">Redis</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100" onclick="return confirm('确定要重装系统吗？所有数据将被清空！')">
+                        <i class="bi bi-arrow-repeat"></i> 重装系统
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 应用管理 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">应用管理</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">安装应用</label>
+                    <select class="form-select" id="install-app">
+                        <option value="">选择应用...</option>
+                        <option value="mc">Minecraft Server</option>
+                        <option value="sub2api">Subscription Converter</option>
+                        <option value="newapi">New API</option>
+                        <option value="cliproxyapi">CLI Proxy API</option>
+                        <option value="xray">Xray Core</option>
+                        <option value="v2ray">V2Ray</option>
+                        <option value="nginx">Nginx</option>
+                        <option value="mysql">MySQL</option>
+                        <option value="redis">Redis</option>
+                    </select>
+                </div>
+                <button class="btn btn-success w-100 mb-2" onclick="installApp()">
+                    <i class="bi bi-download"></i> 安装应用
+                </button>
+                {% if machine.app_image %}
+                <button class="btn btn-outline-danger w-100" onclick="uninstallApp()">
+                    <i class="bi bi-trash"></i> 卸载当前应用 ({{ machine.app_image }})
+                </button>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 命令执行 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">命令执行</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">执行命令</label>
+                    <input type="text" class="form-control" id="exec-command" placeholder="例如: uptime, df -h, docker ps">
+                </div>
+                <button class="btn btn-primary w-100" onclick="execCommand()">
+                    <i class="bi bi-play"></i> 执行
+                </button>
+                <div id="exec-output" class="mt-3" style="display:none;">
+                    <label class="form-label">输出结果</label>
+                    <pre class="bg-dark text-light p-3 rounded" id="exec-result"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 操作按钮 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                {% if machine.status == "running" %}
+                <form method="post" action="/machines/{{ machine.id }}/stop" style="display:inline">
+                    <button type="submit" class="btn btn-warning">停止机器</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/machines/{{ machine.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
+                    <button type="submit" class="btn btn-danger">删除机器</button>
+                </form>
+                <a href="/disputes/new?machine_id={{ machine.id }}" class="btn btn-outline-danger">发起争议</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script>
+const API_BASE = '/api/v1';
+const MACHINE_ID = {{ machine.id }};
+const API_KEY = localStorage.getItem('api_key') || '';
+
+function copySSH() {
+    const cmd = document.getElementById('ssh-command').value;
+    navigator.clipboard.writeText(cmd);
+    alert('已复制 SSH 命令');
+}
+
+function togglePassword() {
+    const input = document.getElementById('root-password');
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function copyPassword() {
+    const pwd = document.getElementById('root-password').value;
+    navigator.clipboard.writeText(pwd);
+    alert('已复制密码');
+}
+
+async function openConsole() {
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/console`, {
+            headers: { 'Authorization': `Bearer ${API_KEY}` }
+        });
+        const data = await resp.json();
+        
+        if (data.web_url) {
+            window.open(data.web_url, '_blank');
+        } else {
+            alert('无法打开控制台: ' + (data.error || '未知错误'));
+        }
+    } catch (err) {
+        alert('打开控制台失败: ' + err.message);
+    }
+}
+
+document.getElementById('reinstall-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const image = document.getElementById('reinstall-image').value;
+    const app = document.getElementById('reinstall-app').value;
+    
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/reinstall`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({ image, app_image: app })
+        });
+        const data = await resp.json();
+        
+        if (data.status === 'created' || data.status === 'success') {
+            alert('系统重装成功！新密码: ' + (data.root_password || '请查看邮件'));
+            location.reload();
+        } else {
+            alert('重装失败: ' + (data.error || '未知错误'));
+        }
+    } catch (err) {
+        alert('重装失败: ' + err.message);
+    }
+});
+
+async function installApp() {
+    const app = document.getElementById('install-app').value;
+    if (!app) {
+        alert('请选择要安装的应用');
+        return;
+    }
+    
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/app-install`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({ app_image: app })
+        });
+        const data = await resp.json();
+        
+        if (data.status === 'installed') {
+            alert('应用安装成功！端口: ' + data.ports.join(', '));
+            location.reload();
+        } else {
+            alert('安装失败: ' + (data.error || '未知错误'));
+        }
+    } catch (err) {
+        alert('安装失败: ' + err.message);
+    }
+}
+
+async function uninstallApp() {
+    const app = '{{ machine.app_image }}';
+    if (!app) return;
+    
+    if (!confirm(`确定要卸载 ${app} 吗？`)) return;
+    
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/app-uninstall`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({ app_image: app })
+        });
+        const data = await resp.json();
+        
+        if (data.status === 'uninstalled') {
+            alert('应用已卸载');
+            location.reload();
+        } else {
+            alert('卸载失败: ' + (data.error || '未知错误'));
+        }
+    } catch (err) {
+        alert('卸载失败: ' + err.message);
+    }
+}
+
+async function execCommand() {
+    const cmd = document.getElementById('exec-command').value;
+    if (!cmd) {
+        alert('请输入命令');
+        return;
+    }
+    
+    const outputDiv = document.getElementById('exec-output');
+    const resultDiv = document.getElementById('exec-result');
+    outputDiv.style.display = 'block';
+    resultDiv.textContent = '执行中...';
+    
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/exec`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({ command: cmd })
+        });
+        const data = await resp.json();
+        
+        resultDiv.textContent = data.stdout || data.stderr || '无输出';
+        if (data.status !== 'success') {
+            resultDiv.classList.add('text-danger');
+        }
+    } catch (err) {
+        resultDiv.textContent = '执行失败: ' + err.message;
+        resultDiv.classList.add('text-danger');
+    }
+}
+</script>
+{% endblock scripts %}
