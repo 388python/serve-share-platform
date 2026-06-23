@@ -59,20 +59,6 @@ APP_IMAGES = {
         "env": {},
         "setup_cmd": None,
     },
-    "xray": {
-        "name": "Xray Core",
-        "docker_image": "teddysun/xray",
-        "ports": [443, 80],
-        "env": {},
-        "setup_cmd": None,
-    },
-    "v2ray": {
-        "name": "V2Ray",
-        "docker_image": "v2fly/v2fly-core",
-        "ports": [443, 10000],
-        "env": {},
-        "setup_cmd": None,
-    },
     "nginx": {
         "name": "Nginx Web Server",
         "docker_image": "nginx:alpine",

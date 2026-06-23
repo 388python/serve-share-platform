@@ -1779,8 +1779,6 @@ async fn api_app_images_list() -> impl IntoResponse {
         json!({"id": "sub2api", "name": "Subscription Converter", "docker_image": "tindy2013/subconverter", "ports": [25500]}),
         json!({"id": "newapi", "name": "New API", "docker_image": "calciumion/new-api", "ports": [3000]}),
         json!({"id": "cliproxyapi", "name": "CLI Proxy API", "docker_image": "ghcr.io/metacubx/cliproxyapi", "ports": [8080]}),
-        json!({"id": "xray", "name": "Xray Core", "docker_image": "teddysun/xray", "ports": [443, 80]}),
-        json!({"id": "v2ray", "name": "V2Ray", "docker_image": "v2fly/v2fly-core", "ports": [443, 10000]}),
         json!({"id": "nginx", "name": "Nginx", "docker_image": "nginx:alpine", "ports": [80, 443]}),
         json!({"id": "mysql", "name": "MySQL", "docker_image": "mysql:8.0", "ports": [3306]}),
         json!({"id": "redis", "name": "Redis", "docker_image": "redis:alpine", "ports": [6379]}),
