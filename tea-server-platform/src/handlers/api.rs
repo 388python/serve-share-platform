@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 use uuid::Uuid;
@@ -361,6 +361,8 @@ pub struct CreateMachineRequest {
     pub memory_gb: f64,
     pub disk_gb: f64,
     pub hours: Option<i32>,
+    pub image: Option<String>,
+    pub app_image: Option<String>,
 }
 
 // POST /api/v1/machines/create
@@ -699,6 +701,8 @@ async fn api_machines_create(
             regular_used,
             bonus_used,
             used_hours,
+            image: form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string()),
+            app_image: form.app_image.clone().unwrap_or_default(),
         },
     );
 
@@ -1806,7 +1810,6 @@ async fn api_machine_detail(
 
     match machine {
         Some(m) => {
-            // Get server info
             let server: Option<Server> = sqlx::query_as(
                 "SELECT * FROM servers WHERE id = ?"
             )
@@ -1815,10 +1818,10 @@ async fn api_machine_detail(
             .await
             .unwrap_or(None);
 
-            ok_response(json!({
+            (StatusCode::OK, Json(json!({
                 "machine": m,
                 "server": server,
-            }))
+            }))).into_response()
         },
         None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
     }
@@ -1875,7 +1878,7 @@ async fn api_machine_console(
                     match resp {
                         Ok(r) if r.status().is_success() => {
                             let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
-                            ok_response(data)
+                            (StatusCode::OK, Json(data)).into_response()
                         },
                         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
                     }
@@ -1945,7 +1948,7 @@ async fn api_machine_exec(
                     match resp {
                         Ok(r) if r.status().is_success() => {
                             let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
-                            ok_response(data)
+                            (StatusCode::OK, Json(data)).into_response()
                         },
                         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
                     }
@@ -2017,7 +2020,7 @@ async fn api_machine_reinstall(
                                 .ok();
                             
                             let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
-                            ok_response(data)
+                            (StatusCode::OK, Json(data)).into_response()
                         },
                         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "reinstall failed"}))).into_response(),
                     }
@@ -2095,7 +2098,7 @@ async fn api_machine_app_install(
                                 .ok();
                             
                             let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
-                            ok_response(data)
+                            (StatusCode::OK, Json(data)).into_response()
                         },
                         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app install failed"}))).into_response(),
                     }
@@ -2172,7 +2175,7 @@ async fn api_machine_app_uninstall(
                                 .ok();
                             
                             let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
-                            ok_response(data)
+                            (StatusCode::OK, Json(data)).into_response()
                         },
                         _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app uninstall failed"}))).into_response(),
                     }

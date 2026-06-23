@@ -14,6 +14,7 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<Sha256>;
 
 pub mod api;
+pub mod websocket;
 
 use crate::config::AppConfig;
 use crate::db;

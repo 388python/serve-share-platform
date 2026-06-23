@@ -283,6 +283,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines/:id/stop", post(handlers::stop_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
+        // WebSocket SSH
+        .nest("/ws", handlers::websocket::router(app_state.clone()))
         // Disputes - 预留，未实现
         // Recharge
         .route("/recharge/callback", get(handlers::recharge_callback))

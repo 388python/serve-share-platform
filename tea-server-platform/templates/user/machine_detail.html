@@ -2,6 +2,28 @@
 
 {% block title %}{{ site_name }} - 机器详情 #{{ machine.id }}{% endblock title %}
 
+{% block styles %}
+{{ super() }}
+<style>
+/* WebSSH Terminal Styles */
+#ssh-terminal {
+    width: 100%;
+    height: 400px;
+    background: #1e1e1e;
+    border-radius: 6px;
+    padding: 10px;
+    font-family: 'Fira Code', 'Courier New', monospace;
+}
+.ssh-status {
+    font-size: 12px;
+    color: #888;
+}
+.ssh-status.connected { color: #28a745; }
+.ssh-status.disconnected { color: #dc3545; }
+.ssh-status.connecting { color: #ffc107; }
+</style>
+{% endblock styles %}
+
 {% block content %}
 <div class="row mb-4">
     <div class="col-12">
@@ -12,7 +34,7 @@
 
 <div class="row">
     <!-- 机器信息 -->
-    <div class="col-md-6">
+    <div class="col-md-5">
         <div class="card mb-4">
             <div class="card-header">
                 <h5 class="mb-0">基本信息</h5>
@@ -38,8 +60,6 @@
                     <tr><td>应用镜像</td><td>{{ machine.app_image | default(value="无") }}</td></tr>
                     <tr><td>创建时间</td><td>{{ machine.created_at }}</td></tr>
                     <tr><td>过期时间</td><td>{{ machine.expires_at }}</td></tr>
-                    <tr><td>核时/小时</td><td>{{ machine.core_hours_per_hour }}</td></tr>
-                    <tr><td>已使用核时</td><td>{{ machine.regular_core_hours_used }}</td></tr>
                 </table>
             </div>
         </div>
@@ -51,58 +71,85 @@
             </div>
             <div class="card-body">
                 <table class="table table-sm">
-                    <tr><td>服务器 ID</td><td>{{ server.id }}</td></tr>
-                    <tr><td>服务器名称</td><td>{{ server.name }}</td></tr>
-                    <tr><td>服务器 IP</td><td>{{ server.ip }}</td></tr>
+                    <tr><td>服务器 IP</td><td>{{ server.ip if server else 'N/A' }}</td></tr>
+                    <tr><td>机器 IP</td><td><span id="machine-ip">获取中...</span></td></tr>
                     <tr><td>SSH 端口</td><td>{{ machine.ssh_port | default(value="22") }}</td></tr>
                 </table>
             </div>
         </div>
-    </div>
 
-    <!-- 操作面板 -->
-    <div class="col-md-6">
-        <!-- Web 控制台 -->
+        <!-- 操作按钮 -->
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0">Web 控制台</h5>
+                <h5 class="mb-0">快捷操作</h5>
             </div>
             <div class="card-body">
                 {% if machine.status == "running" %}
-                <button class="btn btn-primary w-100" onclick="openConsole()">
-                    <i class="bi bi-terminal"></i> 打开 Web 终端
-                </button>
-                <p class="text-muted small mt-2">通过浏览器直接访问机器终端</p>
-                {% else %}
-                <p class="text-muted">机器未运行，无法打开控制台</p>
+                <form method="post" action="/machines/{{ machine.id }}/stop" style="display:inline">
+                    <button type="submit" class="btn btn-warning">停止机器</button>
+                </form>
                 {% endif %}
+                <form method="post" action="/machines/{{ machine.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
+                    <button type="submit" class="btn btn-danger">删除机器</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- WebSSH 终端 -->
+    <div class="col-md-7">
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-terminal"></i> WebSSH 终端</h5>
+                <div>
+                    <span class="ssh-status" id="ssh-status">未连接</span>
+                    <button class="btn btn-sm btn-primary" id="ssh-connect" onclick="connectSSH()">
+                        <i class="bi bi-plug"></i> 连接
+                    </button>
+                    <button class="btn btn-sm btn-secondary" id="ssh-disconnect" onclick="disconnectSSH()" style="display:none;">
+                        <i class="bi bi-plug-fill"></i> 断开
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="ssh-terminal"></div>
+            </div>
+            <div class="card-footer text-muted">
+                <small>提示：用户名 root，密码可通过下方"获取密码"按钮获取</small>
             </div>
         </div>
 
-        <!-- SSH 连接 -->
+        <!-- SSH 连接信息 -->
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0">SSH 连接</h5>
+                <h5 class="mb-0">SSH 连接信息</h5>
             </div>
             <div class="card-body">
                 {% if machine.status == "running" %}
                 <div class="mb-3">
-                    <label class="form-label">连接命令</label>
+                    <label class="form-label fw-bold">连接参数</label>
+                    <div class="input-group mb-2">
+                        <span class="input-group-text">主机</span>
+                        <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" readonly>
+                        <span class="input-group-text">端口</span>
+                        <input type="text" class="form-control" style="max-width: 80px;" id="ssh-port" value="{{ machine.ssh_port | default(value="22") }}" readonly>
+                        <span class="input-group-text">用户</span>
+                        <input type="text" class="form-control" id="ssh-user" value="root" readonly>
+                    </div>
                     <div class="input-group">
-                        <input type="text" class="form-control" id="ssh-command" value="ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip }}" readonly>
-                        <button class="btn btn-outline-secondary" onclick="copySSH()">复制</button>
+                        <span class="input-group-text">密码</span>
+                        <input type="password" class="form-control" id="ssh-password" placeholder="点击下方按钮获取密码">
+                        <button class="btn btn-outline-secondary" type="button" onclick="fetchPassword()">获取密码</button>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">显示</button>
                     </div>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">Root 密码</label>
-                    <div class="input-group">
-                        <input type="password" class="form-control" id="root-password" value="{{ machine.root_password | default(value="") }}" readonly>
-                        <button class="btn btn-outline-secondary" onclick="togglePassword()">显示</button>
-                        <button class="btn btn-outline-secondary" onclick="copyPassword()">复制</button>
-                    </div>
+                <div class="alert alert-info small">
+                    <strong>本地 SSH 命令：</strong>
+                    <code>ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip if server else '机器IP' }}</code>
+                    <button class="btn btn-sm btn-outline-info ms-2" onclick="copySSHCommand()">复制</button>
                 </div>
                 {% else %}
-                <p class="text-muted">机器未运行</p>
+                <p class="text-muted">机器未运行，无法连接</p>
                 {% endif %}
             </div>
         </div>
@@ -114,31 +161,31 @@
             </div>
             <div class="card-body">
                 <form id="reinstall-form">
-                    <div class="mb-3">
-                        <label class="form-label">系统镜像</label>
-                        <select class="form-select" id="reinstall-image">
-                            <option value="ubuntu:22.04">Ubuntu 22.04 LTS</option>
-                            <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
-                            <option value="debian:12">Debian 12 (Bookworm)</option>
-                            <option value="debian:11">Debian 11 (Bullseye)</option>
-                            <option value="centos:9">CentOS Stream 9</option>
-                            <option value="alpine:3.19">Alpine Linux 3.19</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">应用镜像（可选）</label>
-                        <select class="form-select" id="reinstall-app">
-                            <option value="">无应用</option>
-                            <option value="mc">Minecraft Server</option>
-                            <option value="sub2api">Subscription Converter</option>
-                            <option value="newapi">New API</option>
-                            <option value="cliproxyapi">CLI Proxy API</option>
-                            <option value="xray">Xray Core</option>
-                            <option value="v2ray">V2Ray</option>
-                            <option value="nginx">Nginx</option>
-                            <option value="mysql">MySQL</option>
-                            <option value="redis">Redis</option>
-                        </select>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">系统镜像</label>
+                            <select class="form-select" id="reinstall-image">
+                                <option value="ubuntu:22.04">Ubuntu 22.04 LTS</option>
+                                <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
+                                <option value="debian:12">Debian 12</option>
+                                <option value="debian:11">Debian 11</option>
+                                <option value="centos:9">CentOS Stream 9</option>
+                                <option value="alpine:3.19">Alpine Linux 3.19</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">应用镜像</label>
+                            <select class="form-select" id="reinstall-app">
+                                <option value="">无应用</option>
+                                <option value="mc">Minecraft</option>
+                                <option value="sub2api">Sub2API</option>
+                                <option value="newapi">New API</option>
+                                <option value="cliproxyapi">CLI Proxy</option>
+                                <option value="xray">Xray</option>
+                                <option value="v2ray">V2Ray</option>
+                                <option value="nginx">Nginx</option>
+                            </select>
+                        </div>
                     </div>
                     <button type="submit" class="btn btn-warning w-100" onclick="return confirm('确定要重装系统吗？所有数据将被清空！')">
                         <i class="bi bi-arrow-repeat"></i> 重装系统
@@ -153,68 +200,34 @@
                 <h5 class="mb-0">应用管理</h5>
             </div>
             <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">安装应用</label>
-                    <select class="form-select" id="install-app">
-                        <option value="">选择应用...</option>
-                        <option value="mc">Minecraft Server</option>
-                        <option value="sub2api">Subscription Converter</option>
-                        <option value="newapi">New API</option>
-                        <option value="cliproxyapi">CLI Proxy API</option>
-                        <option value="xray">Xray Core</option>
-                        <option value="v2ray">V2Ray</option>
-                        <option value="nginx">Nginx</option>
-                        <option value="mysql">MySQL</option>
-                        <option value="redis">Redis</option>
-                    </select>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">安装应用</label>
+                        <select class="form-select" id="install-app">
+                            <option value="">选择应用...</option>
+                            <option value="mc">Minecraft Server</option>
+                            <option value="sub2api">Subscription Converter</option>
+                            <option value="newapi">New API</option>
+                            <option value="cliproxyapi">CLI Proxy API</option>
+                            <option value="xray">Xray Core</option>
+                            <option value="v2ray">V2Ray</option>
+                            <option value="nginx">Nginx</option>
+                            <option value="mysql">MySQL</option>
+                            <option value="redis">Redis</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6 mb-3 d-flex align-items-end">
+                        <button class="btn btn-success w-100" onclick="installApp()">
+                            <i class="bi bi-download"></i> 安装应用
+                        </button>
+                    </div>
                 </div>
-                <button class="btn btn-success w-100 mb-2" onclick="installApp()">
-                    <i class="bi bi-download"></i> 安装应用
-                </button>
-                {% if machine.app_image %}
-                <button class="btn btn-outline-danger w-100" onclick="uninstallApp()">
-                    <i class="bi bi-trash"></i> 卸载当前应用 ({{ machine.app_image }})
-                </button>
+                {% if machine.app_image and machine.app_image != '' %}
+                <div class="alert alert-warning">
+                    当前应用: <strong>{{ machine.app_image }}</strong>
+                    <button class="btn btn-sm btn-outline-danger ms-2" onclick="uninstallApp()">卸载</button>
+                </div>
                 {% endif %}
-            </div>
-        </div>
-
-        <!-- 命令执行 -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">命令执行</h5>
-            </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">执行命令</label>
-                    <input type="text" class="form-control" id="exec-command" placeholder="例如: uptime, df -h, docker ps">
-                </div>
-                <button class="btn btn-primary w-100" onclick="execCommand()">
-                    <i class="bi bi-play"></i> 执行
-                </button>
-                <div id="exec-output" class="mt-3" style="display:none;">
-                    <label class="form-label">输出结果</label>
-                    <pre class="bg-dark text-light p-3 rounded" id="exec-result"></pre>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 操作按钮 -->
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body">
-                {% if machine.status == "running" %}
-                <form method="post" action="/machines/{{ machine.id }}/stop" style="display:inline">
-                    <button type="submit" class="btn btn-warning">停止机器</button>
-                </form>
-                {% endif %}
-                <form method="post" action="/machines/{{ machine.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
-                    <button type="submit" class="btn btn-danger">删除机器</button>
-                </form>
-                <a href="/disputes/new?machine_id={{ machine.id }}" class="btn btn-outline-danger">发起争议</a>
             </div>
         </div>
     </div>
@@ -222,44 +235,241 @@
 {% endblock content %}
 
 {% block scripts %}
+{{ super() }}
+<!-- xterm.js for WebSSH -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.3.0/css/xterm.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.8.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.9.0/lib/addon-web-links.min.js"></script>
+
 <script>
 const API_BASE = '/api/v1';
 const MACHINE_ID = {{ machine.id }};
+const SERVER_IP = "{{ server.ip if server else '' }}";
 const API_KEY = localStorage.getItem('api_key') || '';
 
-function copySSH() {
-    const cmd = document.getElementById('ssh-command').value;
-    navigator.clipboard.writeText(cmd);
-    alert('已复制 SSH 命令');
+let term = null;
+let socket = null;
+let sshPassword = '';
+
+// Initialize terminal
+function initTerminal() {
+    if (term) return;
+    
+    term = new Terminal({
+        cursorBlink: true,
+        cursorStyle: 'block',
+        fontSize: 14,
+        fontFamily: '"Fira Code", "Cascadia Code", Consolas, monospace',
+        theme: {
+            background: '#1e1e1e',
+            foreground: '#d4d4d4',
+            cursor: '#ffffff',
+            selection: 'rgba(255, 255, 255, 0.3)',
+        },
+        scrollback: 1000,
+        convertEol: true,
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    
+    term.open(document.getElementById('ssh-terminal'));
+    fitAddon.fit();
+    
+    // Auto-fit on window resize
+    window.addEventListener('resize', () => {
+        fitAddon.fit();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        }
+    });
+    
+    term.write('WebSSH 终端准备就绪\r\n');
+    term.write('点击"连接"按钮建立连接\r\n');
 }
 
-function togglePassword() {
-    const input = document.getElementById('root-password');
-    input.type = input.type === 'password' ? 'text' : 'password';
-}
-
-function copyPassword() {
-    const pwd = document.getElementById('root-password').value;
-    navigator.clipboard.writeText(pwd);
-    alert('已复制密码');
-}
-
-async function openConsole() {
+async function fetchPassword() {
     try {
         const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/console`, {
             headers: { 'Authorization': `Bearer ${API_KEY}` }
         });
         const data = await resp.json();
         
-        if (data.web_url) {
-            window.open(data.web_url, '_blank');
-        } else {
-            alert('无法打开控制台: ' + (data.error || '未知错误'));
+        if (data.root_password) {
+            sshPassword = data.root_password;
+            document.getElementById('ssh-password').value = sshPassword;
+            document.getElementById('ssh-password').type = 'password';
+        } else if (data.ip) {
+            document.getElementById('machine-ip').textContent = data.ip;
+            // Try exec to get password
+            const execResp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/exec`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${API_KEY}`
+                },
+                body: JSON.stringify({ command: 'cat /root/.password 2>/dev/null || echo "password_not_available"' })
+            });
+            const execData = await execResp.json();
+            if (execData.stdout && execData.stdout.trim() !== 'password_not_available') {
+                sshPassword = execData.stdout.trim();
+                document.getElementById('ssh-password').value = sshPassword;
+            }
+        }
+        
+        if (data.ip) {
+            document.getElementById('machine-ip').textContent = data.ip;
+            document.getElementById('ssh-host').value = data.ip;
         }
     } catch (err) {
-        alert('打开控制台失败: ' + err.message);
+        console.error('Failed to fetch password:', err);
+        alert('获取密码失败: ' + err.message);
     }
 }
+
+function togglePassword() {
+    const input = document.getElementById('ssh-password');
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function copySSHCommand() {
+    const host = document.getElementById('ssh-host').value;
+    const port = document.getElementById('ssh-port').value;
+    const cmd = `ssh -p ${port} root@${host}`;
+    navigator.clipboard.writeText(cmd);
+    alert('已复制 SSH 命令');
+}
+
+function updateStatus(status) {
+    const el = document.getElementById('ssh-status');
+    el.textContent = status;
+    el.className = 'ssh-status ' + status;
+    
+    const connectBtn = document.getElementById('ssh-connect');
+    const disconnectBtn = document.getElementById('ssh-disconnect');
+    
+    if (status === 'connected') {
+        connectBtn.style.display = 'none';
+        disconnectBtn.style.display = 'inline-block';
+    } else {
+        connectBtn.style.display = 'inline-block';
+        disconnectBtn.style.display = 'none';
+    }
+}
+
+async function connectSSH() {
+    initTerminal();
+    
+    if (sshPassword) {
+        document.getElementById('ssh-password').value = sshPassword;
+    }
+    
+    const password = document.getElementById('ssh-password').value || sshPassword;
+    const host = document.getElementById('ssh-host').value;
+    const port = document.getElementById('ssh-port').value;
+    const user = document.getElementById('ssh-user').value;
+    
+    if (!host) {
+        alert('请先获取机器 IP 地址');
+        return;
+    }
+    
+    updateStatus('connecting');
+    term.clear();
+    term.write(`正在连接到 ${user}@${host}:${port}...\r\n`);
+    
+    // Close existing connection
+    if (socket) {
+        socket.close();
+    }
+    
+    // Use WebSocket proxy to backend
+    // The backend will proxy SSH connection
+    const wsUrl = `wss://${window.location.host}/ws/ssh/${MACHINE_ID}`;
+    
+    try {
+        socket = new WebSocket(wsUrl);
+        
+        socket.onopen = () => {
+            updateStatus('connected');
+            term.write('\r\n\x1b[32m连接成功!\x1b[0m\r\n\r\n');
+            
+            // Send auth info
+            socket.send(JSON.stringify({
+                type: 'auth',
+                host: host,
+                port: parseInt(port),
+                username: user,
+                password: password
+            }));
+        };
+        
+        socket.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'data') {
+                    term.write(msg.data);
+                } else if (msg.type === 'error') {
+                    term.write('\r\n\x1b[31m错误: ' + msg.message + '\x1b[0m\r\n');
+                } else if (msg.type === 'close') {
+                    term.write('\r\n\x1b[33m连接已关闭\x1b[0m\r\n');
+                    updateStatus('disconnected');
+                }
+            } catch (e) {
+                // Raw data
+                term.write(event.data);
+            }
+        };
+        
+        socket.onerror = (error) => {
+            term.write('\r\n\x1b[31mWebSocket 错误\x1b[0m\r\n');
+            updateStatus('disconnected');
+        };
+        
+        socket.onclose = () => {
+            updateStatus('disconnected');
+            term.write('\r\n\x1b[33m连接已断开\x1b[0m\r\n');
+        };
+        
+        // Handle terminal input
+        term.onData(data => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'data', data: data }));
+            }
+        });
+        
+        // Handle resize
+        term.onResize(({ cols, rows }) => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'resize', cols: cols, rows: rows }));
+            }
+        });
+        
+    } catch (err) {
+        term.write('\r\n\x1b[31m连接失败: ' + err.message + '\x1b[0m\r\n');
+        updateStatus('disconnected');
+    }
+}
+
+function disconnectSSH() {
+    if (socket) {
+        socket.close();
+        socket = null;
+    }
+    updateStatus('disconnected');
+    if (term) {
+        term.write('\r\n\x1b[33m已断开连接\x1b[0m\r\n');
+    }
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    initTerminal();
+    // Auto-fetch password and IP
+    fetchPassword();
+});
 
 document.getElementById('reinstall-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -279,7 +489,7 @@ document.getElementById('reinstall-form').addEventListener('submit', async (e) =
         const data = await resp.json();
         
         if (data.status === 'created' || data.status === 'success') {
-            alert('系统重装成功！新密码: ' + (data.root_password || '请查看邮件'));
+            alert('系统重装成功！');
             location.reload();
         } else {
             alert('重装失败: ' + (data.error || '未知错误'));
@@ -343,39 +553,6 @@ async function uninstallApp() {
         }
     } catch (err) {
         alert('卸载失败: ' + err.message);
-    }
-}
-
-async function execCommand() {
-    const cmd = document.getElementById('exec-command').value;
-    if (!cmd) {
-        alert('请输入命令');
-        return;
-    }
-    
-    const outputDiv = document.getElementById('exec-output');
-    const resultDiv = document.getElementById('exec-result');
-    outputDiv.style.display = 'block';
-    resultDiv.textContent = '执行中...';
-    
-    try {
-        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/exec`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${API_KEY}`
-            },
-            body: JSON.stringify({ command: cmd })
-        });
-        const data = await resp.json();
-        
-        resultDiv.textContent = data.stdout || data.stderr || '无输出';
-        if (data.status !== 'success') {
-            resultDiv.classList.add('text-danger');
-        }
-    } catch (err) {
-        resultDiv.textContent = '执行失败: ' + err.message;
-        resultDiv.classList.add('text-danger');
     }
 }
 </script>
