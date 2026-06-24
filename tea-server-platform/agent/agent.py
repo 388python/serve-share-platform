@@ -18,6 +18,7 @@ if not API_KEY:
 VIRT_TYPE = os.environ.get("VIRT_TYPE", "lxd")
 PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
+PLATFORM_SSH_PUBKEY = os.environ.get("PLATFORM_SSH_PUBKEY", "")
 
 # 系统镜像映射
 SYSTEM_IMAGES = {
@@ -102,6 +103,34 @@ def generate_password(length=12):
     """Generate random password"""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
+
+def _lxc_exec(name, cmd, timeout=30):
+    """Execute command inside LXD container"""
+    return subprocess.run(
+        ["lxc", "exec", name, "--", "bash", "-c", cmd],
+        capture_output=True, text=True, timeout=timeout
+    )
+
+def _inject_ssh_key(name, public_key, virt="lxd"):
+    """Inject SSH public key and enable SSH service"""
+    if not public_key:
+        return
+    
+    if virt == "lxd":
+        # Create .ssh directory with proper permissions
+        _lxc_exec(name, "mkdir -p /root/.ssh && chmod 700 /root/.ssh", timeout=10)
+        
+        # Append public key to authorized_keys
+        _lxc_exec(name, f"echo '{public_key}' >> /root/.ssh/authorized_keys", timeout=10)
+        
+        # Fix permissions
+        _lxc_exec(name, "chmod 600 /root/.ssh/authorized_keys && chown -R root:root /root/.ssh", timeout=10)
+        
+        # Ensure sshd is installed and running
+        _lxc_exec(name, "which sshd || (apt-get update && apt-get install -y openssh-server)", timeout=120)
+        
+        # Enable and start SSH
+        _lxc_exec(name, "mkdir -p /run/sshd && /usr/sbin/sshd || service ssh start || systemctl start sshd 2>/dev/null || true", timeout=20)
 
 class AgentHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
@@ -519,6 +548,7 @@ table ip opengfw {
         virt = body.get("virt_type", VIRT_TYPE)
         image = body.get("image", "ubuntu:22.04")
         app_image = body.get("app_image", "")
+        ssh_public_key = body.get("ssh_public_key", PLATFORM_SSH_PUBKEY)
         
         # Generate root password
         root_password = generate_password(16)
@@ -550,6 +580,9 @@ table ip opengfw {
                     "lxc", "exec", name, "--", 
                     "bash", "-c", f"echo 'root:{root_password}' | chpasswd"
                 ], capture_output=True, timeout=30)
+                
+                # Inject platform SSH public key and enable SSH
+                _inject_ssh_key(name, ssh_public_key, "lxd")
                 
                 # Install Docker if app_image requires it
                 if app_image and APP_IMAGES.get(app_image, {}).get("docker_image"):
@@ -676,6 +709,7 @@ table ip opengfw {
         """Reinstall VM/container with new image"""
         image = body.get("image", "ubuntu:22.04")
         app_image = body.get("app_image", "")
+        ssh_public_key = body.get("ssh_public_key", PLATFORM_SSH_PUBKEY)
         
         # First stop and delete
         self._handle_stop(name)
@@ -701,6 +735,7 @@ table ip opengfw {
                 "virt_type": machine_info.get("virt_type", VIRT_TYPE),
                 "image": image,
                 "app_image": app_image,
+                "ssh_public_key": ssh_public_key,
             }
             self._handle_create(create_body)
         except Exception as e:

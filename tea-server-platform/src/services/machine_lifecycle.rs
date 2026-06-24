@@ -54,6 +54,7 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
         "virt_type": job.virt_type,
         "image": job.image,
         "app_image": job.app_image,
+        "ssh_public_key": crate::services::session::get_ssh_public_key(),
     });
 
     let max_retries = 3;
