@@ -603,6 +603,8 @@ pub struct CreateMachineForm {
     pub duration_days: Option<i32>,
     pub image: Option<String>,      // 系统镜像
     pub app_image: Option<String>,  // 应用镜像
+    pub root_password: Option<String>, // 用户设置的 root 密码
+    pub app_secrets: Option<String>,   // 应用密钥（JSON 字符串）
 }
 
 pub async fn create_machine(
@@ -708,8 +710,12 @@ pub async fn create_machine(
         }
     }
 
+    let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+    let app_image = form.app_image.unwrap_or_default();
+    let root_password_val = form.root_password.as_deref().unwrap_or("");
+
     let insert = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, CURRENT_TIMESTAMP)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, root_password, image, app_image, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -719,6 +725,9 @@ pub async fn create_machine(
     .bind(&virt_type)
     .bind(0.01)
     .bind(duration_days)
+    .bind(root_password_val)
+    .bind(&image)
+    .bind(&app_image)
     .execute(&mut *tx)
     .await;
 
@@ -738,8 +747,8 @@ pub async fn create_machine(
 
     // 调用 Agent 创建 VM（使用 machine_lifecycle 服务，含重试和退款）
     let machine_name = format!("machine-{}", machine_id);
-    let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
-    let app_image = form.app_image.unwrap_or_default();
+    let root_password = form.root_password.unwrap_or_default();
+    let app_secrets = form.app_secrets.unwrap_or_else(|| "{}".to_string());
     
     services::machine_lifecycle::spawn_agent_create_job(
         services::machine_lifecycle::MachineProvisioningJob {
@@ -757,6 +766,8 @@ pub async fn create_machine(
             used_hours: hours,
             image,
             app_image,
+            root_password,
+            app_secrets,
         },
     );
 

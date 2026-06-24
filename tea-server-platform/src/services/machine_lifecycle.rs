@@ -17,6 +17,8 @@ pub struct MachineProvisioningJob {
     pub used_hours: f64,
     pub image: String,        // 系统镜像
     pub app_image: String,    // 应用镜像
+    pub root_password: String, // 用户设置的 root 密码
+    pub app_secrets: String,   // 应用密钥（JSON 字符串）
 }
 
 pub fn spawn_agent_create_job(job: MachineProvisioningJob) {
@@ -46,6 +48,9 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> Option<Value> {
     let agent_url = format!("http://{}:19527", job.server_ip);
     let client = reqwest::Client::new();
 
+    // Parse app_secrets from JSON string
+    let app_secrets_val: Value = serde_json::from_str(&job.app_secrets).unwrap_or(json!({}));
+
     let request_body = json!({
         "name": job.machine_name,
         "cpu": job.cpu,
@@ -55,6 +60,8 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> Option<Value> {
         "image": job.image,
         "app_image": job.app_image,
         "ssh_public_key": crate::services::session::get_ssh_public_key(),
+        "root_password": job.root_password,
+        "app_secrets": app_secrets_val,
     });
 
     let max_retries = 3;

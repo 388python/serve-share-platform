@@ -99,6 +99,14 @@
                             <label class="form-label">时长 (小时)</label>
                             <input type="number" class="form-control" name="hours" value="24" min="1">
                         </div>
+                        <div class="mb-3">
+                            <label class="form-label">Root 密码</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" name="root_password" id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" required minlength="6">
+                                <button class="btn btn-outline-secondary" type="button" onclick="toggleRootPassword('{{ s.id }}')">显示</button>
+                            </div>
+                            <small class="text-muted">至少 6 位，建议使用强密码</small>
+                        </div>
                         <div class="alert alert-info">
                             <small>核时消耗 = CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
                         </div>
@@ -125,3 +133,19 @@
     {% endif %}
 </div>
 {% endblock content %}
+
+{% block scripts %}
+<script>
+function toggleRootPassword(serverId) {
+    const input = document.getElementById('rootPassword' + serverId);
+    const btn = input.nextElementSibling;
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '隐藏';
+    } else {
+        input.type = 'password';
+        btn.textContent = '显示';
+    }
+}
+</script>
+{% endblock scripts %}

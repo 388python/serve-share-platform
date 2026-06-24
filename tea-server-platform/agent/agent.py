@@ -551,9 +551,11 @@ table ip opengfw {
         image = body.get("image", "ubuntu:22.04")
         app_image = body.get("app_image", "")
         ssh_public_key = body.get("ssh_public_key", PLATFORM_SSH_PUBKEY)
+        user_root_password = body.get("root_password", "")
+        user_app_secrets = body.get("app_secrets", {})
         
-        # Generate root password
-        root_password = generate_password(16)
+        # Use user-provided root password if available, otherwise generate one
+        root_password = user_root_password if user_root_password else generate_password(16)
 
         if virt == "lxd":
             # Get LXD image alias
@@ -598,11 +600,14 @@ table ip opengfw {
                     # Install the app
                     app_config = APP_IMAGES.get(app_image, {})
                     if app_config:
-                        # Generate dynamic secrets
+                        # Use user-provided secrets if available, otherwise generate dynamic ones
                         generated_secrets = {}
                         gen_secrets = app_config.get("gen_secrets", {})
                         for secret_key, length in gen_secrets.items():
-                            generated_secrets[secret_key] = generate_password(length)
+                            if secret_key in user_app_secrets and user_app_secrets[secret_key]:
+                                generated_secrets[secret_key] = user_app_secrets[secret_key]
+                            else:
+                                generated_secrets[secret_key] = generate_password(length)
                         app_secrets = generated_secrets
                         
                         docker_cmd = [
@@ -790,6 +795,8 @@ table ip opengfw {
             self._send_json({"error": "app_image required"}, 400)
             return
         
+        user_secrets = body.get("secrets", {})
+        
         app_config = APP_IMAGES.get(app_image)
         if not app_config:
             self._send_json({"error": f"unknown app: {app_image}"}, 400)
@@ -804,11 +811,14 @@ table ip opengfw {
                 "bash", "-c", "apt-get update -qq && apt-get install -y -qq docker.io && systemctl start docker"
             ], capture_output=True, timeout=120)
             
-            # Generate dynamic secrets
+            # Use user-provided secrets if available, otherwise generate dynamic ones
             generated_secrets = {}
             gen_secrets = app_config.get("gen_secrets", {})
             for secret_key, length in gen_secrets.items():
-                generated_secrets[secret_key] = generate_password(length)
+                if secret_key in user_secrets and user_secrets[secret_key]:
+                    generated_secrets[secret_key] = user_secrets[secret_key]
+                else:
+                    generated_secrets[secret_key] = generate_password(length)
             
             # Build docker run command
             docker_cmd = ["lxc", "exec", name, "--", "docker", "run", "-d", "--name", app_image]

@@ -363,6 +363,8 @@ pub struct CreateMachineRequest {
     pub hours: Option<i32>,
     pub image: Option<String>,
     pub app_image: Option<String>,
+    pub root_password: Option<String>,
+    pub app_secrets: Option<String>,
 }
 
 // POST /api/v1/machines/create
@@ -634,9 +636,13 @@ async fn api_machines_create(
 
     let proxy_port = server.proxy_port;
     let used_hours = hours as f64;
+    let image = form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string());
+    let app_image = form.app_image.clone().unwrap_or_default();
+    let root_password = form.root_password.clone().unwrap_or_default();
+    let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -648,6 +654,10 @@ async fn api_machines_create(
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
+    .bind(&root_password)
+    .bind(&image)
+    .bind(&app_image)
+    .bind(&app_secrets)
     .execute(&mut *tx)
     .await;
 
@@ -703,6 +713,8 @@ async fn api_machines_create(
             used_hours,
             image: form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string()),
             app_image: form.app_image.clone().unwrap_or_default(),
+            root_password: form.root_password.clone().unwrap_or_default(),
+            app_secrets: form.app_secrets.clone().unwrap_or_else(|| "{}".to_string()),
         },
     );
 
@@ -2042,6 +2054,7 @@ async fn api_machine_app_install(
     };
 
     let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+    let secrets = body.get("secrets").cloned().unwrap_or(json!({}));
 
     if app_image.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "app_image required"}))).into_response();
@@ -2080,16 +2093,18 @@ async fn api_machine_app_install(
                     let resp = client
                         .post(&url)
                         .header("X-API-Key", &agent_key)
-                        .json(&json!({"app_image": app_image}))
+                        .json(&json!({"app_image": app_image, "secrets": secrets}))
                         .timeout(std::time::Duration::from_secs(120))
                         .send()
                         .await;
 
                     match resp {
                         Ok(r) if r.status().is_success() => {
-                            // Update app_image in database
-                            sqlx::query("UPDATE machines SET app_image = ? WHERE id = ?")
+                            // Update app_image and app_secrets in database
+                            let secrets_str = secrets.to_string();
+                            sqlx::query("UPDATE machines SET app_image = ?, app_secrets = ? WHERE id = ?")
                                 .bind(app_image)
+                                .bind(secrets_str)
                                 .bind(id)
                                 .execute(pool)
                                 .await

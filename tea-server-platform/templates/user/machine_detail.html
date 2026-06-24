@@ -275,7 +275,7 @@
                 <div class="row g-3 mb-3">
                     <div class="col-md-8">
                         <label class="form-label fw-medium"><i class="bi bi-download me-1"></i>安装新应用</label>
-                        <select class="form-select" id="install-app">
+                        <select class="form-select" id="install-app" onchange="updateAppSecretInputs()">
                             <option value="">选择应用...</option>
                             <option value="mc">🎮 Minecraft Server</option>
                             <option value="sub2api">🔄 Subscription Converter</option>
@@ -291,6 +291,10 @@
                             <i class="bi bi-download me-1"></i>安装
                         </button>
                     </div>
+                </div>
+                <div id="app-secrets-container" style="display:none;" class="mb-3 p-3 bg-light rounded">
+                    <h6 class="fw-semibold mb-3">应用配置</h6>
+                    <div id="app-secret-inputs"></div>
                 </div>
                 {% if machine.app_image and machine.app_image != '' %}
                 <div class="d-flex align-items-center justify-content-between p-3 bg-light rounded">
@@ -583,12 +587,75 @@ document.getElementById('reinstall-form').addEventListener('submit', async (e) =
     }
 });
 
+const APP_SECRETS = {
+    newapi: [
+        { key: 'SESSION_SECRET', label: 'Session Secret', type: 'text', required: true, minlength: 16, placeholder: '至少 16 位' }
+    ],
+    mysql: [
+        { key: 'MYSQL_ROOT_PASSWORD', label: 'Root 密码', type: 'password', required: true, minlength: 6, placeholder: '至少 6 位' }
+    ]
+};
+
+function updateAppSecretInputs() {
+    const app = document.getElementById('install-app').value;
+    const container = document.getElementById('app-secrets-container');
+    const inputsDiv = document.getElementById('app-secret-inputs');
+    
+    const fields = APP_SECRETS[app];
+    if (!fields || fields.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    container.style.display = 'block';
+    inputsDiv.innerHTML = '';
+    
+    fields.forEach(field => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mb-3';
+        wrapper.innerHTML = `
+            <label class="form-label">${field.label}</label>
+            <input type="${field.type}" class="form-control" id="secret-${field.key}" 
+                   placeholder="${field.placeholder}" ${field.required ? 'required' : ''} 
+                   minlength="${field.minlength || ''}">
+        `;
+        inputsDiv.appendChild(wrapper);
+    });
+}
+
+function collectAppSecrets() {
+    const app = document.getElementById('install-app').value;
+    const fields = APP_SECRETS[app] || [];
+    const secrets = {};
+    
+    for (const field of fields) {
+        const input = document.getElementById(`secret-${field.key}`);
+        if (input) {
+            const val = input.value.trim();
+            if (field.required && !val) {
+                alert(`请填写 ${field.label}`);
+                return null;
+            }
+            if (field.minlength && val.length < field.minlength) {
+                alert(`${field.label} 至少 ${field.minlength} 位`);
+                return null;
+            }
+            secrets[field.key] = val;
+        }
+    }
+    
+    return secrets;
+}
+
 async function installApp() {
     const app = document.getElementById('install-app').value;
     if (!app) {
         alert('请选择要安装的应用');
         return;
     }
+    
+    const secrets = collectAppSecrets();
+    if (secrets === null) return;
     
     try {
         const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/app-install`, {
@@ -597,7 +664,7 @@ async function installApp() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${API_KEY}`
             },
-            body: JSON.stringify({ app_image: app })
+            body: JSON.stringify({ app_image: app, secrets: secrets })
         });
         const data = await resp.json();
         
