@@ -200,6 +200,7 @@ pub struct ContributeServerRequest {
     pub nat_port_end: Option<i32>,
     pub nat_multiplier: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub free_nat_hours: Option<f64>, // 免费 NAT 额度（小时），由发布者配置
     pub linux_version: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
@@ -234,6 +235,7 @@ async fn api_servers_contribute(
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let free_nat_hours = form.free_nat_hours.unwrap_or(0.0);
     let agent_key = form.agent_key.clone().unwrap_or_default();
 
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
@@ -264,6 +266,7 @@ async fn api_servers_contribute(
     .bind(nat_port_end)
     .bind(nat_mult)
     .bind(max_machine_hours)
+    .bind(free_nat_hours)
     .bind(form.linux_version.as_deref().unwrap_or(""))
     .bind(form.description.as_deref().unwrap_or(""))
     .bind(form.provider.as_deref().unwrap_or(""))
@@ -459,6 +462,26 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
+    // Calculate cost including NAT if expose_ip is enabled
+    // NAT is charged per machine (1 port) if expose_ip is enabled
+    // Free NAT hours are provided by the server publisher
+    let nat_ports = if server.expose_ip && server.nat_port_start > 0 { 1 } else { 0 };
+    
+    // Calculate NAT cost per hour
+    let global_nat = db::get_config("global_nat_multiplier")
+        .await
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    let nat_cost_per_hour = nat_ports as f64 * server.nat_multiplier * global_nat;
+    
+    // Apply free NAT hours (subtract from total cost)
+    let free_nat_hours = server.free_nat_hours;
+    let free_nat_amount = if free_nat_hours > 0.0 && nat_cost_per_hour > 0.0 {
+        (free_nat_hours.min(hours as f64) * nat_cost_per_hour).min(nat_cost_per_hour * hours as f64)
+    } else {
+        0.0
+    };
+    
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
         form.cpu_cores,
         form.memory_gb,
@@ -468,12 +491,13 @@ async fn api_machines_create(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
-        0,
+        0, // NAT already accounted in free_nat_amount
         0.0,
     )
     .await;
 
-    let total_cost = ch_per_hour * hours as f64;
+    let nat_cost = (nat_cost_per_hour * hours as f64) - free_nat_amount;
+    let total_cost = ch_per_hour * hours as f64 + nat_cost.max(0.0);
 
     if total_available < total_cost {
         return (
@@ -642,7 +666,7 @@ async fn api_machines_create(
     let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -658,6 +682,7 @@ async fn api_machines_create(
     .bind(&image)
     .bind(&app_image)
     .bind(&app_secrets)
+    .bind(free_nat_hours)
     .execute(&mut *tx)
     .await;
 

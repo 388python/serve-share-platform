@@ -51,6 +51,7 @@ pub struct Server {
     pub nat_port_end: i32,
     pub nat_multiplier: f64,
     pub max_machine_hours: f64,
+    pub free_nat_hours: f64, // 免费 NAT 额度（小时），由发布者配置
     pub is_premium: bool,
     pub premium_expires_at: Option<DateTime<Utc>>,
     pub linux_version: String,
@@ -85,6 +86,7 @@ pub struct Machine {
     pub root_password: Option<String>, // root 密码（加密存储）
     pub ip_address: Option<String>,    // 机器 IP 地址
     pub app_secrets: Option<String>,   // 应用密钥（JSON 格式）
+    pub free_nat_hours: Option<f64>,   // 该机器的免费 NAT 额度（小时）
 }
 
 // 应用镜像定义

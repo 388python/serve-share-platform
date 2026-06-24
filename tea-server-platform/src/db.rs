@@ -238,6 +238,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "nat_port_end INTEGER NOT NULL DEFAULT 0",
         "nat_multiplier REAL NOT NULL DEFAULT 1.0",
         "max_machine_hours REAL NOT NULL DEFAULT 0",
+        "free_nat_hours REAL NOT NULL DEFAULT 0",
         "linux_version TEXT NOT NULL DEFAULT ''",
         "description TEXT NOT NULL DEFAULT ''",
         "provider TEXT NOT NULL DEFAULT ''",
@@ -270,6 +271,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "root_password TEXT DEFAULT ''",
         "ip_address TEXT DEFAULT ''",
         "app_secrets TEXT DEFAULT ''",
+        "free_nat_hours REAL DEFAULT 0",
     ];
     for col in &machine_cols {
         let _ = sqlx::query(&format!("ALTER TABLE machines ADD COLUMN {}", col))

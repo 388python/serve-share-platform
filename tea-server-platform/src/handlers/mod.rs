@@ -399,7 +399,7 @@ pub async fn contribute_server_page(
 
     let rendered = state
         .templates
-        .render("user/servers/contribute.html", &ctx)
+        .render("user/contribute.html", &ctx)
         .unwrap_or_default();
     Ok(Html(rendered))
 }
@@ -415,6 +415,20 @@ pub struct ContributeServerForm {
     pub bandwidth_mbps: Option<f64>,
     pub disk_gb: f64,
     pub virt_type: Option<String>,
+    pub description: Option<String>,
+    pub provider: Option<String>,
+    pub cpu_multiplier: Option<f64>,
+    pub memory_multiplier: Option<f64>,
+    pub bandwidth_multiplier: Option<f64>,
+    pub disk_multiplier: Option<f64>,
+    pub use_bonus: Option<String>,
+    pub linux_version: Option<String>,
+    pub expires_days: Option<i32>,
+    pub nat_port_start: Option<i32>,
+    pub nat_port_end: Option<i32>,
+    pub nat_multiplier: Option<f64>,
+    pub free_nat_hours: Option<f64>,
+    pub max_machine_hours: Option<f64>,
 }
 
 pub async fn contribute_server_submit(
@@ -441,9 +455,20 @@ pub async fn contribute_server_submit(
     let pool = db::get_db();
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
     let bandwidth = form.bandwidth_mbps.unwrap_or(0.0);
+    let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
+    let mem_mult = form.memory_multiplier.unwrap_or(1.0);
+    let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
+    let disk_mult = form.disk_multiplier.unwrap_or(1.0);
+    let nat_port_start = form.nat_port_start.unwrap_or(0);
+    let nat_port_end = form.nat_port_end.unwrap_or(0);
+    let nat_mult = form.nat_multiplier.unwrap_or(1.0);
+    let free_nat_hours = form.free_nat_hours.unwrap_or(0.0);
+    let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let expires_days = form.expires_days.unwrap_or(30);
+    let use_bonus = form.use_bonus.as_ref().map(|v| v == "on").unwrap_or(false);
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, virt_type, is_active, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now','+30 days'), CURRENT_TIMESTAMP)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', format('+{} days', ?)), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -454,7 +479,22 @@ pub async fn contribute_server_submit(
     .bind(form.memory_gb)
     .bind(bandwidth)
     .bind(form.disk_gb)
+    .bind(cpu_mult)
+    .bind(mem_mult)
+    .bind(bw_mult)
+    .bind(disk_mult)
+    .bind(use_bonus)
     .bind(&virt_type)
+    .bind(expires_days)
+    .bind(nat_port_start > 0)
+    .bind(nat_port_start)
+    .bind(nat_port_end)
+    .bind(nat_mult)
+    .bind(max_machine_hours)
+    .bind(free_nat_hours)
+    .bind(form.linux_version.as_deref().unwrap_or(""))
+    .bind(form.description.as_deref().unwrap_or(""))
+    .bind(form.provider.as_deref().unwrap_or(""))
     .execute(pool)
     .await;
 
