@@ -83,6 +83,8 @@ pub struct Machine {
     pub web_port: Option<i32>,        // Web 控制面板端口
     pub vnc_port: Option<i32>,        // VNC 端口
     pub root_password: Option<String>, // root 密码（加密存储）
+    pub ip_address: Option<String>,    // 机器 IP 地址
+    pub app_secrets: Option<String>,   // 应用密钥（JSON 格式）
 }
 
 // 应用镜像定义

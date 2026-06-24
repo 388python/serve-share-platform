@@ -268,6 +268,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "web_port INTEGER DEFAULT 0",
         "vnc_port INTEGER DEFAULT 0",
         "root_password TEXT DEFAULT ''",
+        "ip_address TEXT DEFAULT ''",
+        "app_secrets TEXT DEFAULT ''",
     ];
     for col in &machine_cols {
         let _ = sqlx::query(&format!("ALTER TABLE machines ADD COLUMN {}", col))

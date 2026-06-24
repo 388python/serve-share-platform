@@ -50,8 +50,9 @@ APP_IMAGES = {
         "name": "New API (One API Fork)",
         "docker_image": "calciumion/new-api",
         "ports": [3000],
-        "env": {"SQL_DSN": "", "SESSION_SECRET": "random_secret"},
-        "setup_cmd": "docker run -d --name newapi -p 3000:3000 -v /opt/newapi:/data -e SESSION_SECRET=random_secret calciumion/new-api",
+        "env": {"SQL_DSN": ""},
+        "gen_secrets": {"SESSION_SECRET": 32},
+        "setup_cmd": None,
     },
     "cliproxyapi": {
         "name": "CLI Proxy API",
@@ -71,7 +72,8 @@ APP_IMAGES = {
         "name": "MySQL Database",
         "docker_image": "mysql:8.0",
         "ports": [3306],
-        "env": {"MYSQL_ROOT_PASSWORD": "rootpass123"},
+        "env": {},
+        "gen_secrets": {"MYSQL_ROOT_PASSWORD": 16},
         "setup_cmd": None,
     },
     "redis": {
@@ -585,6 +587,8 @@ table ip opengfw {
                 _inject_ssh_key(name, ssh_public_key, "lxd")
                 
                 # Install Docker if app_image requires it
+                app_secrets = {}
+                
                 if app_image and APP_IMAGES.get(app_image, {}).get("docker_image"):
                     subprocess.run([
                         "lxc", "exec", name, "--",
@@ -594,6 +598,13 @@ table ip opengfw {
                     # Install the app
                     app_config = APP_IMAGES.get(app_image, {})
                     if app_config:
+                        # Generate dynamic secrets
+                        generated_secrets = {}
+                        gen_secrets = app_config.get("gen_secrets", {})
+                        for secret_key, length in gen_secrets.items():
+                            generated_secrets[secret_key] = generate_password(length)
+                        app_secrets = generated_secrets
+                        
                         docker_cmd = [
                             "lxc", "exec", name, "--",
                             "docker", "run", "-d",
@@ -602,6 +613,9 @@ table ip opengfw {
                         for port in app_config.get("ports", []):
                             docker_cmd.extend(["-p", f"{port}:{port}"])
                         for key, val in app_config.get("env", {}).items():
+                            if val:
+                                docker_cmd.extend(["-e", f"{key}={val}"])
+                        for key, val in generated_secrets.items():
                             docker_cmd.extend(["-e", f"{key}={val}"])
                         docker_cmd.append(app_config["docker_image"])
                         subprocess.run(docker_cmd, capture_output=True, timeout=60)
@@ -620,6 +634,7 @@ table ip opengfw {
                     "root_password": root_password,
                     "image": image,
                     "app_image": app_image,
+                    "app_secrets": app_secrets,
                     "output": result.stdout,
                 })
             else:
@@ -789,11 +804,20 @@ table ip opengfw {
                 "bash", "-c", "apt-get update -qq && apt-get install -y -qq docker.io && systemctl start docker"
             ], capture_output=True, timeout=120)
             
-            # Run the app container
+            # Generate dynamic secrets
+            generated_secrets = {}
+            gen_secrets = app_config.get("gen_secrets", {})
+            for secret_key, length in gen_secrets.items():
+                generated_secrets[secret_key] = generate_password(length)
+            
+            # Build docker run command
             docker_cmd = ["lxc", "exec", name, "--", "docker", "run", "-d", "--name", app_image]
             for port in app_config.get("ports", []):
                 docker_cmd.extend(["-p", f"{port}:{port}"])
             for key, val in app_config.get("env", {}).items():
+                if val:
+                    docker_cmd.extend(["-e", f"{key}={val}"])
+            for key, val in generated_secrets.items():
                 docker_cmd.extend(["-e", f"{key}={val}"])
             docker_cmd.append(app_config["docker_image"])
             
@@ -803,6 +827,7 @@ table ip opengfw {
                 "status": "installed" if result.returncode == 0 else "error",
                 "app_name": app_config["name"],
                 "ports": app_config["ports"],
+                "secrets": generated_secrets,
                 "output": result.stdout,
                 "error": result.stderr,
             })
