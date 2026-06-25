@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use ssh2::Session;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::db;
@@ -53,21 +56,30 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
 
     let pool = db::get_db();
 
-    let machine_info: Option<(i64, i32)> = sqlx::query_as(
-        "SELECT server_id, ssh_port FROM machines WHERE id = ?"
+    // Get machine info: server_id, ssh_port, status
+    let machine_info: Option<(i64, i32, String)> = sqlx::query_as(
+        "SELECT server_id, ssh_port, status FROM machines WHERE id = ?"
     )
     .bind(machine_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    if machine_info.is_none() {
-        send_ws_msg(&mut ws_tx, "error", None, Some("机器不存在".to_string())).await;
+    let (server_id, ssh_port, machine_status) = match machine_info {
+        Some((sid, port, status)) => (sid, port, status),
+        None => {
+            let _ = send_ws_msg(&mut ws_tx, "error", None, Some("机器不存在".to_string())).await;
+            return;
+        }
+    };
+
+    // Check if machine is running
+    if machine_status != "running" {
+        let _ = send_ws_msg(&mut ws_tx, "error", None, Some("机器未运行".to_string())).await;
         return;
     }
 
-    let (server_id, ssh_port) = machine_info.unwrap();
-
+    // Get server info
     let server_info: Option<(String, String)> = sqlx::query_as(
         "SELECT ip, agent_key FROM servers WHERE id = ?"
     )
@@ -76,22 +88,25 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
     .await
     .unwrap_or(None);
 
-    if server_info.is_none() {
-        send_ws_msg(&mut ws_tx, "error", None, Some("服务器不存在".to_string())).await;
-        return;
-    }
+    let (server_ip, agent_key) = match server_info {
+        Some(info) => info,
+        None => {
+            let _ = send_ws_msg(&mut ws_tx, "error", None, Some("服务器不存在".to_string())).await;
+            return;
+        }
+    };
 
-    let (server_ip, agent_key) = server_info.unwrap();
+    // Send ready message
+    let _ = send_ws_msg(&mut ws_tx, "ready", None, None).await;
 
-    send_ws_msg(&mut ws_tx, "ready", None, None).await;
-
+    // Get machine IP from agent
     let machine_name = format!("machine-{}", machine_id);
     let agent_url = format!("http://{}:19527/machine/{}", server_ip, machine_name);
 
     let machine_ip = match reqwest::Client::new()
         .get(&agent_url)
         .header("X-API-Key", &agent_key)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
     {
@@ -108,11 +123,17 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
         _ => server_ip.clone(),
     };
 
+    // Create channels for communication
     let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(100);
     let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(100);
+    let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>(10);
 
-    let ssh_handle = tokio::task::spawn_blocking(move || {
-        ssh_worker(machine_ip, ssh_port, input_rx, output_tx)
+    let machine_ip_clone = machine_ip.clone();
+    let ssh_port = ssh_port;
+
+    // Spawn SSH worker in a separate thread
+    let ssh_handle = thread::spawn(move || {
+        ssh_worker(machine_ip_clone, ssh_port, input_rx, output_tx, resize_rx)
     });
 
     let ws_write_task = tokio::spawn(async move {
@@ -133,6 +154,7 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
                     if let Ok(ws_msg) = serde_json::from_str::<WsMessage>(&text) {
                         match ws_msg.msg_type.as_str() {
                             "auth" => {
+                                // Auth message, send empty data to start
                                 let _ = input_tx.send(b"".to_vec()).await;
                             }
                             "data" => {
@@ -140,21 +162,28 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
                                     let _ = input_tx.send(data.into_bytes()).await;
                                 }
                             }
-                            "resize" => {}
+                            "resize" => {
+                                // Handle PTY resize
+                                if let (Some(cols), Some(rows)) = (ws_msg.cols, ws_msg.rows) {
+                                    let _ = resize_tx.send((cols, rows)).await;
+                                }
+                            }
                             _ => {}
                         }
                     }
                 }
-                Ok(Message::Ping(_data)) => {}
                 Ok(Message::Close(_)) => break,
                 Err(_) => break,
                 _ => {}
             }
         }
+        // Signal end of input
         drop(input_tx);
+        drop(resize_tx);
     });
 
-    let _ = tokio::join!(ws_read_task, ws_write_task, ssh_handle);
+    let _ = tokio::join!(ws_read_task, ws_write_task);
+    let _ = ssh_handle.join();
 }
 
 fn ssh_worker(
@@ -162,17 +191,21 @@ fn ssh_worker(
     ssh_port: i32,
     mut input_rx: mpsc::Receiver<Vec<u8>>,
     output_tx: mpsc::Sender<Vec<u8>>,
+    mut resize_rx: mpsc::Receiver<(u16, u16)>,
 ) {
-    let rt = tokio::runtime::Handle::current();
-
     let connect_addr = format!("{}:{}", machine_ip, ssh_port);
 
-    let tcp = match TcpStream::connect(&connect_addr) {
-        Ok(s) => s,
+    // TCP connection with timeout using set_read_timeout
+    let mut tcp = match TcpStream::connect(&connect_addr) {
+        Ok(s) => {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+            let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
+            s
+        }
         Err(e) => {
-            let _ = rt.block_on(output_tx.send(
-                format!("\x1b[31m[错误] 无法连接到机器: {}\x1b[0m\r\n", e).into_bytes()
-            ));
+            let _ = output_tx.send(
+                format!("\x1b[31m[错误] 无法连接到 {}: {}\x1b[0m\r\n", connect_addr, e).into_bytes()
+            );
             return;
         }
     };
@@ -180,9 +213,9 @@ fn ssh_worker(
     let mut sess = match Session::new() {
         Ok(s) => s,
         Err(e) => {
-            let _ = rt.block_on(output_tx.send(
+            let _ = output_tx.send(
                 format!("\x1b[31m[错误] SSH会话创建失败: {}\x1b[0m\r\n", e).into_bytes()
-            ));
+            );
             return;
         }
     };
@@ -190,64 +223,68 @@ fn ssh_worker(
     sess.set_tcp_stream(tcp);
 
     if let Err(e) = sess.handshake() {
-        let _ = rt.block_on(output_tx.send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] SSH握手失败: {}\x1b[0m\r\n", e).into_bytes()
-        ));
+        );
         return;
     }
 
     let private_key = get_ssh_private_key();
-    if private_key.is_empty() {
-        let _ = rt.block_on(output_tx.send(
-            "\x1b[31m[错误] 平台SSH密钥未配置\x1b[0m\r\n".to_string().into_bytes()
-        ));
+    if private_key.is_empty() || private_key == "NOT_YET_GENERATED" || private_key.contains("FALLBACK") {
+        let _ = output_tx.send(
+            "\x1b[31m[错误] 平台SSH密钥未配置，请联系管理员\x1b[0m\r\n".to_string().into_bytes()
+        );
         return;
     }
 
     if let Err(e) = userauth_pubkey_from_memory(&sess, "root", &private_key) {
-        let _ = rt.block_on(output_tx.send(
-            format!("\x1b[31m[错误] SSH密钥认证失败: {}\x1b[0m\r\n", e).into_bytes()
-        ));
+        let _ = output_tx.send(
+            format!("\x1b[31m[错误] SSH密钥认证失败，请确认机器已注入平台公钥: {}\x1b[0m\r\n", e).into_bytes()
+        );
         return;
     }
 
     let mut channel = match sess.channel_session() {
         Ok(c) => c,
         Err(e) => {
-            let _ = rt.block_on(output_tx.send(
+            let _ = output_tx.send(
                 format!("\x1b[31m[错误] SSH通道创建失败: {}\x1b[0m\r\n", e).into_bytes()
-            ));
+            );
             return;
         }
     };
 
     if let Err(e) = channel.request_pty("xterm-256color", None, Some((80, 24, 0, 0))) {
-        let _ = rt.block_on(output_tx.send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] PTY请求失败: {}\x1b[0m\r\n", e).into_bytes()
-        ));
+        );
         return;
     }
 
     if let Err(e) = channel.shell() {
-        let _ = rt.block_on(output_tx.send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] Shell启动失败: {}\x1b[0m\r\n", e).into_bytes()
-        ));
+        );
         return;
     }
 
-    let _ = rt.block_on(output_tx.send(
+    let _ = output_tx.send(
         format!("\x1b[32m[已连接到 {}]\x1b[0m\r\n", connect_addr).into_bytes()
-    ));
+    );
 
-    let channel_arc = Arc::new(std::sync::Mutex::new(channel));
-    let channel_read = channel_arc.clone();
-    let channel_write = channel_arc.clone();
+    let running = Arc::new(AtomicBool::new(true));
+    let running_read = running.clone();
+    let running_write = running.clone();
+
+    // Use Arc<Mutex> to share channel between read thread and main loop
+    let channel = Arc::new(std::sync::Mutex::new(channel));
+
+    // Read thread for SSH output
     let output_tx_clone = output_tx.clone();
-
-    let read_handle = std::thread::spawn(move || {
-        let rt2 = tokio::runtime::Handle::current();
-        let mut buf = [0u8; 4096];
-        loop {
+    let channel_read = channel.clone();
+    let read_handle = thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while running_read.load(Ordering::Relaxed) {
             let n = {
                 let mut ch = channel_read.lock().unwrap();
                 match ch.read(&mut buf) {
@@ -256,25 +293,56 @@ fn ssh_worker(
                     Err(_) => break,
                 }
             };
-            if rt2.block_on(output_tx_clone.send(buf[..n].to_vec())).is_err() {
+            if output_tx_clone.blocking_send(buf[..n].to_vec()).is_err() {
                 break;
             }
         }
     });
 
+    // Main loop: handle input and resize events
     loop {
-        match rt.block_on(input_rx.recv()) {
+        // Use recv_timeout or select-like pattern
+        let input_data = {
+            let timeout = Duration::from_millis(100);
+            let start = std::time::Instant::now();
+            loop {
+                match input_rx.try_recv() {
+                    Ok(data) => break Some(data),
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        if start.elapsed() >= timeout {
+                            break None;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => break None,
+                }
+            }
+        };
+
+        // Handle resize events (higher priority)
+        if let Ok((cols, rows)) = resize_rx.try_recv() {
+            let mut ch = channel.lock().unwrap();
+            let _ = ch.request_pty_size(cols as u32, rows as u32, Some(0), Some(0));
+        }
+
+        match input_data {
             Some(data) => {
-                let mut ch = channel_write.lock().unwrap();
+                let mut ch = channel.lock().unwrap();
                 if ch.write_all(&data).is_err() {
                     break;
                 }
                 let _ = ch.flush();
             }
-            None => break,
+            None => {
+                // Check if SSH session is still alive
+                if !running_write.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
         }
     }
 
+    running.store(false, Ordering::Relaxed);
     let _ = read_handle.join();
 }
 
