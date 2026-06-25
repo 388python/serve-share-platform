@@ -259,53 +259,68 @@
             </div>
         </div>
         {% else %}
-        <!-- SSH 连接信息 (Linux) -->
+        <!-- SSH + VNC 连接信息 (Linux) -->
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-info bg-gradient text-white border-0 py-3">
-                <h5 class="mb-0 fw-semibold"><i class="bi bi-key me-2"></i>SSH 连接信息</h5>
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-key me-2"></i>连接信息</h5>
             </div>
             <div class="card-body p-4">
                 {% if machine.status == "running" %}
-                <div class="row g-3 mb-3">
-                    <div class="col-md-6">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
-                            <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" placeholder="主机地址" readonly>
+                <!-- SSH 连接 -->
+                <div class="mb-3">
+                    <h6 class="fw-semibold text-success"><i class="bi bi-terminal me-1"></i>SSH 连接</h6>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
+                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" placeholder="主机地址" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
+                                <input type="text" class="form-control" id="ssh-port" value="{{ machine.ssh_port | default(value="22") }}" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                                <input type="text" class="form-control" id="ssh-user" value="root" readonly>
+                            </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
-                            <input type="text" class="form-control" id="ssh-port" value="{{ machine.ssh_port | default(value="22") }}" readonly>
-                        </div>
+                    <div class="input-group mt-2">
+                        <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+                        <input type="password" class="form-control" id="ssh-password" placeholder="点击右侧按钮获取密码">
+                        <button class="btn btn-outline-primary" type="button" onclick="fetchPassword()">
+                            <i class="bi bi-eye me-1"></i>获取密码
+                        </button>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
+                            <i class="bi bi-eye-slash"></i>
+                        </button>
                     </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
-                            <input type="text" class="form-control" id="ssh-user" value="root" readonly>
-                        </div>
-                    </div>
-                </div>
-                <div class="input-group mb-3">
-                    <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
-                    <input type="password" class="form-control" id="ssh-password" placeholder="点击右侧按钮获取密码">
-                    <button class="btn btn-outline-primary" type="button" onclick="fetchPassword()">
-                        <i class="bi bi-eye me-1"></i>获取密码
-                    </button>
-                    <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
-                        <i class="bi bi-eye-slash"></i>
-                    </button>
-                </div>
-                <div class="alert alert-info d-flex justify-content-between align-items-center py-2 mb-0">
-                    <div>
-                        <i class="bi bi-info-circle me-1"></i>
+                    <div class="mt-2">
                         <strong>SSH 命令：</strong>
                         <code class="user-select-all">ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip if server else '机器IP' }}</code>
+                        <button class="btn btn-sm btn-outline-info ms-2" onclick="copySSHCommand()">
+                            <i class="bi bi-copy"></i>
+                        </button>
                     </div>
-                    <button class="btn btn-sm btn-outline-info ms-2" onclick="copySSHCommand()">
-                        <i class="bi bi-copy"></i>
-                    </button>
                 </div>
+                
+                <!-- VNC 连接 (KVM) -->
+                {% if machine.virt_type == "kvm" and machine.novnc_port %}
+                <div class="mb-0">
+                    <h6 class="fw-semibold text-info"><i class="bi bi-display me-1"></i>VNC Web 访问</h6>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="http://{{ server.ip if server else 'localhost' }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
+                            <i class="bi bi-external-link me-1"></i>打开 VNC
+                        </a>
+                        <span class="text-muted">Web 端口: {{ machine.novnc_port }} | VNC 端口: {{ machine.vnc_port }}</span>
+                    </div>
+                </div>
+                {% endif %}
+                
                 {% else %}
                 <div class="text-center py-4">
                     <i class="bi bi-plug text-muted" style="font-size: 2rem;"></i>

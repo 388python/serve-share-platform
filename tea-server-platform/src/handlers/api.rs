@@ -463,9 +463,24 @@ async fn api_machines_create(
     }
 
     // Calculate cost including NAT if expose_ip is enabled
-    // NAT is charged per machine (1 port) if expose_ip is enabled
+    // NAT ports count based on virt type and OS:
+    // - LXD: 1 port (SSH)
+    // - KVM Linux: 2 ports (SSH + VNC)
+    // - KVM Windows: 3 ports (SSH + RDP + VNC)
     // Free NAT hours are provided by the server publisher
-    let nat_ports = if server.expose_ip && server.nat_port_start > 0 { 1 } else { 0 };
+    let image = form.image.as_deref().unwrap_or("ubuntu:22.04");
+    let is_windows = image.starts_with("windows:");
+    let is_kvm = server.virt_type == "kvm";
+    
+    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
+        if is_kvm {
+            if is_windows { 3 } else { 2 }
+        } else {
+            1
+        }
+    } else {
+        0
+    };
     
     // Calculate NAT cost per hour
     let global_nat = db::get_config("global_nat_multiplier")
@@ -569,20 +584,30 @@ async fn api_machines_create(
     }
 
     // Check NAT port capacity within transaction
-    if server.expose_ip && server.nat_port_start > 0 {
-        let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
-        )
-        .bind(server.id)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap_or((0,));
+    if server.expose_ip && server.nat_port_start > 0 && nat_ports > 0 {
+        // Calculate used ports: 1 per LXD machine, 2 per KVM Linux, 3 per KVM Windows
+        let used_ports_query = r#"
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN virt_type = 'kvm' AND image LIKE 'windows:%' THEN 3
+                    WHEN virt_type = 'kvm' THEN 2
+                    ELSE 1
+                END
+            ), 0)
+            FROM machines 
+            WHERE server_id = ? AND status IN ('pending', 'running')
+        "#;
+        let used_ports: (i64,) = sqlx::query_as(used_ports_query)
+            .bind(server.id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap_or((0,));
         let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
-        if used_ports.0 + 1 > total_available_nat {
+        if used_ports.0 + nat_ports as i64 > total_available_nat {
             let _ = tx.rollback().await;
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "no_nat_ports", "message": "Server has no available NAT ports" })),
+                Json(json!({ "error": "no_nat_ports", "message": format!("Server has no available NAT ports (need {}, have {})", nat_ports, total_available_nat - used_ports.0) })),
             )
                 .into_response();
         }
