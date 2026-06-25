@@ -8,9 +8,11 @@ use tower_cookies::Cookies;
 
 use crate::db;
 
+#[allow(dead_code)]
 type HmacSha256 = Hmac<Sha256>;
 
 /// Session data for a logged-in user
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct UserSession {
     pub user_id: i64,
@@ -20,10 +22,12 @@ pub struct UserSession {
     pub ldc_balance: f64,
 }
 
-/// 会话有效期（秒）—— 即使 cookie 未过期，超过此时间的会话也将失效
+/// 会话有效期（秒）—— 即使 cookie 未过期，超过此时间的会话也将失效 (预留)
+#[allow(dead_code)]
 const SESSION_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
-/// Get the secret key from config (fall back to a static runtime key)
+/// Get the secret key from config (fall back to a static runtime key) (预留)
+#[allow(dead_code)]
 fn get_secret() -> Vec<u8> {
     // Use the session_secret from site_config DB table first;
     // fall back to SESSION_SECRET env var; otherwise generate a random
@@ -63,6 +67,8 @@ pub fn uses_default_secret() -> bool {
     })
 }
 
+/// Compute HMAC-SHA256 signature (预留)
+#[allow(dead_code)]
 fn compute_signature(data: &str, secret: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC-SHA256 accepts any key length");
     mac.update(data.as_bytes());
@@ -70,7 +76,8 @@ fn compute_signature(data: &str, secret: &[u8]) -> String {
     BASE64.encode(result.into_bytes())
 }
 
-/// Serialize and sign a session. Format: `base64(data)|signature`
+/// Serialize and sign a session. Format: `base64(data)|signature` (预留)
+#[allow(dead_code)]
 pub fn encode_session(session: &UserSession) -> String {
     let data = format!(
         "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}|ts={}",
@@ -89,7 +96,8 @@ pub fn encode_session(session: &UserSession) -> String {
     format!("{}|{}", BASE64.encode(data.as_bytes()), sig)
 }
 
-/// Verify and decode a signed session cookie value (no DB verification).
+/// Verify and decode a signed session cookie value (no DB verification) (预留)
+#[allow(dead_code)]
 pub fn decode_session(value: &str) -> Option<UserSession> {
     let mut parts = value.rsplitn(2, '|');
     let sig = parts.next()?;
@@ -151,7 +159,8 @@ pub fn decode_session(value: &str) -> Option<UserSession> {
     })
 }
 
-/// Write a signed session cookie
+/// Write a signed session cookie (预留)
+#[allow(dead_code)]
 pub fn set_session_cookie(cookies: &Cookies, session: &UserSession) {
     let encoded = encode_session(session);
     let mut cookie = Cookie::new("session", encoded);
@@ -163,7 +172,8 @@ pub fn set_session_cookie(cookies: &Cookies, session: &UserSession) {
     cookies.add(cookie);
 }
 
-/// Clear the session cookie
+/// Clear the session cookie (预留)
+#[allow(dead_code)]
 pub fn clear_session_cookie(cookies: &Cookies) {
     let mut cookie = Cookie::new("session", "");
     cookie.set_path("/");
@@ -173,16 +183,18 @@ pub fn clear_session_cookie(cookies: &Cookies) {
     cookies.add(cookie);
 }
 
-/// Read and verify a session cookie (no DB verification).
+/// Read and verify a session cookie (no DB verification) (预留)
+#[allow(dead_code)]
 pub fn get_session(cookies: &Cookies) -> Option<UserSession> {
     let session_cookie = cookies.get("session")?;
     decode_session(session_cookie.value())
 }
 
-/// Read and verify a session cookie, plus DB-level sanity checks:
+/// Read and verify a session cookie, plus DB-level sanity checks: (预留)
 /// - User must still exist in the database
 /// - is_admin must match the database record (prevents cookie tampering)
 /// - User must not be banned
+#[allow(dead_code)]
 pub fn get_session_checked(cookies: &Cookies) -> Option<UserSession> {
     let session = get_session(cookies)?;
     let pool = db::get_db();

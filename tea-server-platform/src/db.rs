@@ -260,7 +260,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "used_hours REAL NOT NULL DEFAULT 0",
         "regular_core_hours_used REAL NOT NULL DEFAULT 0",
         "bonus_core_hours_used REAL NOT NULL DEFAULT 0",
-        "max_hours REAL NOT NULL DEFAULT 0",
+        "max_hours REAL",
         "is_premium INTEGER NOT NULL DEFAULT 0",
         "premium_expires_at DATETIME",
         "linux_version TEXT NOT NULL DEFAULT ''",
@@ -268,6 +268,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         "app_image TEXT DEFAULT ''",
         "web_port INTEGER DEFAULT 0",
         "vnc_port INTEGER DEFAULT 0",
+        "novnc_port INTEGER DEFAULT 0",
         "root_password TEXT DEFAULT ''",
         "ip_address TEXT DEFAULT ''",
         "app_secrets TEXT DEFAULT ''",
@@ -641,6 +642,11 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await;
+
+    // Machines: novnc_port for KVM VNC access
+    let _ = sqlx::query("ALTER TABLE machines ADD COLUMN novnc_port INTEGER DEFAULT 0")
+        .execute(pool)
+        .await;
 
     let defaults = vec![
         ("site_name", "茶的服务器公益站"),

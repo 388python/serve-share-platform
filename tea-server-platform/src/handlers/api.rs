@@ -45,11 +45,7 @@ struct LogsQuery {
 
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get("authorization")?.to_str().ok()?;
-    if let Some(rest) = auth.strip_prefix("Bearer ") {
-        Some(rest.trim().to_string())
-    } else {
-        None
-    }
+    auth.strip_prefix("Bearer ").map(|rest| rest.trim().to_string())
 }
 
 // ---- Helper: Validate user API key -> user id ----
@@ -143,6 +139,7 @@ pub struct ApiError {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct ApiSuccess<T> {
     pub success: bool,
@@ -340,11 +337,11 @@ async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key:
                     let _ = channel.wait_close();
                     if channel.exit_status().unwrap_or(1) == 0 {
                         let pool = db::get_db();
-                        let _ = sqlx::query(
+                        drop(sqlx::query(
                             "UPDATE servers SET agent_installed = 1 WHERE id = ?",
                         )
                         .bind(server_id)
-                        .execute(pool);
+                        .execute(pool));
                     }
                 }
             }
@@ -1719,7 +1716,7 @@ async fn api_balance_to_code(
     let fee_pct: f64 = db::get_config("balance_to_code_fee").await
         .unwrap_or_else(|| "0.05".to_string()).parse().unwrap_or(0.05);
 
-    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_start = chrono::Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap_or(chrono::NaiveDateTime::MIN);
     let today_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND created_at >= ?"
     ).bind(user_id).bind(today_start).fetch_one(pool).await.unwrap_or((0,));
@@ -1915,7 +1912,7 @@ async fn api_machine_console(
     .unwrap_or(None);
 
     match machine {
-        Some((id, server_id, virt_type, status)) => {
+        Some((id, server_id, _virt_type, status)) => {
             if status != "running" {
                 return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
             }

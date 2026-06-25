@@ -2,171 +2,490 @@
 
 {% block title %}{{ site_name }} - 贡献服务器{% endblock title %}
 
+{% block banner %}
+<div class="page-banner">
+    <div class="container">
+        <h1><i class="bi bi-hdd-network me-2"></i>贡献服务器</h1>
+        <p>分享你的服务器资源，获得核时奖励，帮助更多人享受云计算的便利。</p>
+    </div>
+</div>
+{% endblock banner %}
+
 {% block content %}
+<!-- SSH 公钥配置提示 -->
 <div class="row mb-4">
     <div class="col-12">
-        <h2>贡献服务器</h2>
-        <p class="text-muted">分享你的服务器资源，获得核时奖励</p>
-    </div>
-</div>
-
-<!-- SSH 公钥配置提示 -->
-<div class="alert alert-info mb-4" role="alert">
-    <h5 class="alert-heading">SSH 公钥配置（必读）</h5>
-    <p>贡献服务器前，你需要将平台的 SSH 公钥添加到你的服务器上。</p>
-    <div class="mb-2">
-        <strong>你的服务器 SSH 公钥：</strong>
-        <code class="d-block mt-1 p-2 bg-light border rounded" style="font-size:0.85em; word-break:break-all;">{{ ssh_public_key }}</code>
-    </div>
-    <a href="/servers/ssh-key-setup" class="btn btn-sm btn-outline-info" target="_blank">查看详细配置指南</a>
-</div>
-
-<div class="row">
-    <div class="col-md-8 mx-auto">
-        <div class="card">
+        <div class="card border-0 shadow-sm ssh-key-card">
+            <div class="card-header bg-gradient-info text-white d-flex align-items-center">
+                <i class="bi bi-key-fill fs-4 me-3"></i>
+                <div>
+                    <h5 class="mb-0 fw-semibold">SSH 公钥配置（必读）</h5>
+                    <small class="opacity-75">贡献服务器前，需要将平台的 SSH 公钥添加到你的服务器上</small>
+                </div>
+            </div>
             <div class="card-body">
-                <form method="post" action="/servers/contribute">
-                    <div class="mb-3">
-                        <label for="name" class="form-label">服务器名称</label>
-                        <input type="text" class="form-control" id="name" name="name" required placeholder="例如：我的高性能服务器">
+                <div class="ssh-key-display mb-3">
+                    <label class="form-label fw-medium">
+                        <i class="bi bi-shield-check text-success me-1"></i>你的服务器 SSH 公钥：
+                    </label>
+                    <div class="ssh-key-box p-3 bg-light rounded d-flex align-items-center justify-content-between">
+                        <code class="ssh-key-text" style="font-size:0.85em; word-break:break-all;">
+                            {{ ssh_public_key }}
+                        </code>
+                        <button class="btn btn-outline-primary btn-sm" onclick="copySSHKey()">
+                            <i class="bi bi-copy me-1"></i>复制
+                        </button>
                     </div>
-                    <div class="mb-3">
-                        <label for="description" class="form-label">机器介绍（可选）</label>
-                        <textarea class="form-control" id="description" name="description" rows="3" placeholder="描述你的服务器用途、配置特点等..."></textarea>
-                    </div>
-                    <div class="mb-3">
-                        <label for="provider" class="form-label">供应商（可选）</label>
-                        <input type="text" class="form-control" id="provider" name="provider" placeholder="例如：阿里云、腾讯云、AWS、自建机房">
-                    </div>
-                    <div class="mb-3">
-                        <label for="ip" class="form-label">服务器 IP 地址</label>
-                        <input type="text" class="form-control" id="ip" name="ip" required placeholder="例如：192.168.1.100">
-                        <small class="text-muted">请确保服务器的 SSH 端口（默认22）对平台可见，且已添加上方公钥</small>
-                    </div>
-                    <div class="mb-3">
-                        <label for="ssh_port" class="form-label">SSH 端口</label>
-                        <input type="number" class="form-control" id="ssh_port" name="ssh_port" value="22">
-                    </div>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <a href="/servers/ssh-key-setup" class="btn btn-info" target="_blank">
+                        <i class="bi bi-book me-1"></i>查看详细配置指南
+                    </a>
+                    <small class="text-muted">
+                        <i class="bi bi-info-circle me-1"></i>配置完成后，平台将自动连接服务器进行验证
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 
-                    <div class="alert alert-info mb-3 small" role="alert">
-                        <strong>服务器配置将由 Agent 自动探测：</strong>平台连接服务器后将自动检测 CPU 核心数、内存、磁盘大小、操作系统版本等信息，无需手动填写。
-                    </div>
+<!-- 贡献奖励说明 -->
+<div class="row mb-4">
+    <div class="col-md-4 mb-3">
+        <div class="reward-card card border-0 shadow-sm h-100">
+            <div class="card-body text-center">
+                <div class="reward-icon mb-3">
+                    <i class="bi bi-lightning-charge-fill fs-1 text-warning"></i>
+                </div>
+                <h5 class="fw-semibold">核时奖励</h5>
+                <p class="text-muted small mb-0">贡献服务器可获得核时奖励，用于创建虚拟机</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="reward-card card border-0 shadow-sm h-100">
+            <div class="card-body text-center">
+                <div class="reward-icon mb-3">
+                    <i class="bi bi-gem fs-1 text-primary"></i>
+                </div>
+                <h5 class="fw-semibold">LDC 奖励</h5>
+                <p class="text-muted small mb-0">优质服务器可获得 LDC 奖励，解锁更多功能</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3">
+        <div class="reward-card card border-0 shadow-sm h-100">
+            <div class="card-body text-center">
+                <div class="reward-icon mb-3">
+                    <i class="bi bi-heart-fill fs-1 text-danger"></i>
+                </div>
+                <h5 class="fw-semibold">公益贡献</h5>
+                <p class="text-muted small mb-0">帮助更多人享受云计算的便利，传递爱心</p>
+            </div>
+        </div>
+    </div>
+</div>
 
-                    <h5 class="mt-3 mb-3">资源倍率设置</h5>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="cpu_multiplier" class="form-label">CPU 倍率</label>
-                            <input type="number" class="form-control" id="cpu_multiplier" name="cpu_multiplier" value="1.0" step="0.1" min="0">
+<!-- 贡献表单 -->
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-gradient-success text-white">
+                <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-plus-circle me-2"></i>贡献服务器
+                </h5>
+            </div>
+            <div class="card-body p-4">
+                <form method="post" action="/servers/contribute" id="contributeForm">
+                    <!-- 基础信息 -->
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-info-circle text-primary me-2"></i>基础信息
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="name">
+                                    <i class="bi bi-server me-1"></i>服务器名称
+                                </label>
+                                <input type="text" class="form-control form-control-lg" id="name" name="name" 
+                                       required placeholder="例如：我的高性能服务器">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="provider">
+                                    <i class="bi bi-building me-1"></i>供应商（可选）
+                                </label>
+                                <input type="text" class="form-control" id="provider" name="provider" 
+                                       placeholder="例如：阿里云、腾讯云、AWS、自建机房">
+                            </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="memory_multiplier" class="form-label">内存倍率</label>
-                            <input type="number" class="form-control" id="memory_multiplier" name="memory_multiplier" value="1.0" step="0.1" min="0">
+                        
+                        <div class="mt-3">
+                            <label class="form-label fw-medium" for="description">
+                                <i class="bi bi-text-left me-1"></i>机器介绍（可选）
+                            </label>
+                            <textarea class="form-control" id="description" name="description" rows="3" 
+                                      placeholder="描述你的服务器用途、配置特点等..."></textarea>
                         </div>
                     </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="bandwidth_multiplier" class="form-label">带宽倍率</label>
-                            <input type="number" class="form-control" id="bandwidth_multiplier" name="bandwidth_multiplier" value="1.0" step="0.1" min="0">
+                    
+                    <!-- 连接配置 -->
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-plug text-success me-2"></i>连接配置
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="ip">
+                                    <i class="bi bi-geo-alt me-1"></i>服务器 IP 地址
+                                </label>
+                                <input type="text" class="form-control form-control-lg" id="ip" name="ip" 
+                                       required placeholder="例如：192.168.1.100">
+                                <small class="text-muted">
+                                    <i class="bi bi-shield-check me-1"></i>请确保 SSH 端口对平台可见，且已添加上方公钥
+                                </small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="ssh_port">
+                                    <i class="bi bi-signpost-2 me-1"></i>SSH 端口
+                                </label>
+                                <input type="number" class="form-control" id="ssh_port" name="ssh_port" 
+                                       value="22" min="1" max="65535">
+                            </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="disk_multiplier" class="form-label">磁盘倍率</label>
-                            <input type="number" class="form-control" id="disk_multiplier" name="disk_multiplier" value="1.0" step="0.1" min="0">
+                        
+                        <!-- 自动探测提示 -->
+                        <div class="alert alert-info d-flex align-items-center mt-3" role="alert">
+                            <i class="bi bi-magic me-2 fs-4"></i>
+                            <div>
+                                <strong>服务器配置将由 Agent 自动探测：</strong>
+                                <span class="small">平台连接服务器后将自动检测 CPU 核心数、内存、磁盘大小、操作系统版本等信息，无需手动填写。</span>
+                            </div>
                         </div>
                     </div>
-
-                    <div class="mb-3 form-check">
-                        {% if lock_bonus == "enabled" %}
-                            <input type="checkbox" name="use_bonus" checked disabled>
-                            <small class="text-muted">（管理员已强制开启赠金）</small>
-                        {% elif lock_bonus == "disabled" %}
-                            <input type="hidden" name="use_bonus" value="off">
-                            <input type="checkbox" name="use_bonus" disabled>
-                            <small class="text-muted">（管理员已强制关闭赠金）</small>
-                        {% else %}
-                            <input type="checkbox" name="use_bonus">
-                        {% endif %}
-                        <label class="form-check-label" for="use_bonus">使用奖励</label>
+                    
+                    <!-- 资源倍率设置 -->
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-sliders text-warning me-2"></i>资源倍率设置
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="cpu_multiplier">
+                                    <i class="bi bi-cpu me-1"></i>CPU 倍率
+                                </label>
+                                <input type="number" class="form-control" id="cpu_multiplier" name="cpu_multiplier" 
+                                       value="1.0" step="0.1" min="0">
+                                <small class="text-muted">控制 CPU 资源的计费倍率</small>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="memory_multiplier">
+                                    <i class="bi bi-memory me-1"></i>内存倍率
+                                </label>
+                                <input type="number" class="form-control" id="memory_multiplier" name="memory_multiplier" 
+                                       value="1.0" step="0.1" min="0">
+                                <small class="text-muted">控制内存资源的计费倍率</small>
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="bandwidth_multiplier">
+                                    <i class="bi bi-speedometer2 me-1"></i>带宽倍率
+                                </label>
+                                <input type="number" class="form-control" id="bandwidth_multiplier" name="bandwidth_multiplier" 
+                                       value="1.0" step="0.1" min="0">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="disk_multiplier">
+                                    <i class="bi bi-hdd me-1"></i>磁盘倍率
+                                </label>
+                                <input type="number" class="form-control" id="disk_multiplier" name="disk_multiplier" 
+                                       value="1.0" step="0.1" min="0">
+                            </div>
+                        </div>
                     </div>
-
+                    
+                    <!-- 虚拟化类型 -->
                     {% if available_virt_types %}
-                    <div class="mb-3">
-                        <label class="form-label">虚拟化类型</label>
-                        <div>
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-grid text-info me-2"></i>虚拟化类型
+                        </h6>
+                        <div class="virt-type-selector">
                             {% for vt in available_virt_types %}
-                            <div class="form-check form-check-inline">
-                                <input class="form-check-input" type="radio" name="virt_type" id="virt_{{ vt }}" value="{{ vt }}" {% if loop.first %}checked{% endif %}>
-                                <label class="form-check-label" for="virt_{{ vt }}">{{ vt | upper }}</label>
+                            <div class="form-check form-check-inline virt-option">
+                                <input class="form-check-input" type="radio" name="virt_type" id="virt_{{ vt }}" 
+                                       value="{{ vt }}" {% if loop.first %}checked{% endif %}>
+                                <label class="form-check-label virt-label" for="virt_{{ vt }}">
+                                    <i class="bi bi-{% if vt == 'kvm' %}server{% else %}box{% endif %} me-1"></i>
+                                    {{ vt | upper }}
+                                </label>
                             </div>
                             {% endfor %}
                         </div>
                     </div>
                     {% endif %}
-
-                    <div class="mb-3">
-                        <label for="linux_version" class="form-label">Linux 版本（可选，留空将自动探测）</label>
-                        <input type="text" class="form-control" id="linux_version" name="linux_version" placeholder="例如：Ubuntu 22.04">
-                    </div>
-
-                    <div class="mb-3">
-                        <label for="expires_days" class="form-label">过期天数</label>
-                        <input type="number" class="form-control" id="expires_days" name="expires_days" value="30" min="1">
-                    </div>
-
-                    <!-- NAT 内网穿透配置 -->
-                    <h6 class="mt-3 mb-3">NAT 端口分配</h6>
-                    <div class="row">
-                        <div class="col-md-3 mb-3">
-                            <label for="nat_port_start" class="form-label">起始端口</label>
-                            <input type="number" class="form-control" id="nat_port_start" name="nat_port_start" value="0" min="0" max="65535">
-                        </div>
-                        <div class="col-md-3 mb-3">
-                            <label for="nat_port_end" class="form-label">结束端口</label>
-                            <input type="number" class="form-control" id="nat_port_end" name="nat_port_end" value="0" min="0" max="65535">
-                        </div>
-                        <div class="col-md-3 mb-3">
-                            <label for="nat_multiplier" class="form-label">NAT 倍率</label>
-                            <input type="number" class="form-control" id="nat_multiplier" name="nat_multiplier" value="1.0" step="0.1" min="0.1">
-                        </div>
-                        <div class="col-md-3 mb-3">
-                            <label for="free_nat_hours" class="form-label">免费 NAT 额度（小时）</label>
-                            <input type="number" class="form-control" id="free_nat_hours" name="free_nat_hours" value="0" min="0" step="1">
+                    
+                    <!-- 系统信息 -->
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-ubuntu text-secondary me-2"></i>系统信息
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="linux_version">
+                                    <i class="bi bi-terminal me-1"></i>Linux 版本（可选）
+                                </label>
+                                <input type="text" class="form-control" id="linux_version" name="linux_version" 
+                                       placeholder="例如：Ubuntu 22.04（留空将自动探测）">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="expires_days">
+                                    <i class="bi bi-calendar me-1"></i>过期天数
+                                </label>
+                                <input type="number" class="form-control" id="expires_days" name="expires_days" 
+                                       value="30" min="1">
+                            </div>
                         </div>
                     </div>
-                    <small class="text-muted mb-3 d-block">设置免费 NAT 额度后，用户开机的最初 N 小时无需支付 NAT 费用。每台开机的机器将占用一个 NAT 端口，超出免费额度按 NAT倍率×全局倍率 计入核时</small>
-
+                    
+                    <!-- NAT 端口分配 -->
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-diagram-3 text-danger me-2"></i>NAT 端口分配
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label fw-medium" for="nat_port_start">起始端口</label>
+                                <input type="number" class="form-control" id="nat_port_start" name="nat_port_start" 
+                                       value="0" min="0" max="65535">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-medium" for="nat_port_end">结束端口</label>
+                                <input type="number" class="form-control" id="nat_port_end" name="nat_port_end" 
+                                       value="0" min="0" max="65535">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-medium" for="nat_multiplier">NAT 倍率</label>
+                                <input type="number" class="form-control" id="nat_multiplier" name="nat_multiplier" 
+                                       value="1.0" step="0.1" min="0.1">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-medium" for="free_nat_hours">免费 NAT 额度（小时）</label>
+                                <input type="number" class="form-control" id="free_nat_hours" name="free_nat_hours" 
+                                       value="0" min="0" step="1">
+                            </div>
+                        </div>
+                        <small class="text-muted d-block mt-2">
+                            <i class="bi bi-info-circle me-1"></i>
+                            设置免费 NAT 额度后，用户开机的最初 N 小时无需支付 NAT 费用。每台开机的机器将占用一个 NAT 端口。
+                        </small>
+                    </div>
+                    
                     <!-- 用户最大开机时长 -->
-                    <div class="mb-3">
-                        <label for="max_machine_hours" class="form-label">用户最大开机时长（小时，0=无限制）</label>
-                        <input type="number" class="form-control" id="max_machine_hours" name="max_machine_hours" value="0" min="0" step="1">
+                    <div class="form-section mb-4">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-medium" for="max_machine_hours">
+                                    <i class="bi bi-clock-history me-1"></i>用户最大开机时长（小时）
+                                </label>
+                                <input type="number" class="form-control" id="max_machine_hours" name="max_machine_hours" 
+                                       value="0" min="0" step="1">
+                                <small class="text-muted">设置为 0 表示无限制</small>
+                            </div>
+                        </div>
                     </div>
-
+                    
                     <!-- 优选套餐 -->
                     {% if premium_enabled == "true" %}
-                    <div class="mb-3">
-                        <label for="premium_days" class="form-label">茶的优选天数（0 = 不开启）</label>
-                        <input type="number" class="form-control" id="premium_days" name="premium_days" value="0" min="0" step="1">
-                        <small class="text-muted">当前费用：<span id="premium_cost_display">{{ premium_ldc_cost }}</span> LDC/天 · 总计：<span id="premium_total_display">0</span> LDC · 你的余额：{{ user_ldc }} LDC</small>
+                    <div class="form-section mb-4">
+                        <h6 class="section-title d-flex align-items-center mb-3">
+                            <i class="bi bi-star-fill text-warning me-2"></i>茶的优选（可选）
+                        </h6>
+                        <div class="premium-config">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-medium" for="premium_days">
+                                        <i class="bi bi-calendar-star me-1"></i>茶的优选天数
+                                    </label>
+                                    <input type="number" class="form-control" id="premium_days" name="premium_days" 
+                                           value="0" min="0" step="1" oninput="updatePremiumTotal()">
+                                    <small class="text-muted">设置为 0 表示不开启</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="premium-cost-display p-3 bg-warning-subtle rounded">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span>每日费用：</span>
+                                            <strong class="text-warning">{{ premium_ldc_cost }} LDC</strong>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span>总计费用：</span>
+                                            <strong class="text-warning" id="premium_total_display">0 LDC</strong>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span>你的余额：</span>
+                                            <strong class="text-primary">{{ user_ldc }} LDC</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     {% endif %}
-
-                    <button type="submit" class="btn btn-primary w-100">提交贡献</button>
+                    
+                    <!-- 使用奖励选项 -->
+                    <div class="form-section mb-4">
+                        <div class="bonus-option p-3 bg-light rounded">
+                            <div class="form-check">
+                                {% if lock_bonus == "enabled" %}
+                                <input type="checkbox" name="use_bonus" checked disabled>
+                                <label class="form-check-label fw-medium">
+                                    <i class="bi bi-gift text-success me-1"></i>使用奖励
+                                    <small class="text-muted">（管理员已强制开启赠金）</small>
+                                </label>
+                                {% elif lock_bonus == "disabled" %}
+                                <input type="hidden" name="use_bonus" value="off">
+                                <input type="checkbox" name="use_bonus" disabled>
+                                <label class="form-check-label fw-medium">
+                                    <i class="bi bi-gift text-secondary me-1"></i>使用奖励
+                                    <small class="text-muted">（管理员已强制关闭赠金）</small>
+                                </label>
+                                {% else %}
+                                <input type="checkbox" name="use_bonus" id="use_bonus">
+                                <label class="form-check-label fw-medium" for="use_bonus">
+                                    <i class="bi bi-gift text-success me-1"></i>使用奖励
+                                </label>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 提交按钮 -->
+                    <div class="form-submit">
+                        <button type="submit" class="btn btn-success btn-lg w-100 py-3">
+                            <i class="bi bi-check-circle me-2"></i>提交贡献
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-function updatePremiumTotal() {
-    var daysInput = document.getElementById('premium_days');
-    if (!daysInput) return;
-    var days = parseInt(daysInput.value) || 0;
-    var daily = parseFloat("{{ premium_ldc_cost }}") || 0;
-    var total = (days * daily).toFixed(2);
-    var el = document.getElementById('premium_total_display');
-    if (el) el.textContent = total;
+<style>
+    /* SSH Key 卡片 */
+    .ssh-key-card .card-header {
+        padding: 1.5rem;
+    }
+    
+    .ssh-key-box {
+        position: relative;
+    }
+    
+    .ssh-key-text {
+        max-width: 80%;
+    }
+    
+    /* 奖励卡片 */
+    .reward-card .reward-icon {
+        width: 80px;
+        height: 80px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--gray-100);
+        border-radius: 50%;
+        transition: all 0.3s ease;
+    }
+    
+    .reward-card:hover .reward-icon {
+        transform: scale(1.1);
+        background: var(--primary-subtle);
+    }
+    
+    /* 表单区域标题 */
+    .section-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--gray-800);
+        border-bottom: 1px solid var(--gray-200);
+        padding-bottom: 0.5rem;
+    }
+    
+    /* 虚拟化类型选择器 */
+    .virt-type-selector {
+        display: flex;
+        gap: 1rem;
+    }
+    
+    .virt-option {
+        flex: 1;
+    }
+    
+    .virt-label {
+        display: flex;
+        align-items: center;
+        padding: 1rem;
+        border: 2px solid var(--gray-200);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .virt-option input:checked + .virt-label {
+        border-color: var(--primary);
+        background: var(--primary-subtle);
+    }
+    
+    /* 优选费用显示 */
+    .premium-cost-display {
+        font-size: 0.9rem;
+    }
+    
+    /* 响应式 */
+    @media (max-width: 768px) {
+        .ssh-key-text {
+            max-width: 100%;
+            font-size: 0.75em;
+        }
+        
+        .virt-type-selector {
+            flex-direction: column;
+        }
+        
+        .reward-card .reward-icon {
+            width: 60px;
+            height: 60px;
+        }
+    }
+</style>
+
+<script>
+function copySSHKey() {
+    const sshKey = `{{ ssh_public_key }}`;
+    navigator.clipboard.writeText(sshKey).then(() => {
+        const btn = event.target.closest('button');
+        btn.innerHTML = '<i class="bi bi-check me-1"></i>已复制';
+        setTimeout(() => {
+            btn.innerHTML = '<i class="bi bi-copy me-1"></i>复制';
+        }, 2000);
+    });
 }
-var premiumDaysInput = document.getElementById('premium_days');
-if (premiumDaysInput) premiumDaysInput.addEventListener('input', updatePremiumTotal);
+
+function updatePremiumTotal() {
+    const daysInput = document.getElementById('premium_days');
+    if (!daysInput) return;
+    
+    const days = parseInt(daysInput.value) || 0;
+    const daily = parseFloat(`{{ premium_ldc_cost }}`) || 0;
+    const total = (days * daily).toFixed(2);
+    
+    const el = document.getElementById('premium_total_display');
+    if (el) el.textContent = total + ' LDC';
+}
+
+// 初始化
 document.addEventListener('DOMContentLoaded', function() {
     updatePremiumTotal();
 });

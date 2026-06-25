@@ -2,104 +2,220 @@
 
 {% block title %}{{ site_name }} - 我的机器{% endblock title %}
 
+{% block banner %}
+<div class="page-banner">
+    <div class="container">
+        <h1><i class="bi bi-server me-2"></i>我的机器</h1>
+        <p>管理你的所有虚拟机，查看状态、连接和控制。</p>
+    </div>
+</div>
+{% endblock banner %}
+
 {% block content %}
+<!-- 快速操作栏 -->
 <div class="row mb-4">
     <div class="col-12">
-        <h2>我的机器</h2>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div class="d-flex gap-2">
+                <a href="/market" class="btn btn-primary">
+                    <i class="bi bi-plus-circle me-2"></i>创建新机器
+                </a>
+                <a href="/dashboard" class="btn btn-outline-primary">
+                    <i class="bi bi-speedometer2 me-2"></i>仪表盘
+                </a>
+            </div>
+            <div class="filter-controls">
+                <select class="form-select form-select-sm" id="statusFilter" onchange="filterMachines()">
+                    <option value="all">全部状态</option>
+                    <option value="running">运行中</option>
+                    <option value="pending">创建中</option>
+                    <option value="stopped">已停止</option>
+                    <option value="failed">创建失败</option>
+                </select>
+            </div>
+        </div>
     </div>
 </div>
 
 <div class="row">
     <div class="col-12">
-        <div class="card">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-gradient-dark text-white">
+                <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-list-ul me-2"></i>机器列表
+                    <span class="badge bg-light ms-2" id="machineCount">{{ machines | length | default(value=0) }} 台</span>
+                </h5>
+            </div>
             <div class="card-body">
                 {% if machines %}
                 <div class="table-responsive">
-                    <table class="table table-striped table-hover">
+                    <table class="table table-hover align-middle" id="machinesTable">
                         <thead>
                             <tr>
-                                <th>ID</th>
-                                <th>创建时间</th>
-                                <th>CPU</th>
-                                <th>内存</th>
-                                <th>磁盘</th>
-                                <th>状态</th>
-                                <th>核时/小时</th>
-                                <th>过期时间</th>
-                                <th>SSH 端口</th>
-                                <th>操作</th>
+                                <th><i class="bi bi-hash me-1"></i>ID</th>
+                                <th><i class="bi bi-clock me-1"></i>创建时间</th>
+                                <th><i class="bi bi-cpu me-1"></i>CPU</th>
+                                <th><i class="bi bi-memory me-1"></i>内存</th>
+                                <th><i class="bi bi-hdd me-1"></i>磁盘</th>
+                                <th><i class="bi bi-activity me-1"></i>状态</th>
+                                <th><i class="bi bi-speedometer me-1"></i>核时/小时</th>
+                                <th><i class="bi bi-calendar me-1"></i>过期时间</th>
+                                <th><i class="bi bi-plug me-1"></i>SSH 端口</th>
+                                <th><i class="bi bi-gear me-1"></i>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for m in machines %}
-                            <tr>
-                                <td>{{ m.id }}</td>
-                                <td>{{ m.created_at }}</td>
-                                <td>{{ m.cpu_cores }} 核</td>
-                                <td>{{ m.memory_gb }} GB</td>
-                                <td>{{ m.disk_gb }} GB</td>
+                            <tr data-status="{{ m.status }}" class="machine-row">
+                                <td>
+                                    <span class="machine-id">
+                                        <i class="bi bi-server text-primary me-1"></i>
+                                        <code class="bg-light px-2 py-1 rounded">{{ m.id }}</code>
+                                    </span>
+                                </td>
+                                <td><small class="text-muted">{{ m.created_at }}</small></td>
+                                <td>
+                                    <div class="spec-badge">
+                                        <i class="bi bi-cpu-fill me-1"></i>
+                                        <span>{{ m.cpu_cores }} 核</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="spec-badge">
+                                        <i class="bi bi-memory me-1"></i>
+                                        <span>{{ m.memory_gb }} GB</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="spec-badge">
+                                        <i class="bi bi-hdd me-1"></i>
+                                        <span>{{ m.disk_gb }} GB</span>
+                                    </div>
+                                </td>
                                 <td>
                                     {% if m.status == "running" %}
-                                    <span class="badge bg-success">运行中</span>
+                                    <span class="status-badge status-running pulse-animation">
+                                        <i class="bi bi-circle-fill me-1"></i>运行中
+                                    </span>
                                     {% elif m.status == "pending" %}
-                                    <span class="badge bg-info">创建中</span>
+                                    <span class="status-badge status-pending">
+                                        <i class="bi bi-hourglass-split me-1"></i>创建中
+                                    </span>
                                     {% elif m.status == "failed" %}
-                                    <span class="badge bg-danger">创建失败</span>
+                                    <span class="status-badge status-failed">
+                                        <i class="bi bi-x-circle-fill me-1"></i>创建失败
+                                    </span>
                                     {% else %}
-                                    <span class="badge bg-secondary">已停止</span>
+                                    <span class="status-badge status-stopped">
+                                        <i class="bi bi-pause-circle-fill me-1"></i>已停止
+                                    </span>
                                     {% endif %}
                                 </td>
-                                <td>{{ m.core_hours_per_hour }}</td>
-                                <td>{{ m.expires_at }}</td>
-                                <td>{{ m.ssh_port | default(value="N/A") }}</td>
                                 <td>
-                                    {% if m.status == "running" %}
-                                    <a href="/machines/{{ m.id }}" class="btn btn-sm btn-primary">详情</a>
-                                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#sshModal{{ m.id }}">连接</button>
-                                    <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
-                                        <button type="submit" class="btn btn-sm btn-warning">停止</button>
-                                    </form>
+                                    <span class="core-hours text-primary fw-semibold">
+                                        <i class="bi bi-lightning-fill me-1"></i>
+                                        {{ m.core_hours_per_hour }}
+                                    </span>
+                                </td>
+                                <td><small class="text-muted">{{ m.expires_at }}</small></td>
+                                <td>
+                                    {% if m.ssh_port %}
+                                    <code class="bg-light px-2 py-1 rounded">{{ m.ssh_port }}</code>
+                                    {% else %}
+                                    <span class="text-muted">N/A</span>
                                     {% endif %}
-                                    <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
-                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
-                                    </form>
-                                    <a href="/disputes/new?machine_id={{ m.id }}" class="btn btn-sm btn-outline-danger">发起争议</a>
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        {% if m.status == "running" %}
+                                        <a href="/machines/{{ m.id }}" class="btn btn-sm btn-primary" title="详情">
+                                            <i class="bi bi-eye"></i>
+                                        </a>
+                                        <button type="button" class="btn btn-sm btn-success" 
+                                                data-bs-toggle="modal" data-bs-target="#sshModal{{ m.id }}" title="连接">
+                                            <i class="bi bi-plug"></i>
+                                        </button>
+                                        <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline" data-no-loading>
+                                            <button type="submit" class="btn btn-sm btn-warning" title="停止">
+                                                <i class="bi bi-stop-circle"></i>
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                        <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" 
+                                              data-no-loading onsubmit="return confirm('确定要删除这台机器吗？')">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" title="删除">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </form>
+                                        <a href="/disputes/new?machine_id={{ m.id }}" class="btn btn-sm btn-outline-secondary" title="发起争议">
+                                            <i class="bi bi-flag"></i>
+                                        </a>
+                                    </div>
                                 </td>
                             </tr>
 
                             <!-- SSH Connection Modal -->
                             <div class="modal fade" id="sshModal{{ m.id }}" tabindex="-1" aria-hidden="true">
-                                <div class="modal-dialog">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title">SSH 连接信息 - 机器 #{{ m.id }}</h5>
-                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content border-0 shadow-lg">
+                                        <div class="modal-header bg-gradient-primary text-white">
+                                            <h5 class="modal-title fw-semibold">
+                                                <i class="bi bi-plug me-2"></i>SSH 连接信息
+                                            </h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                                         </div>
                                         <div class="modal-body">
-                                            <div class="mb-3">
-                                                <label class="form-label fw-bold">主机地址</label>
-                                                <div class="input-group">
-                                                    <input type="text" class="form-control" value="{{ site_name }}" readonly id="sshHost{{ m.id }}">
-                                                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ site_name }}')">复制</button>
+                                            <div class="ssh-info-card">
+                                                <div class="info-row mb-3">
+                                                    <label class="form-label text-muted small">
+                                                        <i class="bi bi-globe me-1"></i>主机地址
+                                                    </label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control" value="{{ site_name }}" readonly>
+                                                        <button class="btn btn-outline-primary" type="button" 
+                                                                onclick="navigator.clipboard.writeText('{{ site_name }}');this.innerHTML='<i class=\\'bi bi-check\\'></i>';setTimeout(()=>this.innerHTML='<i class=\\'bi bi-copy\\'></i>',2000)">
+                                                            <i class="bi bi-copy"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="info-row mb-3">
+                                                    <label class="form-label text-muted small">
+                                                        <i class="bi bi-signpost-2 me-1"></i>SSH 端口
+                                                    </label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control" 
+                                                               value="{{ m.ssh_port | default(value="N/A") }}" readonly>
+                                                        <button class="btn btn-outline-primary" type="button"
+                                                                onclick="navigator.clipboard.writeText('{{ m.ssh_port | default(value="0") }}');this.innerHTML='<i class=\\'bi bi-check\\'></i>';setTimeout(()=>this.innerHTML='<i class=\\'bi bi-copy\\'></i>',2000)">
+                                                            <i class="bi bi-copy"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="info-row">
+                                                    <label class="form-label text-muted small">
+                                                        <i class="bi bi-person me-1"></i>用户名
+                                                    </label>
+                                                    <div class="input-group">
+                                                        <input type="text" class="form-control" value="root" readonly>
+                                                        <button class="btn btn-outline-primary" type="button"
+                                                                onclick="navigator.clipboard.writeText('root');this.innerHTML='<i class=\\'bi bi-check\\'></i>';setTimeout(()=>this.innerHTML='<i class=\\'bi bi-copy\\'></i>',2000)">
+                                                            <i class="bi bi-copy"></i>
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div class="mb-3">
-                                                <label class="form-label fw-bold">SSH 端口</label>
-                                                <div class="input-group">
-                                                    <input type="text" class="form-control" value="{{ m.ssh_port | default(value="N/A") }}" readonly id="sshPort{{ m.id }}">
-                                                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText('{{ m.ssh_port | default(value="0") }}')">复制</button>
-                                                </div>
-                                            </div>
-                                            <div class="mb-3">
-                                                <label class="form-label fw-bold">用户名</label>
-                                                <input type="text" class="form-control" value="root" readonly>
-                                            </div>
-                                            <div class="alert alert-warning">
+                                            <div class="alert alert-info d-flex align-items-center mt-3 mb-0">
+                                                <i class="bi bi-info-circle-fill me-2"></i>
                                                 <small>请使用平台分配的 SSH 密钥进行连接，不要使用密码登录。</small>
                                             </div>
                                         </div>
                                         <div class="modal-footer">
-                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                                <i class="bi bi-x me-1"></i>关闭
+                                            </button>
+                                            <a href="/machines/{{ m.id }}" class="btn btn-primary">
+                                                <i class="bi bi-terminal me-1"></i>打开终端
+                                            </a>
                                         </div>
                                     </div>
                                 </div>
@@ -109,13 +225,115 @@
                     </table>
                 </div>
                 {% else %}
-                <p class="text-muted text-center py-5">你还没有创建任何机器</p>
-                <div class="text-center">
-                    <a href="/market" class="btn btn-primary">去市场选择机器</a>
+                <div class="empty-state-container py-5">
+                    <div class="empty-state">
+                        <i class="bi bi-inbox fs-1 text-muted"></i>
+                    </div>
+                    <h5 class="text-muted mt-3">你还没有创建任何机器</h5>
+                    <p class="text-muted small mb-4">开始创建你的第一台虚拟机吧！</p>
+                    <a href="/market" class="btn btn-primary btn-lg">
+                        <i class="bi bi-plus-circle me-2"></i>去市场选择机器
+                    </a>
                 </div>
                 {% endif %}
             </div>
         </div>
     </div>
 </div>
+
+<style>
+    /* 机器 ID 显示 */
+    .machine-id {
+        display: flex;
+        align-items: center;
+    }
+    
+    /* 规格 Badge */
+    .spec-badge {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--gray-600);
+    }
+    
+    .spec-badge i {
+        color: var(--primary);
+    }
+    
+    /* 核时显示 */
+    .core-hours {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    
+    /* 操作按钮 */
+    .action-buttons {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+    
+    /* SSH 信息卡片 */
+    .ssh-info-card {
+        background: var(--gray-50);
+        padding: 1rem;
+        border-radius: 8px;
+    }
+    
+    /* 状态徽章动画 */
+    .pulse-animation {
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+    
+    /* 空状态 */
+    .empty-state-container {
+        text-align: center;
+    }
+    
+    /* 暗色渐变头部 */
+    .bg-gradient-dark {
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    }
+    
+    /* 响应式 */
+    @media (max-width: 768px) {
+        .action-buttons {
+            flex-direction: column;
+        }
+        
+        .filter-controls {
+            width: 100%;
+        }
+        
+        .filter-controls .form-select {
+            width: 100%;
+        }
+    }
+</style>
+
+<script>
+function filterMachines() {
+    const filter = document.getElementById('statusFilter').value;
+    const rows = document.querySelectorAll('.machine-row');
+    let count = 0;
+    
+    rows.forEach(row => {
+        const status = row.getAttribute('data-status');
+        if (filter === 'all' || status === filter) {
+            row.style.display = '';
+            count++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    document.getElementById('machineCount').textContent = count + ' 台';
+}
+</script>
 {% endblock content %}

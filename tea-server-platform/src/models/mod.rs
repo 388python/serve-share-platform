@@ -57,6 +57,7 @@ pub struct Server {
     pub linux_version: String,
     pub description: String,
     pub provider: String,
+    pub opengfw_enabled: bool,
 }
 
 // Table: machines
@@ -83,13 +84,16 @@ pub struct Machine {
     pub app_image: Option<String>,    // 应用镜像，如 mc, sub2api, newapi, cliproxyapi
     pub web_port: Option<i32>,        // Web 控制面板端口
     pub vnc_port: Option<i32>,        // VNC 端口
+    pub novnc_port: Option<i32>,      // noVNC Web 端口
     pub root_password: Option<String>, // root 密码（加密存储）
     pub ip_address: Option<String>,    // 机器 IP 地址
     pub app_secrets: Option<String>,   // 应用密钥（JSON 格式）
     pub free_nat_hours: Option<f64>,   // 该机器的免费 NAT 额度（小时）
+    pub max_hours: Option<f64>,        // 最大使用时长（小时）
 }
 
-// 应用镜像定义
+// 应用镜像定义 (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppImage {
     pub id: String,
@@ -100,7 +104,8 @@ pub struct AppImage {
     pub requires_docker: bool,
 }
 
-// 系统镜像定义
+// 系统镜像定义 (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemImage {
     pub id: String,
@@ -121,6 +126,7 @@ pub struct Order {
     pub status: String,
     pub trade_no: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 // Table: recharge_packages
@@ -151,7 +157,8 @@ pub struct RedeemCode {
     pub used_at: Option<DateTime<Utc>>,
 }
 
-// Table: invites
+// Table: invites (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Invite {
     pub id: i64,
@@ -164,7 +171,8 @@ pub struct Invite {
     pub public_note: String,
 }
 
-// Table: checkins
+// Table: checkins (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Checkin {
     pub id: i64,
@@ -193,7 +201,8 @@ pub struct UserPackage {
     pub created_at: DateTime<Utc>,
 }
 
-// Table: traffic_alerts
+// Table: traffic_alerts (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TrafficAlert {
     pub id: i64,
@@ -205,7 +214,8 @@ pub struct TrafficAlert {
     pub created_at: DateTime<Utc>,
 }
 
-// Table: disputes
+// Table: disputes (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Dispute {
     pub id: i64,
@@ -237,7 +247,8 @@ pub struct OAuthApp {
     pub created_at: DateTime<Utc>,
 }
 
-// Table: balance_to_code_logs
+// Table: balance_to_code_logs (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct BalanceToCodeLog {
     pub id: i64,
@@ -249,7 +260,8 @@ pub struct BalanceToCodeLog {
     pub created_at: DateTime<Utc>,
 }
 
-// Table: machine_stats
+// Table: machine_stats (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct MachineStats {
     pub id: i64,
@@ -266,7 +278,8 @@ pub struct MachineStats {
     pub last_updated: DateTime<Utc>,
 }
 
-// Table: warning_letters
+// Table: warning_letters (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WarningLetter {
     pub id: i64,
@@ -285,7 +298,8 @@ pub struct WarningLetter {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-// Warning letter view model with username
+// Warning letter view model with username (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WarningLetterView {
     pub id: i64,
@@ -303,7 +317,8 @@ pub struct WarningLetterView {
     pub expires_at: Option<String>,
 }
 
-// Combined machine info with stats
+// Combined machine info with stats (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineWithStats {
     #[serde(flatten)]
@@ -313,7 +328,8 @@ pub struct MachineWithStats {
     pub server_ip: String,
 }
 
-// Request/response types for API and template rendering
+// Request/response types for API and template rendering (预留)
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserSession {
     pub user_id: i64,
@@ -336,7 +352,8 @@ pub struct OpenGFWRule {
     pub created_at: DateTime<Utc>,
 }
 
-// Table: opengfw_logs
+// Table: opengfw_logs (预留)
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OpenGFWLog {
     pub id: i64,

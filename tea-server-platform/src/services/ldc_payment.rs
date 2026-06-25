@@ -5,6 +5,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LdcPaymentRequest {
     pub amount: f64,
@@ -12,6 +13,7 @@ pub struct LdcPaymentRequest {
     pub description: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LdcPaymentResponse {
     pub success: bool,
@@ -19,7 +21,8 @@ pub struct LdcPaymentResponse {
     pub message: String,
 }
 
-// Generate Ed25519 keypair
+// Generate Ed25519 keypair (预留)
+#[allow(dead_code)]
 pub fn generate_ed25519_keypair() -> (String, String) {
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -153,7 +156,8 @@ pub async fn create_payment(
     }
 }
 
-// Query order status
+// Query order status (预留)
+#[allow(dead_code)]
 pub async fn query_order(out_trade_no: &str) -> anyhow::Result<Option<String>> {
     // returns status
     let client_id = db::get_config("ldc_client_id").await.unwrap_or_default();
@@ -183,7 +187,8 @@ pub async fn query_order(out_trade_no: &str) -> anyhow::Result<Option<String>> {
     }
 }
 
-// Distribute LDC to user (withdraw)
+// Distribute LDC to user (withdraw) (预留)
+#[allow(dead_code)]
 pub async fn distribute_ldc(
     _cfg: &AppConfig,
     user_id: i64,

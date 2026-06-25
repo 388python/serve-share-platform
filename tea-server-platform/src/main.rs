@@ -8,7 +8,6 @@ use std::sync::Arc;
 use tera::{Context, Tera};
 use tower_cookies::{cookie::SameSite, Cookie, CookieManagerLayer, Cookies};
 use tower_http::services::ServeDir;
-use tracing_subscriber;
 
 mod config;
 mod db;
@@ -77,9 +76,10 @@ async fn main() -> anyhow::Result<()> {
                     let machine_name = format!("machine-{}", machine_id);
                     let agent_url = format!("http://{}:19527", ip);
                     let client = reqwest::Client::new();
+                    let api_key = services::session::agent_api_key();
                     let _ = client
                         .post(&format!("{}/stop/{}", agent_url, machine_name))
-                        .header("X-API-Key", "tea-platform-agent-key")
+                        .header("X-API-Key", &api_key)
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;
@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
-                        Ok((mut incoming, _addr)) => {
+                        Ok((incoming, _addr)) => {
                             // Forward to the corresponding server
                             let pool = db::get_db();
                             let server: Option<(i32, String)> = sqlx::query_as(
@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
 
                             if let Some((ssh_port, ip)) = server {
                                 let target = format!("{}:{}", ip, ssh_port);
-                                if let Ok(mut outgoing) = tokio::net::TcpStream::connect(&target).await {
+                                if let Ok(outgoing) = tokio::net::TcpStream::connect(&target).await {
                                     let (mut ri, mut wi) = tokio::io::split(incoming);
                                     let (mut ro, mut wo) = tokio::io::split(outgoing);
                                     let _ = tokio::join!(
