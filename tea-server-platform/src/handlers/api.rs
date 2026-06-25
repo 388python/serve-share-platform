@@ -1799,12 +1799,19 @@ async fn api_buy_premium(
 // GET /api/v1/images - Get available system images
 async fn api_images_list() -> impl IntoResponse {
     let images = vec![
-        json!({"id": "ubuntu:22.04", "name": "Ubuntu 22.04 LTS"}),
-        json!({"id": "ubuntu:24.04", "name": "Ubuntu 24.04 LTS"}),
-        json!({"id": "debian:12", "name": "Debian 12 (Bookworm)"}),
-        json!({"id": "debian:11", "name": "Debian 11 (Bullseye)"}),
-        json!({"id": "centos:9", "name": "CentOS Stream 9"}),
-        json!({"id": "alpine:3.19", "name": "Alpine Linux 3.19"}),
+        // Linux 镜像
+        json!({"id": "ubuntu:22.04", "name": "Ubuntu 22.04 LTS", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "ubuntu:24.04", "name": "Ubuntu 24.04 LTS", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "debian:12", "name": "Debian 12 (Bookworm)", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "debian:11", "name": "Debian 11 (Bullseye)", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "centos:9", "name": "CentOS Stream 9", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "alpine:3.19", "name": "Alpine Linux 3.19", "type": "linux", "virt": ["lxd", "kvm"]}),
+        // Windows 镜像（仅 KVM）
+        json!({"id": "windows:2022", "name": "Windows Server 2022", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:2019", "name": "Windows Server 2019", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:2025", "name": "Windows Server 2025", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:10", "name": "Windows 10", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:11", "name": "Windows 11", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
     ];
     ok_response(json!({"images": images}))
 }

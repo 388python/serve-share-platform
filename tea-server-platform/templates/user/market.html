@@ -96,10 +96,29 @@
                             <input type="number" class="form-control" name="disk_gb" required min="1" max="{{ s.disk_gb }}" value="10" step="0.1">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">时长 (小时)</label>
-                            <input type="number" class="form-control" name="hours" value="24" min="1">
+                            <label class="form-label">系统镜像</label>
+                            <select class="form-select" name="image" id="imageSelect{{ s.id }}" required onchange="onImageChange('{{ s.id }}')">
+                                <optgroup label="Linux 系统">
+                                    <option value="ubuntu:22.04" selected>Ubuntu 22.04 LTS</option>
+                                    <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
+                                    <option value="debian:12">Debian 12</option>
+                                    <option value="debian:11">Debian 11</option>
+                                    <option value="centos:9">CentOS Stream 9</option>
+                                    <option value="alpine:3.19">Alpine Linux 3.19</option>
+                                </optgroup>
+                                {% if s.virt_type == 'kvm' %}
+                                <optgroup label="Windows 系统 (仅 KVM)">
+                                    <option value="windows:2022">Windows Server 2022</option>
+                                    <option value="windows:2019">Windows Server 2019</option>
+                                    <option value="windows:2025">Windows Server 2025</option>
+                                    <option value="windows:10">Windows 10</option>
+                                    <option value="windows:11">Windows 11</option>
+                                </optgroup>
+                                {% endif %}
+                            </select>
+                            <small class="text-muted" id="imageNote{{ s.id }}">Linux 系统支持 SSH 连接</small>
                         </div>
-                        <div class="mb-3">
+                        <div class="mb-3" id="passwordField{{ s.id }}">
                             <label class="form-label">Root 密码</label>
                             <div class="input-group">
                                 <input type="password" class="form-control" name="root_password" id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" required minlength="6">
@@ -145,6 +164,25 @@ function toggleRootPassword(serverId) {
     } else {
         input.type = 'password';
         btn.textContent = '显示';
+    }
+}
+
+function onImageChange(serverId) {
+    const select = document.getElementById('imageSelect' + serverId);
+    const note = document.getElementById('imageNote' + serverId);
+    const passwordField = document.getElementById('passwordField' + serverId);
+    const passwordInput = document.getElementById('rootPassword' + serverId);
+    
+    const value = select.value;
+    
+    if (value.startsWith('windows:')) {
+        note.innerHTML = '<span class="text-warning">⚠️ Windows 系统支持 RDP 连接，无 SSH</span>';
+        passwordField.style.display = 'none';
+        passwordInput.removeAttribute('required');
+    } else {
+        note.textContent = 'Linux 系统支持 SSH 连接';
+        passwordField.style.display = 'block';
+        passwordInput.setAttribute('required', 'required');
     }
 }
 </script>

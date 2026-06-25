@@ -22,13 +22,26 @@ PLATFORM_SSH_PUBKEY = os.environ.get("PLATFORM_SSH_PUBKEY", "")
 
 # 系统镜像映射
 SYSTEM_IMAGES = {
-    "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2"},
-    "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2"},
-    "debian:12": {"lxd": "images:debian/12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2"},
-    "debian:11": {"lxd": "images:debian/11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2"},
-    "centos:9": {"lxd": "images:centos/9-Stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2"},
-    "alpine:3.19": {"lxd": "images:alpine/3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2"},
+    # Linux
+    "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2", "type": "linux"},
+    "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2", "type": "linux"},
+    "debian:12": {"lxd": "images:debian/12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2", "type": "linux"},
+    "debian:11": {"lxd": "images:debian/11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2", "type": "linux"},
+    "centos:9": {"lxd": "images:centos/9-Stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2", "type": "linux"},
+    "alpine:3.19": {"lxd": "images:alpine/3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2", "type": "linux"},
+    # Windows - 需要预制 qcow2 镜像
+    "windows:2019": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2019.qcow2", "type": "windows", "rdp_port": 3389},
+    "windows:2022": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2022.qcow2", "type": "windows", "rdp_port": 3389},
+    "windows:2025": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2025.qcow2", "type": "windows", "rdp_port": 3389},
+    "windows:10": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win10.qcow2", "type": "windows", "rdp_port": 3389},
+    "windows:11": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win11.qcow2", "type": "windows", "rdp_port": 3389},
 }
+
+# Windows VirtIO 驱动 ISO 路径（用于 ISO 安装方式）
+VIRTIO_ISO_PATH = "/var/lib/libvirt/images/virtio-win.iso"
+
+# Windows 自动应答文件路径（用于 ISO 安装方式）
+WINDOWS_AUTOUNATTEND_PATH = "/var/lib/libvirt/images/autounattend.xml"
 
 # 应用镜像配置
 APP_IMAGES = {
@@ -249,16 +262,102 @@ class AgentHandler(BaseHTTPRequestHandler):
                 )
                 if result.returncode == 0:
                     status = "running" if "running" in result.stdout else "stopped"
-                    self._send_json({
+                    
+                    # Get VNC port
+                    vnc_result = subprocess.run(
+                        ["virsh", "vncdisplay", name],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    vnc_port = 5900
+                    if vnc_result.returncode == 0:
+                        match = re.search(r':(\d+)', vnc_result.stdout)
+                        if match:
+                            vnc_port = 5900 + int(match.group(1))
+                    
+                    # Check if noVNC is running
+                    novnc_result = subprocess.run(
+                        ["docker", "ps", "--filter", f"name=novnc-{name}", "--format", "{{.Ports}}"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    novnc_port = 0
+                    if novnc_result.returncode == 0 and novnc_result.stdout:
+                        match = re.search(r'0.0.0.0:(\d+)', novnc_result.stdout)
+                        if match:
+                            novnc_port = int(match.group(1))
+                    
+                    # Get image type to determine if it's Windows
+                    image = os.path.basename(
+                        subprocess.run(
+                            ["virsh", "domblklist", name, "--details"],
+                            capture_output=True, text=True, timeout=10
+                        ).stdout.split("\n")[2] if subprocess.run(
+                            ["virsh", "domblklist", name, "--details"],
+                            capture_output=True, text=True, timeout=10
+                        ).returncode == 0 else ""
+                    )
+                    
+                    response_data = {
                         "name": name,
                         "status": status,
-                        "ssh_port": 22,
                         "virt_type": virt,
-                    })
+                        "vnc_port": vnc_port,
+                        "novnc_port": novnc_port,
+                    }
+                    
+                    # Check if this is a Windows VM based on image path
+                    for win_image, config in SYSTEM_IMAGES.items():
+                        if config.get("type") == "windows":
+                            base_path = config.get("kvm", "")
+                            if base_path and base_path in image:
+                                response_data.update({
+                                    "os_type": "windows",
+                                    "rdp_port": config.get("rdp_port", 3389),
+                                    "ssh_port": None,
+                                    "note": "Windows 虚拟机"
+                                })
+                                break
+                    else:
+                        response_data.update({
+                            "os_type": "linux",
+                            "ssh_port": 22,
+                        })
+                    
+                    self._send_json(response_data)
                 else:
-                    self._send_json({"error": "machine not found"}, 404)
+                    self._send_json({"error": "machine not found"}, 404)})
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _setup_novnc(self, name, vnc_port):
+        """Setup noVNC container for KVM VNC access"""
+        try:
+            # Remove existing novnc container if any
+            subprocess.run(
+                ["docker", "rm", "-f", f"novnc-{name}"],
+                capture_output=True, timeout=5
+            )
+            
+            # Find an available port
+            web_port = random.randint(7900, 8999)
+            
+            # Start novnc container that connects to VNC
+            # Using the standard novnc image with websocket proxy
+            result = subprocess.run([
+                "docker", "run", "-d",
+                "--name", f"novnc-{name}",
+                "-p", f"{web_port}:6080",
+                f"novnc/novnc:latest",
+                "--vnc", f"127.0.0.1:{vnc_port}"
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                return web_port
+            else:
+                logging.warning(f"Failed to start novnc: {result.stderr}")
+                return 0
+        except Exception as e:
+            logging.warning(f"novnc setup failed: {e}")
+            return 0
 
     def _handle_get_console(self, name):
         """Get console access info (web terminal port)"""
@@ -649,25 +748,74 @@ table ip opengfw {
                 })
 
         elif virt == "kvm":
-            kvm_base = SYSTEM_IMAGES.get(image, {}).get("kvm", "/var/lib/libvirt/images/base-ubuntu.qcow2")
+            # Get image configuration
+            image_config = SYSTEM_IMAGES.get(image, {})
+            kvm_base = image_config.get("kvm", "/var/lib/libvirt/images/base-ubuntu.qcow2")
+            os_type = image_config.get("type", "linux")
+            is_windows = os_type == "windows"
+            rdp_port = image_config.get("rdp_port", 3389)
+            
             disk_path = f"/var/lib/libvirt/images/{name}.qcow2"
 
+            # Check if base image exists
+            if not os.path.exists(kvm_base):
+                self._send_json({
+                    "status": "error",
+                    "error": f"Windows base image not found: {kvm_base}. Please upload the image first."
+                })
+                return
+            
+            # Create disk from base image
             subprocess.run(
                 ["qemu-img", "create", "-f", "qcow2", "-b", kvm_base, "-F", "qcow2", disk_path],
                 capture_output=True, timeout=30
             )
 
-            cmd = [
-                "virt-install",
-                "--name", name,
-                "--vcpus", str(cpu),
-                "--memory", str(memory),
-                "--disk", f"path={disk_path},format=qcow2",
-                "--boot", "hd",
-                "--os-variant", "ubuntu22.04",
-                "--noautoconsole",
-                "--graphics", "vnc,listen=0.0.0.0,port=-1",
-            ]
+            # Build virt-install command based on OS type
+            if is_windows:
+                # Windows VM configuration
+                cmd = [
+                    "virt-install",
+                    "--name", name,
+                    "--vcpus", str(cpu),
+                    "--memory", str(memory),
+                    "--disk", f"path={disk_path},format=qcow2",
+                    "--boot", "hd",
+                    "--os-variant", f"win{image.split(':')[1]}" if image.startswith("windows:") else "win10",
+                    "--noautoconsole",
+                    "--graphics", "vnc,listen=0.0.0.0,port=-1",
+                    "--video", "virtio",
+                    "--network", "bridge=virbr0,model=virtio",
+                    "--controller", "usb,model=ehci",
+                ]
+                
+                # Add VirtIO CD-ROM if available (for drivers)
+                if os.path.exists(VIRTIO_ISO_PATH):
+                    cmd.extend(["--disk", f"path={VIRTIO_ISO_PATH},device=cdrom"])
+            else:
+                # Linux VM configuration
+                os_variant_map = {
+                    "ubuntu:22.04": "ubuntu22.04",
+                    "ubuntu:24.04": "ubuntu24.04",
+                    "debian:12": "debian12",
+                    "debian:11": "debian11",
+                    "centos:9": "centos9",
+                    "alpine:3.19": "alpine3.19",
+                }
+                os_variant = os_variant_map.get(image, "ubuntu22.04")
+                
+                cmd = [
+                    "virt-install",
+                    "--name", name,
+                    "--vcpus", str(cpu),
+                    "--memory", str(memory),
+                    "--disk", f"path={disk_path},format=qcow2",
+                    "--boot", "hd",
+                    "--os-variant", os_variant,
+                    "--noautoconsole",
+                    "--graphics", "vnc,listen=0.0.0.0,port=-1",
+                ]
+            
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
@@ -682,15 +830,34 @@ table ip opengfw {
                     if match:
                         vnc_port = 5900 + int(match.group(1))
                 
-                self._send_json({
+                # Setup noVNC for web-based access
+                novnc_port = self._setup_novnc(name, vnc_port)
+                
+                # For Windows, we use RDP instead of SSH
+                response_data = {
                     "status": "created",
-                    "ssh_port": 22,
                     "vnc_port": vnc_port,
-                    "root_password": root_password,
+                    "novnc_port": novnc_port,
                     "image": image,
                     "app_image": app_image,
                     "output": result.stdout,
-                })
+                }
+                
+                if is_windows:
+                    response_data.update({
+                        "os_type": "windows",
+                        "rdp_port": rdp_port,
+                        "ssh_port": None,  # Windows 没有 SSH
+                        "note": "Windows 虚拟机需要通过 RDP 或 VNC 连接。请使用 Windows 自带的远程桌面连接 (mstsc) 连接 RDP 端口，或使用 VNC/Web 访问。"
+                    })
+                else:
+                    response_data.update({
+                        "os_type": "linux",
+                        "ssh_port": 22,
+                        "root_password": root_password,
+                    })
+                
+                self._send_json(response_data)
             else:
                 self._send_json({
                     "status": "error",

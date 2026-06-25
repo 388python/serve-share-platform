@@ -140,10 +140,10 @@
 
     <!-- 右侧操作面板 -->
     <div class="col-lg-7">
-        <!-- WebSSH 终端 -->
+        <!-- WebSSH 终端 (Linux) / WebVNC (Windows) -->
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-dark text-white border-0 py-3 d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fw-semibold"><i class="bi bi-terminal me-2"></i>WebSSH 终端</h5>
+                <h5 class="mb-0 fw-semibold" id="console-title"><i class="bi bi-terminal me-2"></i>WebSSH 终端</h5>
                 <div class="d-flex align-items-center gap-2">
                     <span class="ssh-status-badge" id="ssh-status">未连接</span>
                     <button class="btn btn-sm btn-success" id="ssh-connect" onclick="connectSSH()">
@@ -158,11 +158,68 @@
                 <div id="ssh-terminal"></div>
             </div>
             <div class="card-footer bg-dark-subtle border-0 text-muted py-2">
-                <small><i class="bi bi-info-circle me-1"></i>用户名 root，密码点击下方「获取密码」按钮查看</small>
+                <small id="console-hint"><i class="bi bi-info-circle me-1"></i>用户名 root，密码点击下方「获取密码」按钮查看</small>
             </div>
         </div>
 
-        <!-- SSH 连接信息 -->
+        <!-- 连接信息 (根据系统类型显示不同内容) -->
+        {% if machine.image and machine.image.startswith('windows:') %}
+        <!-- RDP 连接信息 (Windows) -->
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-primary bg-gradient text-white border-0 py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-windows me-2"></i>RDP 连接信息 (Windows)</h5>
+            </div>
+            <div class="card-body p-4">
+                {% if machine.status == "running" %}
+                <div class="alert alert-info d-flex align-items-center mb-3">
+                    <i class="bi bi-info-circle-fill me-2"></i>
+                    <span>Windows 虚拟机需要使用远程桌面连接 (mstsc) 或 VNC 访问</span>
+                </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
+                            <input type="text" class="form-control" id="rdp-host" value="{{ server.ip if server else '' }}" readonly>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
+                            <input type="text" class="form-control" id="rdp-port" value="3389" readonly>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="input-group">
+                            <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                            <input type="text" class="form-control" id="rdp-user" value="Administrator" readonly>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="input-group">
+                        <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+                        <input type="password" class="form-control" id="rdp-password" placeholder="点击右侧按钮获取密码">
+                        <button class="btn btn-outline-primary" type="button" onclick="fetchPassword()">
+                            <i class="bi bi-eye me-1"></i>获取密码
+                        </button>
+                    </div>
+                </div>
+                <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 mb-0">
+                    <div>
+                        <i class="bi bi-lightbulb-fill me-1"></i>
+                        <strong>RDP 连接：</strong>使用 Windows 自带的「远程桌面连接」应用
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-center py-4">
+                    <i class="bi bi-plug text-muted" style="font-size: 2rem;"></i>
+                    <p class="text-muted mt-2 mb-0">机器未运行，无法连接</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <!-- SSH 连接信息 (Linux) -->
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-info bg-gradient text-white border-0 py-3">
                 <h5 class="mb-0 fw-semibold"><i class="bi bi-key me-2"></i>SSH 连接信息</h5>
@@ -217,6 +274,7 @@
                 {% endif %}
             </div>
         </div>
+        {% endif %}
 
         <!-- 重装系统 -->
         <div class="card border-0 shadow-sm mb-4">
@@ -233,12 +291,21 @@
                         <div class="col-md-6">
                             <label class="form-label fw-medium"><i class="bi bi-ubuntu me-1"></i>系统镜像</label>
                             <select class="form-select" id="reinstall-image">
-                                <option value="ubuntu:22.04">🐧 Ubuntu 22.04 LTS</option>
-                                <option value="ubuntu:24.04">🐧 Ubuntu 24.04 LTS</option>
-                                <option value="images:debian/12">🔷 Debian 12</option>
-                                <option value="images:debian/11">🔷 Debian 11</option>
-                                <option value="images:centos/9-Stream">🔴 CentOS Stream 9</option>
-                                <option value="images:alpine/3.19">💠 Alpine Linux 3.19</option>
+                                <optgroup label="Linux 系统">
+                                    <option value="ubuntu:22.04">🐧 Ubuntu 22.04 LTS</option>
+                                    <option value="ubuntu:24.04">🐧 Ubuntu 24.04 LTS</option>
+                                    <option value="debian:12">🔷 Debian 12</option>
+                                    <option value="debian:11">🔷 Debian 11</option>
+                                    <option value="centos:9">🔴 CentOS Stream 9</option>
+                                    <option value="alpine:3.19">💠 Alpine Linux 3.19</option>
+                                </optgroup>
+                                <optgroup label="Windows 系统 (仅 KVM)">
+                                    <option value="windows:2022">🪟 Windows Server 2022</option>
+                                    <option value="windows:2019">🪟 Windows Server 2019</option>
+                                    <option value="windows:2025">🪟 Windows Server 2025</option>
+                                    <option value="windows:10">🪟 Windows 10</option>
+                                    <option value="windows:11">🪟 Windows 11</option>
+                                </optgroup>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -326,10 +393,19 @@ const API_BASE = '/api/v1';
 const MACHINE_ID = {{ machine.id }};
 const SERVER_IP = "{{ server.ip if server else '' }}";
 const API_KEY = localStorage.getItem('api_key') || '';
+const MACHINE_IMAGE = "{{ machine.image | default(value='ubuntu:22.04') }}";
+const IS_WINDOWS = MACHINE_IMAGE.startsWith('windows:');
 
 let term = null;
 let socket = null;
 let sshPassword = '';
+let novncUrl = null;
+
+// Detect Windows and update UI
+if (IS_WINDOWS) {
+    document.getElementById('console-title').innerHTML = '<i class="bi bi-display me-2"></i>WebVNC 终端';
+    document.getElementById('console-hint').innerHTML = '<i class="bi bi-info-circle me-1"></i>Windows 虚拟机通过 VNC 访问';
+}
 
 // Initialize terminal
 function initTerminal() {
@@ -365,8 +441,13 @@ function initTerminal() {
         }
     });
     
-    term.write('WebSSH 终端准备就绪\r\n');
-    term.write('点击「连接」按钮建立连接\r\n');
+    if (IS_WINDOWS) {
+        term.write('WebVNC 终端准备就绪\r\n');
+        term.write('Windows 虚拟机请使用 VNC 连接\r\n');
+    } else {
+        term.write('WebSSH 终端准备就绪\r\n');
+        term.write('点击「连接」按钮建立连接\r\n');
+    }
 }
 
 async function fetchPassword() {
@@ -449,6 +530,22 @@ function updateStatus(status) {
 
 async function connectSSH() {
     initTerminal();
+    
+    if (IS_WINDOWS) {
+        // For Windows, show VNC info
+        term.clear();
+        term.write('\x1b[33mWindows 虚拟机不支持 SSH\x1b[0m\r\n\r\n');
+        term.write('请使用以下方式连接：\r\n\r\n');
+        term.write('1. \x1b[36m远程桌面连接 (RDP)\x1b[0m\r\n');
+        term.write('   - 主机: ' + SERVER_IP + '\r\n');
+        term.write('   - 端口: 3389\r\n');
+        term.write('   - 用户名: Administrator\r\n');
+        term.write('   - 密码: 点击下方「获取密码」按钮\r\n\r\n');
+        term.write('2. \x1b[36mVNC 访问\x1b[0m\r\n');
+        term.write('   - 请联系管理员获取 VNC 端口\r\n\r\n');
+        term.write('或者使用 Windows 自带的 mstsc 命令连接\r\n');
+        return;
+    }
     
     if (sshPassword) {
         document.getElementById('ssh-password').value = sshPassword;
