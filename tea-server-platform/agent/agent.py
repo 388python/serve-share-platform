@@ -43,6 +43,28 @@ VIRTIO_ISO_PATH = "/var/lib/libvirt/images/virtio-win.iso"
 # Windows 自动应答文件路径（用于 ISO 安装方式）
 WINDOWS_AUTOUNATTEND_PATH = "/var/lib/libvirt/images/autounattend.xml"
 
+# Windows 镜像自动下载配置
+# 注意：需要合法的 Windows 镜像授权，以下是一些示例源
+# 实际使用时替换为您自己托管的或合法的镜像
+WINDOWS_IMAGE_SOURCES = {
+    # 这些URL是示例，实际使用时需要替换为有效的镜像源
+    # 可以使用 virt-builder 构建评估版，或从微软评估中心下载
+    "windows:2019": "",
+    "windows:2022": "",
+    "windows:2025": "",
+    "windows:10": "",
+    "windows:11": "",
+}
+
+# virt-builder 官方支持的 Windows 版本（评估版）
+VIRTBUILDER_WINDOWS_MAP = {
+    "windows:2019": "win10",  # Windows 10/Server 2019 评估版
+    "windows:2022": "win10",  # Windows Server 2022 评估版
+    "windows:2025": "win10",  # Windows Server 2025 评估版
+    "windows:10": "win10",
+    "windows:11": "win11",
+}
+
 # 应用镜像配置
 APP_IMAGES = {
     "mc": {
@@ -324,7 +346,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     
                     self._send_json(response_data)
                 else:
-                    self._send_json({"error": "machine not found"}, 404)})
+                    self._send_json({"error": "machine not found"}, 404)
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
 
@@ -358,6 +380,87 @@ class AgentHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logging.warning(f"novnc setup failed: {e}")
             return 0
+
+    def _prepare_windows_image(self, image, kvm_base):
+        """自动下载或生成Windows镜像"""
+        # 如果镜像已存在，直接返回
+        if os.path.exists(kvm_base):
+            print(f"[agent] Windows base image already exists: {kvm_base}")
+            return True
+        
+        # 确保目录存在
+        os.makedirs(os.path.dirname(kvm_base), exist_ok=True)
+        
+        # 获取下载URL
+        download_url = WINDOWS_IMAGE_SOURCES.get(image)
+        if not download_url:
+            print(f"[agent] No download URL for {image}, trying virt-builder")
+            return self._build_windows_with_virtbuilder(image, kvm_base)
+        
+        # 尝试下载镜像
+        print(f"[agent] Downloading Windows image from {download_url}")
+        print(f"[agent] This may take several minutes...")
+        
+        try:
+            # 使用curl下载，带进度显示
+            result = subprocess.run([
+                "curl", "-L", "-#",
+                "-o", kvm_base,
+                download_url
+            ], capture_output=True, text=True, timeout=3600)  # 1小时超时
+            
+            if result.returncode == 0 and os.path.exists(kvm_base):
+                # 检查文件大小，确保下载成功
+                size = os.path.getsize(kvm_base)
+                if size > 100 * 1024 * 1024:  # 大于100MB
+                    print(f"[agent] Downloaded Windows image: {size // (1024*1024)}MB")
+                    return True
+                else:
+                    print(f"[agent] Downloaded file too small: {size} bytes")
+                    os.remove(kvm_base)
+            else:
+                print(f"[agent] Download failed: {result.stderr}")
+        except Exception as e:
+            print(f"[agent] Download error: {e}")
+        
+        # 下载失败，尝试 virt-builder
+        return self._build_windows_with_virtbuilder(image, kvm_base)
+    
+    def _build_windows_with_virtbuilder(self, image, kvm_base):
+        """使用 virt-builder 构建 Windows 镜像"""
+        print(f"[agent] Trying virt-builder for {image}")
+        
+        # 检查 virt-builder 是否可用
+        result = subprocess.run(["which", "virt-builder"], capture_output=True)
+        if result.returncode != 0:
+            print(f"[agent] virt-builder not found, install with: apt-get install libguestfs-tools")
+            return False
+        
+        os_variant = VIRTBUILDER_WINDOWS_MAP.get(image, "win10")
+        
+        try:
+            # virt-builder 构建命令 - 构建评估版Windows
+            cmd = [
+                "virt-builder", os_variant,
+                "--output", kvm_base,
+                "--format", "qcow2",
+                "--size", "40G",
+                "--root-password", "password:ChangeMe123!",
+            ]
+            
+            print(f"[agent] Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+            
+            if result.returncode == 0 and os.path.exists(kvm_base):
+                size = os.path.getsize(kvm_base) // (1024*1024)
+                print(f"[agent] Built Windows image with virt-builder: {size}MB")
+                return True
+            else:
+                print(f"[agent] virt-builder failed: {result.stderr}")
+        except Exception as e:
+            print(f"[agent] virt-builder error: {e}")
+        
+        return False
 
     def _handle_get_console(self, name):
         """Get console access info (web terminal port)"""
@@ -757,11 +860,28 @@ table ip opengfw {
             
             disk_path = f"/var/lib/libvirt/images/{name}.qcow2"
 
-            # Check if base image exists
-            if not os.path.exists(kvm_base):
+            # Windows 镜像自动准备
+            if is_windows:
+                print(f"[agent] Preparing Windows image for {image}...")
+                if not self._prepare_windows_image(image, kvm_base):
+                    self._send_json({
+                        "status": "error",
+                        "error": f"Failed to prepare Windows image. Please ensure virt-builder or network is available."
+                    })
+                    return
+                
+                # 确保 VirtIO 驱动 ISO 可用（用于网络和磁盘驱动）
+                if not os.path.exists(VIRTIO_ISO_PATH):
+                    print(f"[agent] Downloading VirtIO drivers...")
+                    subprocess.run([
+                        "curl", "-L", "-o", VIRTIO_ISO_PATH,
+                        "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.229-2/virtio-win-0.1.229.iso"
+                    ], capture_output=True, timeout=300)
+            elif not os.path.exists(kvm_base):
+                # Linux base image 不存在，使用 LXD 镜像或报错
                 self._send_json({
                     "status": "error",
-                    "error": f"Windows base image not found: {kvm_base}. Please upload the image first."
+                    "error": f"Linux base image not found: {kvm_base}"
                 })
                 return
             
