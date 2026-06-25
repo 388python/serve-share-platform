@@ -11,6 +11,9 @@ import urllib.request
 import hashlib
 import random
 import string
+import logging
+
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
 API_KEY = os.environ.get("AGENT_API_KEY")
 if not API_KEY:
@@ -20,21 +23,28 @@ PLATFORM_URL = os.environ.get("PLATFORM_URL", "http://localhost:3000")
 OPENGFW_ENABLED = os.environ.get("OPENGFW_ENABLED", "false").lower() == "true"
 PLATFORM_SSH_PUBKEY = os.environ.get("PLATFORM_SSH_PUBKEY", "")
 
+# 端口映射范围
+PORT_RANGE_START = 20000
+PORT_RANGE_END = 30000
+
+# 已使用的端口
+USED_PORTS = set()
+
 # 系统镜像映射
 SYSTEM_IMAGES = {
     # Linux
-    "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2", "type": "linux"},
-    "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2", "type": "linux"},
-    "debian:12": {"lxd": "images:debian/12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2", "type": "linux"},
-    "debian:11": {"lxd": "images:debian/11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2", "type": "linux"},
-    "centos:9": {"lxd": "images:centos/9-Stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2", "type": "linux"},
-    "alpine:3.19": {"lxd": "images:alpine/3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2", "type": "linux"},
-    # Windows - 需要预制 qcow2 镜像
-    "windows:2019": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2019.qcow2", "type": "windows", "rdp_port": 3389},
-    "windows:2022": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2022.qcow2", "type": "windows", "rdp_port": 3389},
-    "windows:2025": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2025.qcow2", "type": "windows", "rdp_port": 3389},
-    "windows:10": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win10.qcow2", "type": "windows", "rdp_port": 3389},
-    "windows:11": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win11.qcow2", "type": "windows", "rdp_port": 3389},
+    "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2", "type": "linux", "ssh": True},
+    "ubuntu:24.04": {"lxd": "ubuntu:24.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-24.04.qcow2", "type": "linux", "ssh": True},
+    "debian:12": {"lxd": "images:debian/12", "kvm": "/var/lib/libvirt/images/base-debian-12.qcow2", "type": "linux", "ssh": True},
+    "debian:11": {"lxd": "images:debian/11", "kvm": "/var/lib/libvirt/images/base-debian-11.qcow2", "type": "linux", "ssh": True},
+    "centos:9": {"lxd": "images:centos/9-Stream", "kvm": "/var/lib/libvirt/images/base-centos-9.qcow2", "type": "linux", "ssh": True},
+    "alpine:3.19": {"lxd": "images:alpine/3.19", "kvm": "/var/lib/libvirt/images/base-alpine-3.19.qcow2", "type": "linux", "ssh": True},
+    # Windows - 自动下载/构建，支持SSH和RDP
+    "windows:2019": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2019.qcow2", "type": "windows", "ssh": True, "rdp": True},
+    "windows:2022": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2022.qcow2", "type": "windows", "ssh": True, "rdp": True},
+    "windows:2025": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win2025.qcow2", "type": "windows", "ssh": True, "rdp": True},
+    "windows:10": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win10.qcow2", "type": "windows", "ssh": True, "rdp": True},
+    "windows:11": {"lxd": None, "kvm": "/var/lib/libvirt/images/base-win11.qcow2", "type": "windows", "ssh": True, "rdp": True},
 }
 
 # Windows VirtIO 驱动 ISO 路径（用于 ISO 安装方式）
@@ -140,6 +150,93 @@ def generate_password(length=12):
     """Generate random password"""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
+
+def allocate_port():
+    """分配一个可用端口"""
+    global USED_PORTS
+    for port in range(PORT_RANGE_START, PORT_RANGE_END):
+        if port not in USED_PORTS:
+            # 检查端口是否真的可用
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True, timeout=5
+            )
+            if f":{port}" not in result.stdout:
+                USED_PORTS.add(port)
+                return port
+    raise Exception("No available ports")
+
+def release_port(port):
+    """释放端口"""
+    global USED_PORTS
+    USED_PORTS.discard(port)
+
+def ensure_dependencies():
+    """自动安装所需依赖"""
+    deps = [
+        ("qemu-img", "qemu-utils"),
+        ("virt-install", "virtinst"),
+        ("virsh", "libvirt-clients"),
+        ("curl", "curl"),
+        ("ss", "iproute2"),
+    ]
+    
+    for cmd, pkg in deps:
+        result = subprocess.run(["which", cmd], capture_output=True)
+        if result.returncode != 0:
+            logging.info(f"Installing {pkg}...")
+            subprocess.run([
+                "apt-get", "update", "-qq"
+            ], capture_output=True, timeout=120)
+            subprocess.run([
+                "apt-get", "install", "-y", "-qq", pkg
+            ], capture_output=True, timeout=180)
+    
+    # 安装 libguestfs-tools 用于 virt-builder
+    result = subprocess.run(["which", "virt-builder"], capture_output=True)
+    if result.returncode != 0:
+        logging.info("Installing libguestfs-tools for Windows support...")
+        subprocess.run([
+            "apt-get", "install", "-y", "-qq", 
+            "libguestfs-tools", "linux-image-generic"
+        ], capture_output=True, timeout=300)
+    
+    # 确保 libvirtd 运行
+    subprocess.run(["systemctl", "start", "libvirtd"], capture_output=True)
+    subprocess.run(["systemctl", "enable", "libvirtd"], capture_output=True)
+    
+    logging.info("Dependencies installed")
+
+def setup_port_forwarding(host_port, vm_ip, vm_port, protocol="tcp"):
+    """设置端口转发规则"""
+    # 使用 iptables 设置 NAT
+    subprocess.run([
+        "iptables", "-t", "nat", "-A", "PREROUTING",
+        "-p", protocol, "--dport", str(host_port),
+        "-j", "DNAT", "--to-destination", f"{vm_ip}:{vm_port}"
+    ], capture_output=True)
+    
+    subprocess.run([
+        "iptables", "-t", "nat", "-A", "POSTROUTING",
+        "-p", protocol, "-d", vm_ip, "--dport", str(vm_port),
+        "-j", "MASQUERADE"
+    ], capture_output=True)
+    
+    logging.info(f"Port forwarding: {host_port} -> {vm_ip}:{vm_port}")
+
+def remove_port_forwarding(host_port, vm_ip, vm_port, protocol="tcp"):
+    """移除端口转发规则"""
+    subprocess.run([
+        "iptables", "-t", "nat", "-D", "PREROUTING",
+        "-p", protocol, "--dport", str(host_port),
+        "-j", "DNAT", "--to-destination", f"{vm_ip}:{vm_port}"
+    ], capture_output=True, stderr=subprocess.DEVNULL)
+    
+    subprocess.run([
+        "iptables", "-t", "nat", "-D", "POSTROUTING",
+        "-p", protocol, "-d", vm_ip, "--dport", str(vm_port),
+        "-j", "MASQUERADE"
+    ], capture_output=True, stderr=subprocess.DEVNULL)
 
 def _lxc_exec(name, cmd, timeout=30):
     """Execute command inside LXD container"""
@@ -851,18 +948,22 @@ table ip opengfw {
                 })
 
         elif virt == "kvm":
+            # 确保依赖已安装
+            ensure_dependencies()
+            
             # Get image configuration
             image_config = SYSTEM_IMAGES.get(image, {})
             kvm_base = image_config.get("kvm", "/var/lib/libvirt/images/base-ubuntu.qcow2")
             os_type = image_config.get("type", "linux")
             is_windows = os_type == "windows"
-            rdp_port = image_config.get("rdp_port", 3389)
+            supports_ssh = image_config.get("ssh", True)
+            supports_rdp = image_config.get("rdp", False) if is_windows else False
             
             disk_path = f"/var/lib/libvirt/images/{name}.qcow2"
 
             # Windows 镜像自动准备
             if is_windows:
-                print(f"[agent] Preparing Windows image for {image}...")
+                logging.info(f"Preparing Windows image for {image}...")
                 if not self._prepare_windows_image(image, kvm_base):
                     self._send_json({
                         "status": "error",
@@ -870,46 +971,78 @@ table ip opengfw {
                     })
                     return
                 
-                # 确保 VirtIO 驱动 ISO 可用（用于网络和磁盘驱动）
+                # 确保 VirtIO 驱动 ISO 可用
                 if not os.path.exists(VIRTIO_ISO_PATH):
-                    print(f"[agent] Downloading VirtIO drivers...")
+                    logging.info("Downloading VirtIO drivers...")
                     subprocess.run([
                         "curl", "-L", "-o", VIRTIO_ISO_PATH,
                         "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.229-2/virtio-win-0.1.229.iso"
                     ], capture_output=True, timeout=300)
             elif not os.path.exists(kvm_base):
-                # Linux base image 不存在，使用 LXD 镜像或报错
-                self._send_json({
-                    "status": "error",
-                    "error": f"Linux base image not found: {kvm_base}"
-                })
-                return
+                # Linux base image 不存在，尝试从 LXD 镜像导出
+                logging.info(f"Creating Linux base image from LXD...")
+                lxd_image = image_config.get("lxd", image)
+                if lxd_image:
+                    # 创建临时容器导出镜像
+                    subprocess.run(["lxc", "launch", lxd_image, "temp-base", "--ephemeral"], 
+                                  capture_output=True, timeout=60)
+                    time.sleep(5)
+                    subprocess.run([
+                        "lxc", "exec", "temp-base", "--", 
+                        "dd", "if=/dev/sda", "of=/tmp/rootfs.img"
+                    ], capture_output=True, timeout=120)
+                    subprocess.run(["lxc", "file", "pull", "temp-base/tmp/rootfs.img", kvm_base],
+                                  capture_output=True, timeout=60)
+                    subprocess.run(["lxc", "delete", "--force", "temp-base"], capture_output=True)
+                    subprocess.run(["qemu-img", "convert", "-O", "qcow2", kvm_base + ".img", kvm_base],
+                                  capture_output=True)
+                    if os.path.exists(kvm_base):
+                        logging.info(f"Created base image: {kvm_base}")
+                    else:
+                        self._send_json({
+                            "status": "error",
+                            "error": f"Failed to create Linux base image"
+                        })
+                        return
+                else:
+                    self._send_json({
+                        "status": "error",
+                        "error": f"Linux base image not found: {kvm_base}"
+                    })
+                    return
             
             # Create disk from base image
             subprocess.run(
-                ["qemu-img", "create", "-f", "qcow2", "-b", kvm_base, "-F", "qcow2", disk_path],
+                ["qemu-img", "create", "-f", "qcow2", "-b", kvm_base, "-F", "qcow2", disk_path, str(disk) + "G"],
                 capture_output=True, timeout=30
             )
 
-            # Build virt-install command based on OS type
+            # 分配外部端口
+            ssh_external_port = allocate_port() if supports_ssh else None
+            rdp_external_port = allocate_port() if supports_rdp else None
+            vnc_external_port = allocate_port()
+            novnc_external_port = allocate_port()
+
+            # Build virt-install command
             if is_windows:
                 # Windows VM configuration
+                win_ver = image.split(':')[1] if ':' in image else "10"
                 cmd = [
                     "virt-install",
                     "--name", name,
                     "--vcpus", str(cpu),
                     "--memory", str(memory),
-                    "--disk", f"path={disk_path},format=qcow2",
+                    "--disk", f"path={disk_path},format=qcow2,bus=virtio",
                     "--boot", "hd",
-                    "--os-variant", f"win{image.split(':')[1]}" if image.startswith("windows:") else "win10",
+                    "--os-variant", f"win{win_ver}",
                     "--noautoconsole",
-                    "--graphics", "vnc,listen=0.0.0.0,port=-1",
+                    "--graphics", f"vnc,listen=0.0.0.0,port={vnc_external_port - 5900}",
                     "--video", "virtio",
-                    "--network", "bridge=virbr0,model=virtio",
+                    "--network", f"bridge=virbr0,model=virtio",
                     "--controller", "usb,model=ehci",
                 ]
                 
-                # Add VirtIO CD-ROM if available (for drivers)
+                # Add VirtIO CD-ROM
                 if os.path.exists(VIRTIO_ISO_PATH):
                     cmd.extend(["--disk", f"path={VIRTIO_ISO_PATH},device=cdrom"])
             else:
@@ -933,58 +1066,142 @@ table ip opengfw {
                     "--boot", "hd",
                     "--os-variant", os_variant,
                     "--noautoconsole",
-                    "--graphics", "vnc,listen=0.0.0.0,port=-1",
+                    "--graphics", f"vnc,listen=0.0.0.0,port={vnc_external_port - 5900}",
+                    "--network", "bridge=virbr0",
                 ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0:
-                # Get VNC port
-                vnc_result = subprocess.run(
-                    ["virsh", "vncdisplay", name],
-                    capture_output=True, text=True, timeout=10
-                )
-                vnc_port = 5900
-                if vnc_result.returncode == 0:
-                    match = re.search(r':(\d+)', vnc_result.stdout)
-                    if match:
-                        vnc_port = 5900 + int(match.group(1))
+                # 等待VM启动获取IP
+                time.sleep(10)
+                vm_ip = self._get_vm_ip(name)
                 
-                # Setup noVNC for web-based access
-                novnc_port = self._setup_novnc(name, vnc_port)
+                # Setup noVNC for web-based VNC access
+                novnc_port = self._setup_novnc_port(name, vnc_external_port, novnc_external_port)
                 
-                # For Windows, we use RDP instead of SSH
+                # 设置端口转发
+                if vm_ip:
+                    if ssh_external_port and supports_ssh:
+                        setup_port_forwarding(ssh_external_port, vm_ip, 22)
+                    if rdp_external_port and supports_rdp:
+                        setup_port_forwarding(rdp_external_port, vm_ip, 3389)
+                
+                # 响应数据
                 response_data = {
                     "status": "created",
-                    "vnc_port": vnc_port,
-                    "novnc_port": novnc_port,
+                    "ip": vm_ip or "",
                     "image": image,
                     "app_image": app_image,
+                    "vnc_port": vnc_external_port,
+                    "novnc_port": novnc_external_port,
+                    "root_password": root_password,
                     "output": result.stdout,
                 }
                 
                 if is_windows:
                     response_data.update({
                         "os_type": "windows",
-                        "rdp_port": rdp_port,
-                        "ssh_port": None,  # Windows 没有 SSH
-                        "note": "Windows 虚拟机需要通过 RDP 或 VNC 连接。请使用 Windows 自带的远程桌面连接 (mstsc) 连接 RDP 端口，或使用 VNC/Web 访问。"
+                        "ssh_port": ssh_external_port,  # Windows 有 OpenSSH
+                        "rdp_port": rdp_external_port,
+                        "ssh_note": "Windows 内置 OpenSSH Server，端口已映射",
+                        "rdp_note": "RDP 端口已映射，可用 mstsc 连接",
                     })
                 else:
                     response_data.update({
                         "os_type": "linux",
-                        "ssh_port": 22,
-                        "root_password": root_password,
+                        "ssh_port": ssh_external_port,
                     })
                 
                 self._send_json(response_data)
             else:
+                # 释放已分配的端口
+                if ssh_external_port: release_port(ssh_external_port)
+                if rdp_external_port: release_port(rdp_external_port)
+                if vnc_external_port: release_port(vnc_external_port)
+                if novnc_external_port: release_port(novnc_external_port)
+                
                 self._send_json({
                     "status": "error",
                     "error": result.stderr
                 })
         else:
             self._send_json({"error": f"unsupported virt_type: {virt}"})
+
+    def _get_vm_ip(self, name, timeout=60):
+        """获取KVM虚拟机IP地址"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            # 尝试通过 arp 获取 IP
+            result = subprocess.run(
+                ["virsh", "domifaddr", name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                match = re.search(r'\d+\.\d+\.\d+\.\d+', result.stdout)
+                if match:
+                    return match.group(0)
+            
+            # 尝试通过 qemu-guest-agent
+            result = subprocess.run(
+                ["virsh", "qemu-agent-command", name, '{"execute":"guest-network-get-interfaces"}'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                try:
+                    data = json.loads(result.stdout)
+                    for iface in data.get("return", []):
+                        for ip_info in iface.get("ip-addresses", []):
+                            if ip_info.get("ip-address-type") == "ipv4":
+                                return ip_info.get("ip-address")
+                except:
+                    pass
+            
+            # 尝试通过 arp 表
+            result = subprocess.run(
+                ["arp", "-an"],
+                capture_output=True, text=True, timeout=5
+            )
+            # 查找 virbr0 相关的 IP
+            for line in result.stdout.split('\n'):
+                if 'virbr0' in line:
+                    match = re.search(r'\d+\.\d+\.\d+\.\d+', line)
+                    if match:
+                        return match.group(0)
+            
+            time.sleep(2)
+        
+        return None
+
+    def _setup_novnc_port(self, name, vnc_port, web_port):
+        """Setup noVNC web access"""
+        try:
+            # Remove existing novnc container if any
+            subprocess.run(
+                ["docker", "rm", "-f", f"novnc-{name}"],
+                capture_output=True, timeout=5
+            )
+            
+            # Start novnc container
+            result = subprocess.run([
+                "docker", "run", "-d",
+                "--name", f"novnc-{name}",
+                "-p", f"{web_port}:6080",
+                "novnc/novnc:latest",
+                "--vnc", f"127.0.0.1:{vnc_port}"
+            ], capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                logging.info(f"noVNC started on port {web_port}")
+                return web_port
+            else:
+                logging.warning(f"Failed to start novnc: {result.stderr}")
+                release_port(web_port)
+                return 0
+        except Exception as e:
+            logging.warning(f"novnc setup failed: {e}")
+            release_port(web_port)
+            return 0
 
     def _handle_stop(self, name):
         """Stop VM/container"""
@@ -1292,6 +1509,11 @@ def register_with_platform():
         print(f"[agent] Register failed: {e}")
 
 if __name__ == "__main__":
+    # 自动安装依赖（如果使用KVM）
+    if VIRT_TYPE == "kvm":
+        print("Checking and installing KVM dependencies...")
+        ensure_dependencies()
+    
     register_thread = threading.Thread(target=register_with_platform, daemon=True)
     register_thread.start()
 

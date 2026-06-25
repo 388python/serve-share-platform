@@ -167,49 +167,89 @@
         <!-- RDP 连接信息 (Windows) -->
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-primary bg-gradient text-white border-0 py-3">
-                <h5 class="mb-0 fw-semibold"><i class="bi bi-windows me-2"></i>RDP 连接信息 (Windows)</h5>
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-windows me-2"></i>Windows 连接信息</h5>
             </div>
             <div class="card-body p-4">
                 {% if machine.status == "running" %}
                 <div class="alert alert-info d-flex align-items-center mb-3">
                     <i class="bi bi-info-circle-fill me-2"></i>
-                    <span>Windows 虚拟机需要使用远程桌面连接 (mstsc) 或 VNC 访问</span>
+                    <span>Windows 虚拟机支持 SSH、RDP 和 VNC 连接</span>
                 </div>
-                <div class="row g-3 mb-3">
-                    <div class="col-md-6">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
-                            <input type="text" class="form-control" id="rdp-host" value="{{ server.ip if server else '' }}" readonly>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
-                            <input type="text" class="form-control" id="rdp-port" value="3389" readonly>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="input-group">
-                            <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
-                            <input type="text" class="form-control" id="rdp-user" value="Administrator" readonly>
-                        </div>
-                    </div>
-                </div>
+                
+                <!-- SSH 连接 -->
                 <div class="mb-3">
-                    <div class="input-group">
+                    <h6 class="fw-semibold text-success"><i class="bi bi-terminal me-1"></i>SSH 连接 (OpenSSH)</h6>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
+                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
+                                <input type="text" class="form-control" id="ssh-port" value="{{ machine.ssh_port | default(value='22') }}" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                                <input type="text" class="form-control" id="ssh-user" value="Administrator" readonly>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="input-group mt-2">
                         <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
-                        <input type="password" class="form-control" id="rdp-password" placeholder="点击右侧按钮获取密码">
+                        <input type="password" class="form-control" id="ssh-password" placeholder="点击右侧按钮获取密码">
                         <button class="btn btn-outline-primary" type="button" onclick="fetchPassword()">
                             <i class="bi bi-eye me-1"></i>获取密码
                         </button>
                     </div>
                 </div>
-                <div class="alert alert-warning d-flex justify-content-between align-items-center py-2 mb-0">
-                    <div>
+                
+                <!-- RDP 连接 -->
+                <div class="mb-3">
+                    <h6 class="fw-semibold text-warning"><i class="bi bi-display me-1"></i>RDP 远程桌面</h6>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
+                                <input type="text" class="form-control" id="rdp-host" value="{{ server.ip if server else '' }}" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-signpost-2"></i></span>
+                                <input type="text" class="form-control" id="rdp-port" value="{{ machine.rdp_port | default(value='3389') }}" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="input-group">
+                                <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                                <input type="text" class="form-control" id="rdp-user" value="Administrator" readonly>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="alert alert-warning py-2 mt-2 mb-0">
                         <i class="bi bi-lightbulb-fill me-1"></i>
-                        <strong>RDP 连接：</strong>使用 Windows 自带的「远程桌面连接」应用
+                        使用 Windows 远程桌面连接 (mstsc)：<code>mstsc /v:{{ server.ip if server else 'IP' }}:{{ machine.rdp_port | default(value='3389') }}</code>
                     </div>
                 </div>
+                
+                <!-- VNC 连接 -->
+                {% if machine.novnc_port %}
+                <div class="mb-0">
+                    <h6 class="fw-semibold text-info"><i class="bi bi-eye me-1"></i>VNC Web 访问</h6>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="http://{{ server.ip if server else 'localhost' }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
+                            <i class="bi bi-external-link me-1"></i>打开 VNC
+                        </a>
+                        <span class="text-muted">端口: {{ machine.novnc_port }}</span>
+                    </div>
+                </div>
+                {% endif %}
+                
                 {% else %}
                 <div class="text-center py-4">
                     <i class="bi bi-plug text-muted" style="font-size: 2rem;"></i>
