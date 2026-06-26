@@ -3,42 +3,60 @@
 {% block title %}{{ site_name }} - 仪表盘{% endblock title %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>欢迎回来，{{ user_name | default(value="用户") }}</h2>
+<div class="page-header animate-fade-in-up">
+    <div class="d-flex align-items-center gap-3">
+        <div class="rounded-circle bg-primary-subtle d-flex align-items-center justify-content-center" style="width:56px;height:56px;">
+            <i class="bi bi-speedometer2 display-6 text-primary"></i>
+        </div>
+        <div>
+            <h2 class="mb-0">欢迎回来，{{ user_name | default(value="用户") }}</h2>
+            <p class="text-muted mb-0">这是您的仪表盘概览</p>
+        </div>
     </div>
 </div>
 
 <div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-primary">
-            <div class="card-body text-center">
-                <h5 class="card-title">LDC 余额</h5>
-                <p class="card-text display-6">{{ user_ldc | default(value="0") }}</p>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-1">
+        <div class="stat-card-gradient stat-card-primary h-100">
+            <div class="stat-icon">
+                <i class="bi bi-coin"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ user_ldc | default(value="0") }}</div>
+                <div class="stat-label">LDC 余额</div>
             </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-success">
-            <div class="card-body text-center">
-                <h5 class="card-title">核时余额</h5>
-                <p class="card-text display-6">{{ user_balance | default(value="0") }}</p>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-2">
+        <div class="stat-card-gradient stat-card-success h-100">
+            <div class="stat-icon">
+                <i class="bi bi-stopwatch-fill"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ user_balance | default(value="0") }}</div>
+                <div class="stat-label">核时余额</div>
             </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-info">
-            <div class="card-body text-center">
-                <h5 class="card-title">总使用时长</h5>
-                <p class="card-text display-6">{{ total_usage_hours | default(value="0") }}</p>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-3">
+        <div class="stat-card-gradient stat-card-info h-100">
+            <div class="stat-icon">
+                <i class="bi bi-clock-history"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ total_usage_hours | default(value="0") }}</div>
+                <div class="stat-label">总使用时长 (小时)</div>
             </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-warning">
-            <div class="card-body text-center">
-                <h5 class="card-title">运行中机器</h5>
-                <p class="card-text display-6">{{ active_machines | default(value="0") }}</p>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-4">
+        <div class="stat-card-gradient stat-card-warning h-100">
+            <div class="stat-icon">
+                <i class="bi bi-play-circle-fill"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ active_machines | default(value="0") }}</div>
+                <div class="stat-label">运行中机器</div>
             </div>
         </div>
     </div>
@@ -48,8 +66,13 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">我的机器</h5>
-                <a href="/market" class="btn btn-primary btn-sm">创建机器</a>
+                <h5 class="mb-0 d-flex align-items-center gap-2">
+                    <i class="bi bi-server text-primary"></i>
+                    我的机器
+                </h5>
+                <a href="/market" class="btn btn-primary btn-sm">
+                    <i class="bi bi-plus-lg me-1"></i>创建机器
+                </a>
             </div>
             <div class="card-body">
                 {% if machines %}
@@ -71,33 +94,39 @@
                         <tbody>
                             {% for m in machines %}
                             <tr>
-                                <td>{{ m.id }}</td>
+                                <td><span class="fw-medium">#{{ m.id }}</span></td>
                                 <td>{{ m.server_id }}</td>
-                                <td>{{ m.cpu_cores }} 核</td>
-                                <td>{{ m.memory_gb }} GB</td>
-                                <td>{{ m.disk_gb }} GB</td>
+                                <td><i class="bi bi-cpu me-1 text-muted"></i>{{ m.cpu_cores }} 核</td>
+                                <td><i class="bi bi-memory me-1 text-muted"></i>{{ m.memory_gb }} GB</td>
+                                <td><i class="bi bi-hdd me-1 text-muted"></i>{{ m.disk_gb }} GB</td>
                                 <td>
                                     {% if m.status == "running" %}
-                                    <span class="badge bg-success">运行中</span>
+                                    <span class="badge bg-success"><i class="bi bi-check-circle-fill me-1"></i>运行中</span>
                                     {% elif m.status == "pending" %}
-                                    <span class="badge bg-info">创建中</span>
+                                    <span class="badge bg-info"><i class="bi bi-hourglass-split me-1"></i>创建中</span>
                                     {% elif m.status == "failed" %}
-                                    <span class="badge bg-danger">创建失败</span>
+                                    <span class="badge bg-danger"><i class="bi bi-x-circle-fill me-1"></i>创建失败</span>
                                     {% else %}
-                                    <span class="badge bg-secondary">已停止</span>
+                                    <span class="badge bg-secondary"><i class="bi bi-pause-circle-fill me-1"></i>已停止</span>
                                     {% endif %}
                                 </td>
-                                <td>{{ m.core_hours_per_hour }}</td>
+                                <td><span class="fw-medium text-primary">{{ m.core_hours_per_hour }}</span></td>
                                 <td>{{ m.expires_at }}</td>
                                 <td>
                                     {% if m.status == "running" %}
-                                    <a href="/machines/{{ m.id }}/connect" class="btn btn-sm btn-primary">连接</a>
+                                    <a href="/machines/{{ m.id }}/connect" class="btn btn-sm btn-primary me-1">
+                                        <i class="bi bi-terminal me-1"></i>连接
+                                    </a>
                                     <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
-                                        <button type="submit" class="btn btn-sm btn-warning">停止</button>
+                                        <button type="submit" class="btn btn-sm btn-warning me-1">
+                                            <i class="bi bi-stop-circle me-1"></i>停止
+                                        </button>
                                     </form>
                                     {% endif %}
                                     <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
-                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                        <button type="submit" class="btn btn-sm btn-danger">
+                                            <i class="bi bi-trash me-1"></i>删除
+                                        </button>
                                     </form>
                                 </td>
                             </tr>
@@ -106,7 +135,15 @@
                     </table>
                 </div>
                 {% else %}
-                <p class="text-muted text-center py-3">暂无机器，<a href="/market">去创建一台</a></p>
+                <div class="empty-state">
+                    <div class="empty-state-icon">
+                        <i class="bi bi-server"></i>
+                    </div>
+                    <p class="empty-state-text">暂无机器，去创建一台开始使用吧！</p>
+                    <a href="/market" class="btn btn-primary">
+                        <i class="bi bi-plus-lg me-1"></i>去市场选择机器
+                    </a>
+                </div>
                 {% endif %}
             </div>
         </div>
@@ -117,7 +154,8 @@
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-box-seam-fill text-warning"></i>
                 <h5 class="mb-0">已购套餐</h5>
             </div>
             <div class="card-body">
@@ -134,14 +172,14 @@
                         <tbody>
                             {% for p in packages %}
                             <tr>
-                                <td>{{ p.package_id }}</td>
-                                <td>{{ p.core_hours }}</td>
+                                <td><span class="fw-medium">#{{ p.package_id }}</span></td>
+                                <td><span class="text-primary fw-bold">{{ p.core_hours }}</span> 核时</td>
                                 <td>{{ p.expires_at | default(value="无限制") }}</td>
                                 <td>
                                     {% if p.is_active %}
-                                    <span class="badge bg-success">有效</span>
+                                    <span class="badge bg-success"><i class="bi bi-check-circle-fill me-1"></i>有效</span>
                                     {% else %}
-                                    <span class="badge bg-secondary">已过期</span>
+                                    <span class="badge bg-secondary"><i class="bi bi-x-circle-fill me-1"></i>已过期</span>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -156,52 +194,92 @@
 {% endif %}
 
 <div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">我的 API Key</h5>
+                <h5 class="mb-0 d-flex align-items-center gap-2">
+                    <i class="bi bi-key-fill text-warning"></i>
+                    我的 API Key
+                </h5>
                 <form method="post" action="/dashboard/api-key" style="display:inline">
-                    <button type="submit" class="btn btn-warning btn-sm">重新生成</button>
+                    <button type="submit" class="btn btn-warning btn-sm">
+                        <i class="bi bi-arrow-repeat me-1"></i>重新生成
+                    </button>
                 </form>
             </div>
             <div class="card-body">
                 {% if api_key %}
-                <div class="input-group">
-                    <input type="text" class="form-control" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
-                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">显示</button>
-                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">复制</button>
+                <div class="input-group mb-2">
+                    <span class="input-group-text"><i class="bi bi-key"></i></span>
+                    <input type="text" class="form-control font-monospace" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
+                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">
+                        <i class="bi bi-eye me-1"></i>显示
+                    </button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">
+                        <i class="bi bi-clipboard me-1"></i>复制
+                    </button>
                 </div>
-                <small class="text-muted">请妥善保管此 Key，用于 API 请求认证。点击「显示」查看完整 Key</small>
+                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>请妥善保管此 Key，用于 API 请求认证。点击「显示」查看完整 Key</small>
                 {% else %}
-                <div class="input-group">
+                <div class="input-group mb-2">
                     <input type="text" class="form-control" value="尚未生成 API Key" readonly disabled>
-                    <button class="btn btn-primary" type="submit" form="genApiKeyForm">生成 API Key</button>
+                    <button class="btn btn-primary" type="submit" form="genApiKeyForm">
+                        <i class="bi bi-plus-lg me-1"></i>生成 API Key
+                    </button>
                 </div>
                 <form id="genApiKeyForm" method="post" action="/dashboard/api-key" style="display:none"></form>
                 {% endif %}
             </div>
         </div>
     </div>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-gift-fill text-danger"></i>
+                <h5 class="mb-0">余额兑换码</h5>
+            </div>
+            <div class="card-body d-flex flex-column justify-content-center">
+                <p class="card-text text-muted mb-3">将余额转换为兑换码分享给他人</p>
+                <a href="/balance-to-code" class="btn btn-outline-primary align-self-start">
+                    <i class="bi bi-arrow-left-right me-1"></i>立即兑换
+                </a>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header"><h5 class="mb-0">我的服务器</h5></div>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-hdd-stack-fill text-info"></i>
+                <h5 class="mb-0">我的服务器</h5>
+            </div>
             <div class="card-body">
                 {% if my_servers %}
                 <div class="list-group">
                     {% for s in my_servers %}
                     <div class="list-group-item d-flex justify-content-between align-items-center">
                         <div>
-                            <strong>{{ s.name }}</strong>
-                            {% if s.is_premium %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
-                            <small class="text-muted ms-2">{{ s.ip }} · {{ s.cpu_cores }}核 / {{ s.memory_gb }}GB</small>
+                            <strong class="d-flex align-items-center gap-2">
+                                <i class="bi bi-pc-display text-primary"></i>
+                                {{ s.name }}
+                            </strong>
+                            {% if s.is_premium %}
+                            <span class="badge bg-danger ms-2"><i class="bi bi-star-fill me-1"></i>茶的优选</span>
+                            {% endif %}
+                            <small class="text-muted ms-2 d-block mt-1">
+                                <i class="bi bi-hdd me-1"></i>{{ s.ip }} · 
+                                <i class="bi bi-cpu me-1"></i>{{ s.cpu_cores }}核 / 
+                                <i class="bi bi-memory me-1"></i>{{ s.memory_gb }}GB
+                            </small>
                         </div>
                         <div>
                             {% if premium_enabled and not s.is_premium %}
                             <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">购买优选 ({{ premium_ldc_cost }} LDC)</button>
+                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                    <i class="bi bi-star me-1"></i>购买优选 ({{ premium_ldc_cost }} LDC)
+                                </button>
                             </form>
                             {% endif %}
                         </div>
@@ -209,38 +287,37 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-muted">暂无贡献的服务器</p>
+                <div class="empty-state py-4">
+                    <div class="empty-state-icon" style="font-size:3rem;">
+                        <i class="bi bi-hdd-stack"></i>
+                    </div>
+                    <p class="empty-state-text mb-0">暂无贡献的服务器</p>
+                </div>
                 {% endif %}
             </div>
         </div>
     </div>
-</div>
-
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">余额兑换码</h5>
-            </div>
-            <div class="card-body text-center">
-                <p class="card-text">将余额转换为兑换码分享给他人</p>
-                <a href="/balance-to-code" class="btn btn-outline-primary">立即兑换</a>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">每日签到</h5>
+    <div class="col-md-6 mb-3">
+        <div class="card h-100 border-0 overflow-hidden">
+            <div class="card-body text-white p-4" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h5 class="card-title mb-1 d-flex align-items-center gap-2">
+                            <i class="bi bi-calendar-check-fill"></i>
+                            每日签到
+                        </h5>
+                        <p class="card-text opacity-90 mb-0" style="font-size:0.9rem;">每日签到可获取核时奖励</p>
+                    </div>
+                    <div style="font-size:3rem; opacity:0.4;">
+                        <i class="bi bi-gift"></i>
+                    </div>
+                </div>
+                <p class="card-text mb-3 opacity-90" style="font-size:0.85rem;">连续签到奖励更多！不要错过哦~</p>
                 <form method="post" action="/checkin">
-                    <button type="submit" class="btn btn-success">立即签到</button>
+                    <button type="submit" class="btn btn-light text-success fw-bold">
+                        <i class="bi bi-hand-thumbs-up-fill me-1"></i>立即签到
+                    </button>
                 </form>
-            </div>
-            <div class="card-body">
-                <p class="text-muted mb-0">每日签到可获取核时奖励，连续签到奖励更多！</p>
             </div>
         </div>
     </div>

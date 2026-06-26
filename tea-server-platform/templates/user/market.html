@@ -2,103 +2,185 @@
 
 {% block title %}{{ site_name }} - 机器市场{% endblock title %}
 
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+{% endblock head_extra %}
+
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>机器市场</h2>
-        <p class="text-muted">从可用服务器中选择一台创建你的虚拟机</p>
+<div class="page-header mb-4 pb-3">
+    <div class="d-flex align-items-center mb-2">
+        <div class="me-3 p-3 bg-primary-subtle rounded-3">
+            <i class="bi bi-shop-window text-primary fs-2"></i>
+        </div>
+        <div>
+            <h2 class="fw-bold mb-1 text-gradient">机器市场</h2>
+            <p class="text-muted mb-0">从可用服务器中选择一台创建你的虚拟机</p>
+        </div>
     </div>
 </div>
 
-<div class="row">
+<div class="row g-4">
     {% if servers %}
     {% for s in servers %}
-    <div class="col-md-6 col-lg-4 mb-4">
-        <div class="card h-100">
-            <div class="card-body">
-                <h5 class="card-title">
-                    {{ s.name }}
-                    {% if s.is_premium and premium_enabled %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
-                </h5>
-                <ul class="list-group list-group-flush mb-3">
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>CPU</span>
-                        <span class="fw-bold">{{ s.cpu_cores }} 核</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>内存</span>
-                        <span class="fw-bold">{{ s.memory_gb }} GB</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>带宽</span>
-                        <span class="fw-bold">{{ s.bandwidth_mbps }} Mbps</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>磁盘</span>
-                        <span class="fw-bold">{{ s.disk_gb }} GB</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>到期时间</span>
-                        <span class="fw-bold">{{ s.expires_at }}</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>虚拟化</span>
-                        <span class="badge bg-info">{{ s.virt_type | upper }}</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>服务器地址</span>
-                        <span class="fw-bold">{{ s.ip }}</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>系统版本</span>
-                        <span class="fw-bold">{% if s.linux_version %}{{ s.linux_version }}{% else %}未知{% endif %}</span>
-                    </li>
+    <div class="col-md-6 col-xl-4">
+        <div class="card h-100 server-card border-0 shadow-sm">
+            <div class="card-body p-4">
+                <div class="d-flex align-items-start justify-content-between mb-3">
+                    <div class="d-flex align-items-center">
+                        <div class="server-icon-wrapper me-3 p-2 bg-primary-subtle rounded-3">
+                            <i class="bi bi-hdd-rack text-primary fs-3"></i>
+                        </div>
+                        <div>
+                            <h5 class="card-title fw-bold mb-1">{{ s.name }}</h5>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-info bg-opacity-25 text-info px-2 py-1">
+                                    <i class="bi bi-cpu me-1"></i>{{ s.virt_type | upper }}
+                                </span>
+                                {% if s.is_premium and premium_enabled %}
+                                <span class="badge bg-gradient-danger text-white px-2 py-1">
+                                    <i class="bi bi-star-fill me-1"></i>茶的优选
+                                </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="server-specs mb-3">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <div class="spec-item p-2 bg-light rounded-3">
+                                <div class="d-flex align-items-center mb-1">
+                                    <i class="bi bi-cpu text-primary me-2"></i>
+                                    <small class="text-muted">CPU</small>
+                                </div>
+                                <div class="fw-bold fs-5">{{ s.cpu_cores }} <small class="text-muted fw-normal">核</small></div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="spec-item p-2 bg-light rounded-3">
+                                <div class="d-flex align-items-center mb-1">
+                                    <i class="bi bi-memory text-success me-2"></i>
+                                    <small class="text-muted">内存</small>
+                                </div>
+                                <div class="fw-bold fs-5">{{ s.memory_gb }} <small class="text-muted fw-normal">GB</small></div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="spec-item p-2 bg-light rounded-3">
+                                <div class="d-flex align-items-center mb-1">
+                                    <i class="bi bi-speedometer2 text-warning me-2"></i>
+                                    <small class="text-muted">带宽</small>
+                                </div>
+                                <div class="fw-bold fs-5">{{ s.bandwidth_mbps }} <small class="text-muted fw-normal">Mbps</small></div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="spec-item p-2 bg-light rounded-3">
+                                <div class="d-flex align-items-center mb-1">
+                                    <i class="bi bi-hdd text-info me-2"></i>
+                                    <small class="text-muted">磁盘</small>
+                                </div>
+                                <div class="fw-bold fs-5">{{ s.disk_gb }} <small class="text-muted fw-normal">GB</small></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="server-info-list mb-3">
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                        <span class="text-muted small">
+                            <i class="bi bi-globe me-1"></i>服务器地址
+                        </span>
+                        <span class="fw-medium small">{{ s.ip }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                        <span class="text-muted small">
+                            <i class="bi bi-ubuntu me-1"></i>系统版本
+                        </span>
+                        <span class="fw-medium small">{% if s.linux_version %}{{ s.linux_version }}{% else %}未知{% endif %}</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                        <span class="text-muted small">
+                            <i class="bi bi-calendar-event me-1"></i>到期时间
+                        </span>
+                        <span class="fw-medium small">{{ s.expires_at }}</span>
+                    </div>
                     {% if s.provider %}
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>供应商</span>
-                        <span class="fw-bold">{{ s.provider }}</span>
-                    </li>
+                    <div class="d-flex justify-content-between align-items-center py-2">
+                        <span class="text-muted small">
+                            <i class="bi bi-building me-1"></i>供应商
+                        </span>
+                        <span class="fw-medium small">{{ s.provider }}</span>
+                    </div>
                     {% endif %}
-                    {% if s.description %}
-                    <li class="list-group-item">
-                        <small class="text-muted">{{ s.description | truncate(length=80) }}</small>
-                    </li>
-                    {% endif %}
-                </ul>
-                <button type="button" class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
-                    选择此服务器
-                </button>
+                </div>
+
+                {% if s.description %}
+                <div class="server-desc mb-3 p-3 bg-light rounded-3">
+                    <small class="text-muted"><i class="bi bi-info-circle me-1"></i>{{ s.description | truncate(length=80) }}</small>
+                </div>
+                {% endif %}
+
+                <div class="d-grid">
+                    <button type="button" class="btn btn-primary btn-lg py-2" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
+                        <i class="bi bi-plus-circle me-2"></i>选择此服务器
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Select Modal -->
     <div class="modal fade" id="selectModal{{ s.id }}" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">配置机器 - {{ s.name }}</h5>
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0">
+                <div class="modal-header border-bottom-0 pb-0">
+                    <div class="d-flex align-items-center">
+                        <div class="me-3 p-2 bg-primary-subtle rounded-3">
+                            <i class="bi bi-gear-wide-connected text-primary fs-3"></i>
+                        </div>
+                        <div>
+                            <h5 class="modal-title fw-bold">配置机器</h5>
+                            <small class="text-muted">{{ s.name }}</small>
+                        </div>
+                    </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <form method="post" action="/machines/create">
-                    <div class="modal-body">
+                    <div class="modal-body p-4">
                         <input type="hidden" name="server_id" value="{{ s.id }}">
+                        
                         <div class="mb-3">
-                            <label class="form-label">CPU 核心数 (最大 {{ s.cpu_cores }})</label>
-                            <input type="number" class="form-control" name="cpu_cores" required min="1" max="{{ s.cpu_cores }}" value="1">
+                            <label class="form-label fw-medium">
+                                <i class="bi bi-cpu me-1 text-primary"></i>CPU 核心数
+                                <span class="text-muted float-end">最大 {{ s.cpu_cores }} 核</span>
+                            </label>
+                            <input type="number" class="form-control form-control-lg" name="cpu_cores" required min="1" max="{{ s.cpu_cores }}" value="1">
                         </div>
+                        
                         <div class="mb-3">
-                            <label class="form-label">内存 GB (最大 {{ s.memory_gb }})</label>
-                            <input type="number" class="form-control" name="memory_gb" required min="0.1" max="{{ s.memory_gb }}" value="1" step="0.1">
+                            <label class="form-label fw-medium">
+                                <i class="bi bi-memory me-1 text-success"></i>内存大小
+                                <span class="text-muted float-end">最大 {{ s.memory_gb }} GB</span>
+                            </label>
+                            <input type="number" class="form-control form-control-lg" name="memory_gb" required min="0.1" max="{{ s.memory_gb }}" value="1" step="0.1">
                         </div>
+                        
                         <div class="mb-3">
-                            <label class="form-label">磁盘 GB (最大 {{ s.disk_gb }})</label>
-                            <input type="number" class="form-control" name="disk_gb" required min="1" max="{{ s.disk_gb }}" value="10" step="0.1">
+                            <label class="form-label fw-medium">
+                                <i class="bi bi-hdd me-1 text-info"></i>磁盘大小
+                                <span class="text-muted float-end">最大 {{ s.disk_gb }} GB</span>
+                            </label>
+                            <input type="number" class="form-control form-control-lg" name="disk_gb" required min="1" max="{{ s.disk_gb }}" value="10" step="0.1">
                         </div>
+                        
                         <div class="mb-3">
-                            <label class="form-label">系统镜像</label>
-                            <select class="form-select" name="image" id="imageSelect{{ s.id }}" required onchange="onImageChange('{{ s.id }}')">
-                                <optgroup label="Linux 系统">
+                            <label class="form-label fw-medium">
+                                <i class="bi bi-disc me-1 text-warning"></i>系统镜像
+                            </label>
+                            <select class="form-select form-select-lg" name="image" id="imageSelect{{ s.id }}" required onchange="onImageChange('{{ s.id }}')">
+                                <optgroup label="🐧 Linux 系统">
                                     <option value="ubuntu:22.04" selected>Ubuntu 22.04 LTS</option>
                                     <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
                                     <option value="debian:12">Debian 12</option>
@@ -107,7 +189,7 @@
                                     <option value="alpine:3.19">Alpine Linux 3.19</option>
                                 </optgroup>
                                 {% if s.virt_type == 'kvm' %}
-                                <optgroup label="Windows 系统 (仅 KVM)">
+                                <optgroup label="🪟 Windows 系统 (仅 KVM)">
                                     <option value="windows:2022">Windows Server 2022</option>
                                     <option value="windows:2019">Windows Server 2019</option>
                                     <option value="windows:2025">Windows Server 2025</option>
@@ -116,23 +198,42 @@
                                 </optgroup>
                                 {% endif %}
                             </select>
-                            <small class="text-muted" id="imageNote{{ s.id }}">Linux 系统支持 SSH 连接</small>
-                        </div>
-                        <div class="mb-3" id="passwordField{{ s.id }}">
-                            <label class="form-label">Root 密码</label>
-                            <div class="input-group">
-                                <input type="password" class="form-control" name="root_password" id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" required minlength="6">
-                                <button class="btn btn-outline-secondary" type="button" onclick="toggleRootPassword('{{ s.id }}')">显示</button>
+                            <div class="mt-2 small" id="imageNote{{ s.id }}">
+                                <span class="text-success"><i class="bi bi-check-circle me-1"></i>Linux 系统支持 SSH 连接</span>
                             </div>
-                            <small class="text-muted">至少 6 位，建议使用强密码</small>
                         </div>
-                        <div class="alert alert-info">
-                            <small>核时消耗 = CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
+                        
+                        <div class="mb-3" id="passwordField{{ s.id }}">
+                            <label class="form-label fw-medium">
+                                <i class="bi bi-key me-1 text-danger"></i>Root 密码
+                            </label>
+                            <div class="input-group input-group-lg">
+                                <input type="password" class="form-control" name="root_password" id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" required minlength="6">
+                                <button class="btn btn-outline-secondary" type="button" onclick="toggleRootPassword('{{ s.id }}')">
+                                    <i class="bi bi-eye" id="toggleIcon{{ s.id }}"></i>
+                                </button>
+                            </div>
+                            <div class="mt-2 small text-muted">
+                                <i class="bi bi-shield-lock me-1"></i>至少 6 位，建议使用强密码
+                            </div>
+                        </div>
+                        
+                        <div class="alert alert-info d-flex align-items-center mb-0">
+                            <i class="bi bi-lightbulb-fill me-2 fs-5"></i>
+                            <div>
+                                <small class="fw-medium">核时消耗计算方式</small>
+                                <br>
+                                <small>CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
+                            </div>
                         </div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="submit" class="btn btn-primary">确认创建</button>
+                    <div class="modal-footer border-top-0 pt-0">
+                        <button type="button" class="btn btn-outline-secondary px-4" data-bs-dismiss="modal">
+                            <i class="bi bi-x-circle me-1"></i>取消
+                        </button>
+                        <button type="submit" class="btn btn-primary px-5">
+                            <i class="bi bi-check-circle me-1"></i>确认创建
+                        </button>
                     </div>
                 </form>
             </div>
@@ -141,11 +242,18 @@
     {% endfor %}
     {% else %}
     <div class="col-12">
-        <div class="card">
+        <div class="card border-0 shadow-sm">
             <div class="card-body text-center py-5">
-                <h5 class="text-muted">暂无可用服务器</h5>
-                <p>目前没有活跃的服务器可供选择，请稍后再来。</p>
-                <a href="/servers/contribute" class="btn btn-primary">贡献一台服务器</a>
+                <div class="mb-4">
+                    <div class="d-inline-flex align-items-center justify-content-center p-4 bg-light rounded-circle">
+                        <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
+                    </div>
+                </div>
+                <h4 class="text-muted mb-2">暂无可用服务器</h4>
+                <p class="text-muted mb-4">目前没有活跃的服务器可供选择，请稍后再来。</p>
+                <a href="/servers/contribute" class="btn btn-primary btn-lg">
+                    <i class="bi bi-plus-circle me-2"></i>贡献一台服务器
+                </a>
             </div>
         </div>
     </div>
@@ -157,13 +265,13 @@
 <script>
 function toggleRootPassword(serverId) {
     const input = document.getElementById('rootPassword' + serverId);
-    const btn = input.nextElementSibling;
+    const icon = document.getElementById('toggleIcon' + serverId);
     if (input.type === 'password') {
         input.type = 'text';
-        btn.textContent = '隐藏';
+        icon.className = 'bi bi-eye-slash';
     } else {
         input.type = 'password';
-        btn.textContent = '显示';
+        icon.className = 'bi bi-eye';
     }
 }
 
@@ -176,11 +284,11 @@ function onImageChange(serverId) {
     const value = select.value;
     
     if (value.startsWith('windows:')) {
-        note.innerHTML = '<span class="text-warning">⚠️ Windows 系统支持 RDP 连接，无 SSH</span>';
+        note.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Windows 系统支持 RDP 连接，无 SSH</span>';
         passwordField.style.display = 'none';
         passwordInput.removeAttribute('required');
     } else {
-        note.textContent = 'Linux 系统支持 SSH 连接';
+        note.innerHTML = '<span class="text-success"><i class="bi bi-check-circle me-1"></i>Linux 系统支持 SSH 连接</span>';
         passwordField.style.display = 'block';
         passwordInput.setAttribute('required', 'required');
     }

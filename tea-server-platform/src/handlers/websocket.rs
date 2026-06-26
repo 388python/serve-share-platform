@@ -196,7 +196,7 @@ fn ssh_worker(
     let connect_addr = format!("{}:{}", machine_ip, ssh_port);
 
     // TCP connection with timeout using set_read_timeout
-    let mut tcp = match TcpStream::connect(&connect_addr) {
+    let tcp = match TcpStream::connect(&connect_addr) {
         Ok(s) => {
             let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
             let _ = s.set_write_timeout(Some(Duration::from_secs(10)));

@@ -384,14 +384,14 @@ pub async fn contribute_server_page(
     State(state): State<AppState>,
     cookies: Cookies,
 ) -> Result<Html<String>, Redirect> {
-    let (_user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
 
     if let Ok(servers) = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE owner_id = ? AND is_active = 1 ORDER BY created_at DESC")
-        .bind(0i64)
+        .bind(user_id)
         .fetch_all(pool)
         .await {
         ctx.insert("servers", &servers);

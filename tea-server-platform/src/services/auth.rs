@@ -250,6 +250,7 @@ pub struct OAuthAuthorizeQuery {
     pub client_id: String,
     pub redirect_uri: String,
     pub state: Option<String>,
+    #[allow(dead_code)]
     pub response_type: Option<String>,
 }
 

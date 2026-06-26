@@ -143,6 +143,7 @@ pub struct ApiError {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct ApiSuccess<T> {
     pub success: bool,
@@ -277,13 +278,7 @@ async fn api_servers_contribute(
         Ok(res) => {
             let server_id = res.last_insert_rowid();
             services::ssh_proxy::release_port(0);
-            services::ssh_proxy::allocate_port(server_id);
-
-            let _ = sqlx::query("UPDATE servers SET proxy_port = ? WHERE id = ?")
-                .bind(proxy_port)
-                .bind(server_id)
-                .execute(pool)
-                .await;
+            services::ssh_proxy::allocate_port_with_id(server_id, proxy_port as u16);
 
             let ip = form.ip.clone();
             let ssh_port_copy = ssh_port;
@@ -1915,7 +1910,7 @@ async fn api_machine_console(
     .unwrap_or(None);
 
     match machine {
-        Some((id, server_id, virt_type, status)) => {
+        Some((id, server_id, _virt_type, status)) => {
             if status != "running" {
                 return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
             }

@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 loop {
                     match listener.accept().await {
-                        Ok((mut incoming, _addr)) => {
+                        Ok((incoming, _addr)) => {
                             // Forward to the corresponding server
                             let pool = db::get_db();
                             let server: Option<(i32, String)> = sqlx::query_as(
@@ -116,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
 
                             if let Some((ssh_port, ip)) = server {
                                 let target = format!("{}:{}", ip, ssh_port);
-                                if let Ok(mut outgoing) = tokio::net::TcpStream::connect(&target).await {
+                                if let Ok(outgoing) = tokio::net::TcpStream::connect(&target).await {
                                     let (mut ri, mut wi) = tokio::io::split(incoming);
                                     let (mut ro, mut wo) = tokio::io::split(outgoing);
                                     let _ = tokio::join!(

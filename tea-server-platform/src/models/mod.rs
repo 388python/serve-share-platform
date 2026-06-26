@@ -90,6 +90,7 @@ pub struct Machine {
 }
 
 // 应用镜像定义
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppImage {
     pub id: String,
@@ -101,6 +102,7 @@ pub struct AppImage {
 }
 
 // 系统镜像定义
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemImage {
     pub id: String,
@@ -152,6 +154,7 @@ pub struct RedeemCode {
 }
 
 // Table: invites
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Invite {
     pub id: i64,
@@ -165,6 +168,7 @@ pub struct Invite {
 }
 
 // Table: checkins
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Checkin {
     pub id: i64,
@@ -194,6 +198,7 @@ pub struct UserPackage {
 }
 
 // Table: traffic_alerts
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TrafficAlert {
     pub id: i64,
@@ -206,6 +211,7 @@ pub struct TrafficAlert {
 }
 
 // Table: disputes
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Dispute {
     pub id: i64,
@@ -238,6 +244,7 @@ pub struct OAuthApp {
 }
 
 // Table: balance_to_code_logs
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct BalanceToCodeLog {
     pub id: i64,
@@ -250,6 +257,7 @@ pub struct BalanceToCodeLog {
 }
 
 // Table: machine_stats
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct MachineStats {
     pub id: i64,
@@ -267,6 +275,7 @@ pub struct MachineStats {
 }
 
 // Table: warning_letters
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WarningLetter {
     pub id: i64,
@@ -286,6 +295,7 @@ pub struct WarningLetter {
 }
 
 // Warning letter view model with username
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WarningLetterView {
     pub id: i64,
@@ -304,6 +314,7 @@ pub struct WarningLetterView {
 }
 
 // Combined machine info with stats
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineWithStats {
     #[serde(flatten)]
@@ -314,6 +325,7 @@ pub struct MachineWithStats {
 }
 
 // Request/response types for API and template rendering
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserSession {
     pub user_id: i64,
@@ -337,6 +349,7 @@ pub struct OpenGFWRule {
 }
 
 // Table: opengfw_logs
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OpenGFWLog {
     pub id: i64,
