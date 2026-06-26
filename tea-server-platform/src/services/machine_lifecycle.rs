@@ -15,14 +15,18 @@ pub struct MachineProvisioningJob {
     pub regular_used: f64,
     pub bonus_used: f64,
     pub used_hours: f64,
+    pub image: String,        // 系统镜像
+    pub app_image: String,    // 应用镜像
+    pub root_password: String, // 用户设置的 root 密码
+    pub app_secrets: String,   // 应用密钥（JSON 字符串）
 }
 
 pub fn spawn_agent_create_job(job: MachineProvisioningJob) {
     tokio::spawn(async move {
-        let success = call_agent_create(&job).await;
-        if success {
+        let result = call_agent_create(&job).await;
+        if let Some(create_data) = result {
             if let Err(err) =
-                mark_machine_running(job.machine_id, job.user_id, job.used_hours).await
+                mark_machine_running(job.machine_id, job.user_id, job.used_hours, &create_data).await
             {
                 tracing::error!(
                     machine_id = job.machine_id,
@@ -40,9 +44,12 @@ pub fn spawn_agent_create_job(job: MachineProvisioningJob) {
     });
 }
 
-async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
+async fn call_agent_create(job: &MachineProvisioningJob) -> Option<Value> {
     let agent_url = format!("http://{}:19527", job.server_ip);
     let client = reqwest::Client::new();
+
+    // Parse app_secrets from JSON string
+    let app_secrets_val: Value = serde_json::from_str(&job.app_secrets).unwrap_or(json!({}));
 
     let request_body = json!({
         "name": job.machine_name,
@@ -50,6 +57,11 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
         "memory": (job.memory_gb * 1024.0) as i64,
         "disk": job.disk_gb,
         "virt_type": job.virt_type,
+        "image": job.image,
+        "app_image": job.app_image,
+        "ssh_public_key": crate::services::session::get_ssh_public_key(),
+        "root_password": job.root_password,
+        "app_secrets": app_secrets_val,
     });
 
     let max_retries = 3;
@@ -116,7 +128,7 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
                     response = %body,
                     "agent create succeeded",
                 );
-                return true;
+                return Some(body);
             }
             Ok(body) => {
                 tracing::warn!(
@@ -144,22 +156,37 @@ async fn call_agent_create(job: &MachineProvisioningJob) -> bool {
         "agent create failed after all {} retries",
         max_retries,
     );
-    false
+    None
 }
 
 async fn mark_machine_running(
     machine_id: i64,
     user_id: i64,
     used_hours: f64,
+    create_data: &Value,
 ) -> anyhow::Result<()> {
     let pool = db::get_db();
     let mut tx = pool.begin().await?;
 
-    let updated =
-        sqlx::query("UPDATE machines SET status = 'running' WHERE id = ? AND status = 'pending'")
-            .bind(machine_id)
-            .execute(&mut *tx)
-            .await?;
+    let root_password = create_data
+        .get("root_password")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let ip = create_data.get("ip").and_then(Value::as_str).unwrap_or_default();
+    let app_secrets = create_data
+        .get("app_secrets")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
+    let updated = sqlx::query(
+        "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ? WHERE id = ? AND status = 'pending'",
+    )
+    .bind(root_password)
+    .bind(ip)
+    .bind(app_secrets)
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
 
     if updated.rows_affected() > 0 {
         sqlx::query("UPDATE users SET total_usage_hours = total_usage_hours + ? WHERE id = ?")

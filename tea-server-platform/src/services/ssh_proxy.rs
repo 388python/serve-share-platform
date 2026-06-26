@@ -31,6 +31,13 @@ pub fn release_port(server_id: i64) {
     ports.as_mut().unwrap().remove(&server_id);
 }
 
+pub fn allocate_port_with_id(server_id: i64, port: u16) {
+    init();
+    let mut ports = PORT_ALLOCATIONS.lock().unwrap();
+    ports.as_mut().unwrap().insert(server_id, port);
+}
+
+#[allow(dead_code)]
 pub fn get_port(server_id: i64) -> Option<u16> {
     init();
     PORT_ALLOCATIONS.lock().unwrap().as_ref().unwrap().get(&server_id).copied()

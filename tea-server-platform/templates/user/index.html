@@ -3,154 +3,187 @@
 {% block title %}{{ site_name }} - 个人中心{% endblock title %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>个人中心</h2>
-        {% if profile %}
-        <p class="text-muted">欢迎回来，{{ profile.username }} · {{ profile.email }}</p>
-        {% endif %}
-    </div>
-</div>
-
-<!-- Balance Cards -->
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-primary h-100">
-            <div class="card-body text-center">
-                <h5 class="card-title">LDC 余额</h5>
-                <p class="card-text display-6">{{ profile.ldc_balance | default(value="0") }}</p>
-            </div>
+<div class="page-header animate-fade-in-up">
+    <div class="d-flex align-items-center gap-3">
+        <div class="rounded-circle bg-primary-subtle d-flex align-items-center justify-content-center" style="width:56px;height:56px;">
+            <i class="bi bi-person-circle display-6 text-primary"></i>
         </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-success h-100">
-            <div class="card-body text-center">
-                <h5 class="card-title">核时余额</h5>
-                <p class="card-text display-6">{{ profile.core_hours | default(value="0") }}</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-info h-100">
-            <div class="card-body text-center">
-                <h5 class="card-title">总使用时长</h5>
-                <p class="card-text display-6">{{ profile.total_usage_hours | default(value="0") }}</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-warning h-100">
-            <div class="card-body text-center">
-                <h5 class="card-title">运行中机器</h5>
-                <p class="card-text display-6">{{ active_machines | default(value="0") }} / {{ total_machines | default(value="0") }}</p>
-            </div>
+        <div>
+            <h2 class="mb-0">个人中心</h2>
+            {% if profile %}
+            <p class="text-muted mb-0">欢迎回来，{{ profile.username }} · {{ profile.email }}</p>
+            {% endif %}
         </div>
     </div>
 </div>
 
-<!-- Warning Letters Alert -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-1">
+        <div class="stat-card-gradient stat-card-primary h-100">
+            <div class="stat-icon">
+                <i class="bi bi-coin"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ profile.ldc_balance | default(value="0") }}</div>
+                <div class="stat-label">LDC 余额</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-2">
+        <div class="stat-card-gradient stat-card-success h-100">
+            <div class="stat-icon">
+                <i class="bi bi-stopwatch-fill"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ profile.core_hours | default(value="0") }}</div>
+                <div class="stat-label">核时余额</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-3">
+        <div class="stat-card-gradient stat-card-info h-100">
+            <div class="stat-icon">
+                <i class="bi bi-clock-history"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ profile.total_usage_hours | default(value="0") }}</div>
+                <div class="stat-label">总使用时长 (小时)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-4">
+        <div class="stat-card-gradient stat-card-warning h-100">
+            <div class="stat-icon">
+                <i class="bi bi-server"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ active_machines | default(value="0") }} / {{ total_machines | default(value="0") }}</div>
+                <div class="stat-label">运行中机器</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if unread_warnings > 0 %}
-<div class="row mb-4">
+<div class="row mb-4 animate-fade-in-up">
     <div class="col-12">
         <div class="alert alert-danger d-flex align-items-center" role="alert">
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <i class="bi bi-exclamation-triangle-fill me-3 fs-4"></i>
             <div>
                 您有 <strong>{{ unread_warnings }} 封</strong> 未读警告信，请及时查看处理。
-                <a href="/warnings" class="alert-link">立即查看 →</a>
+                <a href="/warnings" class="alert-link">立即查看 <i class="bi bi-arrow-right"></i></a>
             </div>
         </div>
     </div>
 </div>
 {% endif %}
 
-<!-- Quick Access -->
 <div class="row mb-4">
     <div class="col-12">
-        <h4 class="mb-3">快捷功能</h4>
+        <h4 class="mb-3 fw-bold">
+            <i class="bi bi-lightning-charge-fill text-warning me-2"></i>
+            快捷功能
+        </h4>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/market" class="text-decoration-none">
+        <a href="/market" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-plus-circle-fill display-5 text-primary"></i></div>
-                    <h6>创建机器</h6>
+                    <div class="quick-card-icon primary">
+                        <i class="bi bi-plus-circle-fill"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">创建机器</h6>
                     <small class="text-muted">从市场租用算力</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/machines" class="text-decoration-none">
+        <a href="/machines" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-server display-5 text-success"></i></div>
-                    <h6>我的机器</h6>
+                    <div class="quick-card-icon success">
+                        <i class="bi bi-server"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">我的机器</h6>
                     <small class="text-muted">管理所有租用机器</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/recharge" class="text-decoration-none">
+        <a href="/recharge" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-currency-exchange display-5 text-info"></i></div>
-                    <h6>充值</h6>
+                    <div class="quick-card-icon info">
+                        <i class="bi bi-currency-exchange"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">充值</h6>
                     <small class="text-muted">充值 LDC 余额</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/packages" class="text-decoration-none">
+        <a href="/packages" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-box-seam display-5 text-warning"></i></div>
-                    <h6>套餐中心</h6>
+                    <div class="quick-card-icon warning">
+                        <i class="bi bi-box-seam-fill"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">套餐中心</h6>
                     <small class="text-muted">购买核时套餐</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/servers/contribute" class="text-decoration-none">
+        <a href="/servers/contribute" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-cloud-upload display-5 text-secondary"></i></div>
-                    <h6>贡献服务器</h6>
+                    <div class="quick-card-icon secondary">
+                        <i class="bi bi-cloud-upload-fill"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">贡献服务器</h6>
                     <small class="text-muted">分享你的算力</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/withdraw" class="text-decoration-none">
+        <a href="/withdraw" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-wallet2 display-5 text-success"></i></div>
-                    <h6>提现</h6>
+                    <div class="quick-card-icon success">
+                        <i class="bi bi-wallet2"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">提现</h6>
                     <small class="text-muted">LDC 余额提现</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/redeem" class="text-decoration-none">
+        <a href="/redeem" class="quick-card">
             <div class="card h-100">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-gift-fill display-5 text-danger"></i></div>
-                    <h6>兑换码</h6>
+                    <div class="quick-card-icon danger">
+                        <i class="bi bi-gift-fill"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">兑换码</h6>
                     <small class="text-muted">充值码兑换</small>
                 </div>
             </div>
         </a>
     </div>
     <div class="col-md-3 mb-3">
-        <a href="/warnings" class="text-decoration-none">
+        <a href="/warnings" class="quick-card">
             <div class="card h-100 {% if unread_warnings > 0 %}border-danger{% endif %}">
                 <div class="card-body text-center">
-                    <div class="mb-2"><i class="bi bi-envelope-exclamation display-5 {% if unread_warnings > 0 %}text-danger{% else %}text-warning{% endif %}"></i></div>
-                    <h6>警告信</h6>
+                    <div class="quick-card-icon {% if unread_warnings > 0 %}danger{% else %}warning{% endif %}">
+                        <i class="bi bi-envelope-exclamation-fill"></i>
+                    </div>
+                    <h6 class="fw-bold mb-1">警告信</h6>
                     <small class="text-muted">{% if unread_warnings > 0 %}{{ unread_warnings }} 封未读{% else %}{{ total_warnings }} 封记录{% endif %}</small>
                 </div>
             </div>
@@ -158,39 +191,39 @@
     </div>
 </div>
 
-<!-- Stats Overview -->
 <div class="row mb-4">
     <div class="col-md-6 mb-3">
-        <div class="card">
-            <div class="card-header">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-person-lines-fill text-primary"></i>
                 <h5 class="mb-0">账户统计</h5>
             </div>
             <div class="card-body">
                 <table class="table table-borderless mb-0">
                     <tbody>
                         <tr>
-                            <td>用户名</td>
-                            <td class="text-end">{{ profile.username | default(value="—") }}</td>
+                            <td class="text-muted"><i class="bi bi-person me-2"></i>用户名</td>
+                            <td class="text-end fw-medium">{{ profile.username | default(value="—") }}</td>
                         </tr>
                         <tr>
-                            <td>邮箱</td>
-                            <td class="text-end">{{ profile.email | default(value="—") }}</td>
+                            <td class="text-muted"><i class="bi bi-envelope me-2"></i>邮箱</td>
+                            <td class="text-end fw-medium">{{ profile.email | default(value="—") }}</td>
                         </tr>
                         <tr>
-                            <td>注册时间</td>
-                            <td class="text-end">{{ profile.created_at | default(value="—") }}</td>
+                            <td class="text-muted"><i class="bi bi-calendar-plus me-2"></i>注册时间</td>
+                            <td class="text-end fw-medium">{{ profile.created_at | default(value="—") }}</td>
                         </tr>
                         <tr>
-                            <td>我的机器</td>
-                            <td class="text-end">{{ total_machines | default(value="0") }} 台</td>
+                            <td class="text-muted"><i class="bi bi-pc-display me-2"></i>我的机器</td>
+                            <td class="text-end fw-medium">{{ total_machines | default(value="0") }} 台</td>
                         </tr>
                         <tr>
-                            <td>贡献的服务器</td>
-                            <td class="text-end">{{ total_servers | default(value="0") }} 台</td>
+                            <td class="text-muted"><i class="bi bi-hdd-stack me-2"></i>贡献的服务器</td>
+                            <td class="text-end fw-medium">{{ total_servers | default(value="0") }} 台</td>
                         </tr>
                         <tr>
-                            <td>订单记录</td>
-                            <td class="text-end">{{ total_orders | default(value="0") }} 笔</td>
+                            <td class="text-muted"><i class="bi bi-receipt me-2"></i>订单记录</td>
+                            <td class="text-end fw-medium">{{ total_orders | default(value="0") }} 笔</td>
                         </tr>
                     </tbody>
                 </table>
@@ -198,23 +231,30 @@
         </div>
     </div>
     <div class="col-md-6 mb-3">
-        <div class="card">
-            <div class="card-header">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-key-fill text-warning"></i>
                 <h5 class="mb-0">API Key</h5>
             </div>
             <div class="card-body">
                 {% if api_key %}
-                <div class="input-group mb-2">
+                <div class="input-group mb-3">
+                    <span class="input-group-text"><i class="bi bi-key"></i></span>
                     <input type="text" class="form-control font-monospace" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
-                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">显示</button>
-                    <button class="btn btn-outline-primary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">复制</button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">
+                        <i class="bi bi-eye me-1"></i>显示
+                    </button>
+                    <button class="btn btn-primary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">
+                        <i class="bi bi-clipboard me-1"></i>复制
+                    </button>
                 </div>
-                <small class="text-muted">用于 API 请求认证，请勿泄露给他人。</small>
+                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>用于 API 请求认证，请勿泄露给他人。</small>
                 {% else %}
-                <p class="text-muted mb-2">尚未生成 API Key</p>
+                <p class="text-muted mb-3"><i class="bi bi-exclamation-circle me-1"></i>尚未生成 API Key</p>
                 {% endif %}
                 <form method="post" action="/dashboard/api-key">
-                    <button type="submit" class="btn btn-sm btn-warning">
+                    <button type="submit" class="btn btn-warning">
+                        <i class="bi bi-arrow-repeat me-1"></i>
                         {% if api_key %}重新生成{% else %}生成 API Key{% endif %}
                     </button>
                 </form>

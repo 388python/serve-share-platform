@@ -3,87 +3,156 @@
 {% block title %}{{ site_name }} - 数据看板{% endblock title %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>平台数据看板</h2>
-        <p class="text-muted">平台运行统计数据</p>
-    </div>
-</div>
-
-<div class="row mb-4">
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-primary">
-            <div class="card-body text-center">
-                <h5 class="card-title">注册用户</h5>
-                <p class="card-text display-6">{{ user_count | default(value="0") }}</p>
-            </div>
+<div class="page-header mb-4">
+    <div class="d-flex align-items-center gap-3">
+        <div class="rounded-circle bg-info-subtle d-flex align-items-center justify-content-center" style="width:56px;height:56px;">
+            <i class="bi bi-bar-chart-line-fill display-6 text-info"></i>
         </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-success">
-            <div class="card-body text-center">
-                <h5 class="card-title">贡献服务器</h5>
-                <p class="card-text display-6">{{ server_count | default(value="0") }}</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-info">
-            <div class="card-body text-center">
-                <h5 class="card-title">运行中机器</h5>
-                <p class="card-text display-6">{{ running_machines | default(value="0") }}</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3">
-        <div class="card text-white bg-warning">
-            <div class="card-body text-center">
-                <h5 class="card-title">总核时消耗</h5>
-                <p class="card-text display-6">{{ total_core_hours | default(value="0") }}</p>
-            </div>
+        <div>
+            <h2 class="mb-0">平台数据看板</h2>
+            <p class="text-muted mb-0">平台运行统计数据</p>
         </div>
     </div>
 </div>
 
-<div class="row">
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
+<div class="row g-3 mb-4">
+    <div class="col-md-6 col-xl-3">
+        <div class="stat-card bg-gradient-primary text-white h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <p class="mb-1 opacity-90">注册用户</p>
+                    <h3 class="fw-bold mb-0">{{ user_count | default(value="0") }}</h3>
+                </div>
+                <div class="bg-white bg-opacity-20 rounded-circle p-3">
+                    <i class="bi bi-people-fill fs-4"></i>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-1 small opacity-80">
+                <i class="bi bi-arrow-up-circle-fill"></i>
+                <span>持续增长中</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="stat-card bg-gradient-success text-white h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <p class="mb-1 opacity-90">贡献服务器</p>
+                    <h3 class="fw-bold mb-0">{{ server_count | default(value="0") }}</h3>
+                </div>
+                <div class="bg-white bg-opacity-20 rounded-circle p-3">
+                    <i class="bi bi-hdd-stack-fill fs-4"></i>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-1 small opacity-80">
+                <i class="bi bi-shield-check-fill"></i>
+                <span>稳定运行</span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="stat-card bg-gradient-info text-white h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <p class="mb-1 opacity-90">运行中机器</p>
+                    <h3 class="fw-bold mb-0">{{ running_machines | default(value="0") }}</h3>
+                </div>
+                <div class="bg-white bg-opacity-20 rounded-circle p-3">
+                    <i class="bi bi-play-circle-fill fs-4"></i>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-1 small opacity-80">
+                <span class="pulse-icon d-inline-block">
+                    <span class="badge bg-light text-dark rounded-pill">
+                        <span class="spinner-grow spinner-grow-sm me-1" style="width:0.5rem;height:0.5rem;"></span>
+                        实时
+                    </span>
+                </span>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="stat-card bg-gradient-warning text-white h-100">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                    <p class="mb-1 opacity-90">总核时消耗</p>
+                    <h3 class="fw-bold mb-0">{{ total_core_hours | default(value="0") }}</h3>
+                </div>
+                <div class="bg-white bg-opacity-20 rounded-circle p-3">
+                    <i class="bi bi-stopwatch-fill fs-4"></i>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-1 small opacity-80">
+                <i class="bi bi-graph-up-arrow"></i>
+                <span>累计统计</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-person-plus-fill text-primary"></i>
                 <h5 class="mb-0">最近注册用户</h5>
             </div>
             <div class="card-body">
                 {% if recent_users %}
-                <div class="list-group">
+                <div class="list-group list-group-flush">
                     {% for u in recent_users %}
-                    <div class="list-group-item d-flex justify-content-between">
-                        <span>{{ u.username }}</span>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                        <div class="d-flex align-items-center gap-3">
+                            <div class="rounded-circle bg-primary-subtle d-flex align-items-center justify-content-center" style="width:40px;height:40px;">
+                                <i class="bi bi-person-fill text-primary"></i>
+                            </div>
+                            <div>
+                                <div class="fw-medium">{{ u.username }}</div>
+                                <small class="text-muted">新用户注册</small>
+                            </div>
+                        </div>
                         <small class="text-muted">{{ u.created_at }}</small>
                     </div>
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-muted text-center py-3">暂无数据</p>
+                <div class="text-center py-5">
+                    <i class="bi bi-people text-muted" style="font-size: 3rem;"></i>
+                    <p class="text-muted mt-3 mb-0">暂无数据</p>
+                </div>
                 {% endif %}
             </div>
         </div>
     </div>
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-server text-success"></i>
                 <h5 class="mb-0">最近贡献服务器</h5>
             </div>
             <div class="card-body">
                 {% if recent_servers %}
-                <div class="list-group">
+                <div class="list-group list-group-flush">
                     {% for s in recent_servers %}
-                    <div class="list-group-item d-flex justify-content-between">
-                        <span>{{ s.name }}</span>
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0">
+                        <div class="d-flex align-items-center gap-3">
+                            <div class="rounded-circle bg-success-subtle d-flex align-items-center justify-content-center" style="width:40px;height:40px;">
+                                <i class="bi bi-hdd-fill text-success"></i>
+                            </div>
+                            <div>
+                                <div class="fw-medium">{{ s.name }}</div>
+                                <small class="text-muted">新服务器加入</small>
+                            </div>
+                        </div>
                         <small class="text-muted">{{ s.created_at }}</small>
                     </div>
                     {% endfor %}
                 </div>
                 {% else %}
-                <p class="text-muted text-center py-3">暂无数据</p>
+                <div class="text-center py-5">
+                    <i class="bi bi-hdd-stack text-muted" style="font-size: 3rem;"></i>
+                    <p class="text-muted mt-3 mb-0">暂无数据</p>
+                </div>
                 {% endif %}
             </div>
         </div>

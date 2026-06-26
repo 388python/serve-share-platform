@@ -4,17 +4,32 @@
 
 {% block content %}
 <div class="row">
-    <div class="col-md-6 mx-auto">
-        <div class="card border-danger">
-            <div class="card-header bg-danger text-white">
-                <h5 class="mb-0">出错了</h5>
+    <div class="col-md-8 col-lg-6 mx-auto">
+        <div class="card border-0 shadow-lg">
+            <div class="card-body text-center py-5 px-4">
+                <div class="mb-4">
+                    <div class="d-inline-flex align-items-center justify-content-center rounded-circle bg-danger-subtle mb-4 animate-bounceIn" style="width:100px;height:100px;">
+                        <i class="bi bi-exclamation-triangle-fill text-danger display-3"></i>
+                    </div>
+                </div>
+                <h3 class="fw-bold mb-3">出错了</h3>
+                <p class="text-muted mb-4 lead">{{ error_message | default(value="发生了一个未知错误，请稍后再试。") }}</p>
+                <div class="d-flex flex-column flex-sm-row gap-2 justify-content-center">
+                    <button onclick="history.back()" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left me-1"></i>返回上一页
+                    </button>
+                    <a href="/" class="btn btn-primary">
+                        <i class="bi bi-house-door me-1"></i>回到首页
+                    </a>
+                </div>
             </div>
-            <div class="card-body text-center py-5">
-                <h2 class="text-danger mb-3">&#9888;</h2>
-                <p class="lead">{{ error_message | default(value="发生了一个未知错误，请稍后再试。") }}</p>
-                <a href="javascript:history.back()" class="btn btn-secondary">返回</a>
-                <a href="/" class="btn btn-primary">回到首页</a>
-            </div>
+        </div>
+
+        <div class="mt-4 text-center">
+            <p class="text-muted small mb-0">
+                <i class="bi bi-info-circle me-1"></i>
+                如果问题持续存在，请联系管理员获取帮助
+            </p>
         </div>
     </div>
 </div>

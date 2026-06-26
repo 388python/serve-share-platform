@@ -3,25 +3,69 @@
 {% block title %}{{ site_name }} - 发起争议{% endblock title %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>发起争议</h2>
-        <p class="text-muted">对机器 {{ machine_id }} 发起争议</p>
+<div class="page-header mb-4">
+    <div class="d-flex align-items-center gap-3">
+        <div class="rounded-circle bg-danger-subtle d-flex align-items-center justify-content-center" style="width:56px;height:56px;">
+            <i class="bi bi-exclamation-diamond-fill display-6 text-danger"></i>
+        </div>
+        <div>
+            <h2 class="mb-0">发起争议</h2>
+            <p class="text-muted mb-0">对机器 {{ machine_id }} 发起争议</p>
+        </div>
     </div>
 </div>
 
 <div class="row">
-    <div class="col-md-8">
+    <div class="col-lg-8 mx-auto">
+        <div class="alert alert-warning mb-4">
+            <div class="d-flex align-items-start gap-3">
+                <i class="bi bi-info-circle-fill fs-4 mt-1"></i>
+                <div>
+                    <h6 class="alert-heading fw-bold mb-1">争议说明</h6>
+                    <p class="mb-0 small opacity-90">请详细描述您遇到的问题，我们会尽快处理您的申诉。请提供尽可能多的细节以便我们核实。</p>
+                </div>
+            </div>
+        </div>
+
         <div class="card">
-            <div class="card-body">
+            <div class="card-header d-flex align-items-center gap-2">
+                <i class="bi bi-pencil-square text-primary"></i>
+                <h5 class="mb-0">争议表单</h5>
+            </div>
+            <div class="card-body p-4">
                 <form method="post" action="/disputes/create">
                     <input type="hidden" name="machine_id" value="{{ machine_id }}">
-                    <div class="mb-3">
-                        <label for="reason" class="form-label">争议原因</label>
-                        <textarea class="form-control" id="reason" name="reason" rows="5" required placeholder="请详细描述您遇到的问题..."></textarea>
+                    
+                    <div class="mb-4">
+                        <label for="machine_id_display" class="form-label fw-semibold">
+                            <i class="bi bi-pc-display me-1 text-muted"></i>机器 ID
+                        </label>
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-hash"></i></span>
+                            <input type="text" class="form-control bg-light" value="{{ machine_id }}" readonly id="machine_id_display">
+                        </div>
                     </div>
-                    <button type="submit" class="btn btn-danger">提交争议</button>
-                    <a href="/machines" class="btn btn-secondary">取消</a>
+
+                    <div class="mb-4">
+                        <label for="reason" class="form-label fw-semibold">
+                            <i class="bi bi-chat-left-text me-1 text-muted"></i>争议原因
+                            <span class="text-danger">*</span>
+                        </label>
+                        <textarea class="form-control" id="reason" name="reason" rows="6" required placeholder="请详细描述您遇到的问题，包括：&#10;1. 问题发生的时间&#10;2. 具体的问题现象&#10;3. 您已尝试的解决方法&#10;4. 其他需要说明的信息..."></textarea>
+                        <div class="form-text">
+                            <i class="bi bi-info-circle me-1"></i>
+                            请提供尽可能详细的信息，这将有助于我们更快地处理您的争议
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <a href="/machines" class="btn btn-outline-secondary">
+                            <i class="bi bi-x-lg me-1"></i>取消
+                        </a>
+                        <button type="submit" class="btn btn-danger ms-auto">
+                            <i class="bi bi-send me-1"></i>提交争议
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>

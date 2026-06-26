@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 use uuid::Uuid;
@@ -143,6 +143,7 @@ pub struct ApiError {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct ApiSuccess<T> {
     pub success: bool,
@@ -200,6 +201,7 @@ pub struct ContributeServerRequest {
     pub nat_port_end: Option<i32>,
     pub nat_multiplier: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub free_nat_hours: Option<f64>, // 免费 NAT 额度（小时），由发布者配置
     pub linux_version: Option<String>,
     pub description: Option<String>,
     pub provider: Option<String>,
@@ -234,6 +236,7 @@ async fn api_servers_contribute(
     let nat_port_end = form.nat_port_end.unwrap_or(0);
     let nat_mult = form.nat_multiplier.unwrap_or(1.0);
     let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let free_nat_hours = form.free_nat_hours.unwrap_or(0.0);
     let agent_key = form.agent_key.clone().unwrap_or_default();
 
     let proxy_port = services::ssh_proxy::allocate_port(0) as i32;
@@ -264,6 +267,7 @@ async fn api_servers_contribute(
     .bind(nat_port_end)
     .bind(nat_mult)
     .bind(max_machine_hours)
+    .bind(free_nat_hours)
     .bind(form.linux_version.as_deref().unwrap_or(""))
     .bind(form.description.as_deref().unwrap_or(""))
     .bind(form.provider.as_deref().unwrap_or(""))
@@ -274,13 +278,7 @@ async fn api_servers_contribute(
         Ok(res) => {
             let server_id = res.last_insert_rowid();
             services::ssh_proxy::release_port(0);
-            services::ssh_proxy::allocate_port(server_id);
-
-            let _ = sqlx::query("UPDATE servers SET proxy_port = ? WHERE id = ?")
-                .bind(proxy_port)
-                .bind(server_id)
-                .execute(pool)
-                .await;
+            services::ssh_proxy::allocate_port_with_id(server_id, proxy_port as u16);
 
             let ip = form.ip.clone();
             let ssh_port_copy = ssh_port;
@@ -361,6 +359,10 @@ pub struct CreateMachineRequest {
     pub memory_gb: f64,
     pub disk_gb: f64,
     pub hours: Option<i32>,
+    pub image: Option<String>,
+    pub app_image: Option<String>,
+    pub root_password: Option<String>,
+    pub app_secrets: Option<String>,
 }
 
 // POST /api/v1/machines/create
@@ -455,6 +457,41 @@ async fn api_machines_create(
         expires_at = now + chrono::Duration::hours(hours);
     }
 
+    // Calculate cost including NAT if expose_ip is enabled
+    // NAT ports count based on virt type and OS:
+    // - LXD: 1 port (SSH)
+    // - KVM Linux: 2 ports (SSH + VNC)
+    // - KVM Windows: 3 ports (SSH + RDP + VNC)
+    // Free NAT hours are provided by the server publisher
+    let image = form.image.as_deref().unwrap_or("ubuntu:22.04");
+    let is_windows = image.starts_with("windows:");
+    let is_kvm = server.virt_type == "kvm";
+    
+    let nat_ports = if server.expose_ip && server.nat_port_start > 0 {
+        if is_kvm {
+            if is_windows { 3 } else { 2 }
+        } else {
+            1
+        }
+    } else {
+        0
+    };
+    
+    // Calculate NAT cost per hour
+    let global_nat = db::get_config("global_nat_multiplier")
+        .await
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    let nat_cost_per_hour = nat_ports as f64 * server.nat_multiplier * global_nat;
+    
+    // Apply free NAT hours (subtract from total cost)
+    let free_nat_hours = server.free_nat_hours;
+    let free_nat_amount = if free_nat_hours > 0.0 && nat_cost_per_hour > 0.0 {
+        (free_nat_hours.min(hours as f64) * nat_cost_per_hour).min(nat_cost_per_hour * hours as f64)
+    } else {
+        0.0
+    };
+    
     let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
         form.cpu_cores,
         form.memory_gb,
@@ -464,12 +501,13 @@ async fn api_machines_create(
         server.memory_multiplier,
         1.0,
         server.disk_multiplier,
-        0,
+        0, // NAT already accounted in free_nat_amount
         0.0,
     )
     .await;
 
-    let total_cost = ch_per_hour * hours as f64;
+    let nat_cost = (nat_cost_per_hour * hours as f64) - free_nat_amount;
+    let total_cost = ch_per_hour * hours as f64 + nat_cost.max(0.0);
 
     if total_available < total_cost {
         return (
@@ -541,20 +579,30 @@ async fn api_machines_create(
     }
 
     // Check NAT port capacity within transaction
-    if server.expose_ip && server.nat_port_start > 0 {
-        let used_ports: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(COUNT(*), 0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
-        )
-        .bind(server.id)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap_or((0,));
+    if server.expose_ip && server.nat_port_start > 0 && nat_ports > 0 {
+        // Calculate used ports: 1 per LXD machine, 2 per KVM Linux, 3 per KVM Windows
+        let used_ports_query = r#"
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN virt_type = 'kvm' AND image LIKE 'windows:%' THEN 3
+                    WHEN virt_type = 'kvm' THEN 2
+                    ELSE 1
+                END
+            ), 0)
+            FROM machines 
+            WHERE server_id = ? AND status IN ('pending', 'running')
+        "#;
+        let used_ports: (i64,) = sqlx::query_as(used_ports_query)
+            .bind(server.id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap_or((0,));
         let total_available_nat = (server.nat_port_end - server.nat_port_start) as i64;
-        if used_ports.0 + 1 > total_available_nat {
+        if used_ports.0 + nat_ports as i64 > total_available_nat {
             let _ = tx.rollback().await;
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "no_nat_ports", "message": "Server has no available NAT ports" })),
+                Json(json!({ "error": "no_nat_ports", "message": format!("Server has no available NAT ports (need {}, have {})", nat_ports, total_available_nat - used_ports.0) })),
             )
                 .into_response();
         }
@@ -632,9 +680,13 @@ async fn api_machines_create(
 
     let proxy_port = server.proxy_port;
     let used_hours = hours as f64;
+    let image = form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string());
+    let app_image = form.app_image.clone().unwrap_or_default();
+    let root_password = form.root_password.clone().unwrap_or_default();
+    let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -646,6 +698,11 @@ async fn api_machines_create(
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
+    .bind(&root_password)
+    .bind(&image)
+    .bind(&app_image)
+    .bind(&app_secrets)
+    .bind(free_nat_hours)
     .execute(&mut *tx)
     .await;
 
@@ -699,6 +756,10 @@ async fn api_machines_create(
             regular_used,
             bonus_used,
             used_hours,
+            image: form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string()),
+            app_image: form.app_image.clone().unwrap_or_default(),
+            root_password: form.root_password.clone().unwrap_or_default(),
+            app_secrets: form.app_secrets.clone().unwrap_or_else(|| "{}".to_string()),
         },
     );
 
@@ -1752,6 +1813,446 @@ async fn api_buy_premium(
 }
 
 // ==============================
+// Machine Operations API
+// ==============================
+
+// GET /api/v1/images - Get available system images
+async fn api_images_list() -> impl IntoResponse {
+    let images = vec![
+        // Linux 镜像
+        json!({"id": "ubuntu:22.04", "name": "Ubuntu 22.04 LTS", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "ubuntu:24.04", "name": "Ubuntu 24.04 LTS", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "debian:12", "name": "Debian 12 (Bookworm)", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "debian:11", "name": "Debian 11 (Bullseye)", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "centos:9", "name": "CentOS Stream 9", "type": "linux", "virt": ["lxd", "kvm"]}),
+        json!({"id": "alpine:3.19", "name": "Alpine Linux 3.19", "type": "linux", "virt": ["lxd", "kvm"]}),
+        // Windows 镜像（仅 KVM）
+        json!({"id": "windows:2022", "name": "Windows Server 2022", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:2019", "name": "Windows Server 2019", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:2025", "name": "Windows Server 2025", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:10", "name": "Windows 10", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+        json!({"id": "windows:11", "name": "Windows 11", "type": "windows", "virt": ["kvm"], "note": "需要 KVM 虚拟化"}),
+    ];
+    ok_response(json!({"images": images}))
+}
+
+// GET /api/v1/app-images - Get available application images
+async fn api_app_images_list() -> impl IntoResponse {
+    let apps = vec![
+        json!({"id": "mc", "name": "Minecraft Server", "docker_image": "itzg/minecraft-server", "ports": [25565]}),
+        json!({"id": "sub2api", "name": "Subscription Converter", "docker_image": "tindy2013/subconverter", "ports": [25500]}),
+        json!({"id": "newapi", "name": "New API", "docker_image": "calciumion/new-api", "ports": [3000]}),
+        json!({"id": "cliproxyapi", "name": "CLI Proxy API", "docker_image": "ghcr.io/metacubx/cliproxyapi", "ports": [8080]}),
+        json!({"id": "nginx", "name": "Nginx", "docker_image": "nginx:alpine", "ports": [80, 443]}),
+        json!({"id": "mysql", "name": "MySQL", "docker_image": "mysql:8.0", "ports": [3306]}),
+        json!({"id": "redis", "name": "Redis", "docker_image": "redis:alpine", "ports": [6379]}),
+    ];
+    ok_response(json!({"app_images": apps}))
+}
+
+// GET /api/v1/machines/:id - Get machine detail
+async fn api_machine_detail(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<Machine> = sqlx::query_as(
+        "SELECT * FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some(m) => {
+            let server: Option<Server> = sqlx::query_as(
+                "SELECT * FROM servers WHERE id = ?"
+            )
+            .bind(m.server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            (StatusCode::OK, Json(json!({
+                "machine": m,
+                "server": server,
+            }))).into_response()
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// GET /api/v1/machines/:id/console - Get web console access
+async fn api_machine_console(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String, String)> = sqlx::query_as(
+        "SELECT id, server_id, virt_type, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, _virt_type, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            // Get server IP and agent key
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/console/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .get(&url)
+                        .header("X-API-Key", &agent_key)
+                        .timeout(std::time::Duration::from_secs(10))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            (StatusCode::OK, Json(data)).into_response()
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/exec - Execute command in machine
+async fn api_machine_exec(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let command = body.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    if command.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "command required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/exec/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"command": command}))
+                        .timeout(std::time::Duration::from_secs(60))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            (StatusCode::OK, Json(data)).into_response()
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "agent unreachable"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/reinstall - Reinstall machine
+async fn api_machine_reinstall(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let image = body.get("image").and_then(|v| v.as_str()).unwrap_or("ubuntu:22.04");
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, _status)) => {
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/reinstall/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"image": image, "app_image": app_image}))
+                        .timeout(std::time::Duration::from_secs(120))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Update image in database
+                            sqlx::query("UPDATE machines SET image = ?, app_image = ? WHERE id = ?")
+                                .bind(image)
+                                .bind(app_image)
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            (StatusCode::OK, Json(data)).into_response()
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "reinstall failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/app-install - Install app in machine
+async fn api_machine_app_install(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+    let secrets = body.get("secrets").cloned().unwrap_or(json!({}));
+
+    if app_image.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "app_image required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/app-install/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"app_image": app_image, "secrets": secrets}))
+                        .timeout(std::time::Duration::from_secs(120))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Update app_image and app_secrets in database
+                            let secrets_str = secrets.to_string();
+                            sqlx::query("UPDATE machines SET app_image = ?, app_secrets = ? WHERE id = ?")
+                                .bind(app_image)
+                                .bind(secrets_str)
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            (StatusCode::OK, Json(data)).into_response()
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app install failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/app-uninstall - Uninstall app from machine
+async fn api_machine_app_uninstall(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let app_image = body.get("app_image").and_then(|v| v.as_str()).unwrap_or("");
+
+    if app_image.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "app_image required"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    match machine {
+        Some((id, server_id, status)) => {
+            if status != "running" {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+            }
+
+            let server: Option<(String, String)> = sqlx::query_as(
+                "SELECT ip, agent_key FROM servers WHERE id = ?"
+            )
+            .bind(server_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            match server {
+                Some((ip, agent_key)) => {
+                    let machine_name = format!("machine-{}", id);
+                    let client = reqwest::Client::new();
+                    let url = format!("http://{}:19527/app-uninstall/{}", ip, machine_name);
+                    
+                    let resp = client
+                        .post(&url)
+                        .header("X-API-Key", &agent_key)
+                        .json(&json!({"app_image": app_image}))
+                        .timeout(std::time::Duration::from_secs(30))
+                        .send()
+                        .await;
+
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            // Clear app_image in database
+                            sqlx::query("UPDATE machines SET app_image = '' WHERE id = ?")
+                                .bind(id)
+                                .execute(pool)
+                                .await
+                                .ok();
+                            
+                            let data: Value = r.json().await.unwrap_or(json!({"error": "parse error"}));
+                            (StatusCode::OK, Json(data)).into_response()
+                        },
+                        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "app uninstall failed"}))).into_response(),
+                    }
+                },
+                None => (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+            }
+        },
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    }
+}
+
+// ==============================
 // Router builder
 // ==============================
 
@@ -1802,4 +2303,13 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/admin/opengfw/rules/:id/toggle", post(api_admin_opengfw_rules_toggle))
         .route("/v1/admin/orders", get(api_admin_orders))
         .route("/v1/admin/packages", get(api_admin_packages))
+        // Machine operations
+        .route("/v1/images", get(api_images_list))
+        .route("/v1/app-images", get(api_app_images_list))
+        .route("/v1/machines/:id", get(api_machine_detail))
+        .route("/v1/machines/:id/console", get(api_machine_console))
+        .route("/v1/machines/:id/exec", post(api_machine_exec))
+        .route("/v1/machines/:id/reinstall", post(api_machine_reinstall))
+        .route("/v1/machines/:id/app-install", post(api_machine_app_install))
+        .route("/v1/machines/:id/app-uninstall", post(api_machine_app_uninstall))
 }

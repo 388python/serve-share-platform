@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;

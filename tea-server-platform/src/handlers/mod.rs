@@ -14,6 +14,7 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<Sha256>;
 
 pub mod api;
+pub mod websocket;
 
 use crate::config::AppConfig;
 use crate::db;
@@ -383,14 +384,14 @@ pub async fn contribute_server_page(
     State(state): State<AppState>,
     cookies: Cookies,
 ) -> Result<Html<String>, Redirect> {
-    let (_user_id, _username, _is_admin) = require_auth(&cookies)?;
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
 
     let pool = db::get_db();
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
 
     if let Ok(servers) = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE owner_id = ? AND is_active = 1 ORDER BY created_at DESC")
-        .bind(0i64)
+        .bind(user_id)
         .fetch_all(pool)
         .await {
         ctx.insert("servers", &servers);
@@ -398,7 +399,7 @@ pub async fn contribute_server_page(
 
     let rendered = state
         .templates
-        .render("user/servers/contribute.html", &ctx)
+        .render("user/contribute.html", &ctx)
         .unwrap_or_default();
     Ok(Html(rendered))
 }
@@ -414,6 +415,20 @@ pub struct ContributeServerForm {
     pub bandwidth_mbps: Option<f64>,
     pub disk_gb: f64,
     pub virt_type: Option<String>,
+    pub description: Option<String>,
+    pub provider: Option<String>,
+    pub cpu_multiplier: Option<f64>,
+    pub memory_multiplier: Option<f64>,
+    pub bandwidth_multiplier: Option<f64>,
+    pub disk_multiplier: Option<f64>,
+    pub use_bonus: Option<String>,
+    pub linux_version: Option<String>,
+    pub expires_days: Option<i32>,
+    pub nat_port_start: Option<i32>,
+    pub nat_port_end: Option<i32>,
+    pub nat_multiplier: Option<f64>,
+    pub free_nat_hours: Option<f64>,
+    pub max_machine_hours: Option<f64>,
 }
 
 pub async fn contribute_server_submit(
@@ -440,9 +455,20 @@ pub async fn contribute_server_submit(
     let pool = db::get_db();
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
     let bandwidth = form.bandwidth_mbps.unwrap_or(0.0);
+    let cpu_mult = form.cpu_multiplier.unwrap_or(1.0);
+    let mem_mult = form.memory_multiplier.unwrap_or(1.0);
+    let bw_mult = form.bandwidth_multiplier.unwrap_or(1.0);
+    let disk_mult = form.disk_multiplier.unwrap_or(1.0);
+    let nat_port_start = form.nat_port_start.unwrap_or(0);
+    let nat_port_end = form.nat_port_end.unwrap_or(0);
+    let nat_mult = form.nat_multiplier.unwrap_or(1.0);
+    let free_nat_hours = form.free_nat_hours.unwrap_or(0.0);
+    let max_machine_hours = form.max_machine_hours.unwrap_or(0.0);
+    let expires_days = form.expires_days.unwrap_or(30);
+    let use_bonus = form.use_bonus.as_ref().map(|v| v == "on").unwrap_or(false);
 
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, virt_type, is_active, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now','+30 days'), CURRENT_TIMESTAMP)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', format('+{} days', ?)), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -453,7 +479,22 @@ pub async fn contribute_server_submit(
     .bind(form.memory_gb)
     .bind(bandwidth)
     .bind(form.disk_gb)
+    .bind(cpu_mult)
+    .bind(mem_mult)
+    .bind(bw_mult)
+    .bind(disk_mult)
+    .bind(use_bonus)
     .bind(&virt_type)
+    .bind(expires_days)
+    .bind(nat_port_start > 0)
+    .bind(nat_port_start)
+    .bind(nat_port_end)
+    .bind(nat_mult)
+    .bind(max_machine_hours)
+    .bind(free_nat_hours)
+    .bind(form.linux_version.as_deref().unwrap_or(""))
+    .bind(form.description.as_deref().unwrap_or(""))
+    .bind(form.provider.as_deref().unwrap_or(""))
     .execute(pool)
     .await;
 
@@ -600,6 +641,10 @@ pub struct CreateMachineForm {
     pub disk_gb: f64,
     pub virt_type: Option<String>,
     pub duration_days: Option<i32>,
+    pub image: Option<String>,      // 系统镜像
+    pub app_image: Option<String>,  // 应用镜像
+    pub root_password: Option<String>, // 用户设置的 root 密码
+    pub app_secrets: Option<String>,   // 应用密钥（JSON 字符串）
 }
 
 pub async fn create_machine(
@@ -705,8 +750,12 @@ pub async fn create_machine(
         }
     }
 
+    let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+    let app_image = form.app_image.unwrap_or_default();
+    let root_password_val = form.root_password.as_deref().unwrap_or("");
+
     let insert = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, CURRENT_TIMESTAMP)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, root_password, image, app_image, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -716,6 +765,9 @@ pub async fn create_machine(
     .bind(&virt_type)
     .bind(0.01)
     .bind(duration_days)
+    .bind(root_password_val)
+    .bind(&image)
+    .bind(&app_image)
     .execute(&mut *tx)
     .await;
 
@@ -735,6 +787,9 @@ pub async fn create_machine(
 
     // 调用 Agent 创建 VM（使用 machine_lifecycle 服务，含重试和退款）
     let machine_name = format!("machine-{}", machine_id);
+    let root_password = form.root_password.unwrap_or_default();
+    let app_secrets = form.app_secrets.unwrap_or_else(|| "{}".to_string());
+    
     services::machine_lifecycle::spawn_agent_create_job(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
@@ -749,6 +804,10 @@ pub async fn create_machine(
             regular_used: cost,
             bonus_used: 0.0,
             used_hours: hours,
+            image,
+            app_image,
+            root_password,
+            app_secrets,
         },
     );
 
@@ -835,6 +894,53 @@ pub async fn delete_machine(
         .await;
 
     Redirect::to("/machines").into_response()
+}
+
+pub async fn machine_detail(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    
+    // Get machine owned by this user
+    let machine: Option<Machine> = sqlx::query_as(
+        "SELECT * FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if machine.is_none() {
+        return Err(Redirect::to("/machines?error=not_found"));
+    }
+
+    let m = machine.unwrap();
+    
+    // Get server info
+    let server: Option<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE id = ?"
+    )
+    .bind(m.server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+    ctx.insert("machine", &m);
+    ctx.insert("server", &server);
+
+    let rendered = state
+        .templates
+        .render("user/machine_detail.html", &ctx)
+        .unwrap_or_else(|_| "Template error".to_string());
+
+    Ok(Html(rendered))
 }
 
 pub async fn machine_connect(

@@ -51,6 +51,7 @@ pub struct Server {
     pub nat_port_end: i32,
     pub nat_multiplier: f64,
     pub max_machine_hours: f64,
+    pub free_nat_hours: f64, // 免费 NAT 额度（小时），由发布者配置
     pub is_premium: bool,
     pub premium_expires_at: Option<DateTime<Utc>>,
     pub linux_version: String,
@@ -77,6 +78,37 @@ pub struct Machine {
     pub created_at: DateTime<Utc>,
     pub settled: bool,
     pub used_hours: f64,
+    // 新增字段
+    pub image: Option<String>,        // 系统镜像，如 ubuntu:22.04, debian:12
+    pub app_image: Option<String>,    // 应用镜像，如 mc, sub2api, newapi, cliproxyapi
+    pub web_port: Option<i32>,        // Web 控制面板端口
+    pub vnc_port: Option<i32>,        // VNC 端口
+    pub root_password: Option<String>, // root 密码（加密存储）
+    pub ip_address: Option<String>,    // 机器 IP 地址
+    pub app_secrets: Option<String>,   // 应用密钥（JSON 格式）
+    pub free_nat_hours: Option<f64>,   // 该机器的免费 NAT 额度（小时）
+}
+
+// 应用镜像定义
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppImage {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub docker_image: String,
+    pub default_port: i32,
+    pub requires_docker: bool,
+}
+
+// 系统镜像定义
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemImage {
+    pub id: String,
+    pub name: String,
+    pub lxd_alias: String,
+    pub kvm_base_image: String,
 }
 
 // Table: orders
@@ -122,6 +154,7 @@ pub struct RedeemCode {
 }
 
 // Table: invites
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Invite {
     pub id: i64,
@@ -135,6 +168,7 @@ pub struct Invite {
 }
 
 // Table: checkins
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Checkin {
     pub id: i64,
@@ -164,6 +198,7 @@ pub struct UserPackage {
 }
 
 // Table: traffic_alerts
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TrafficAlert {
     pub id: i64,
@@ -176,6 +211,7 @@ pub struct TrafficAlert {
 }
 
 // Table: disputes
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Dispute {
     pub id: i64,
@@ -208,6 +244,7 @@ pub struct OAuthApp {
 }
 
 // Table: balance_to_code_logs
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct BalanceToCodeLog {
     pub id: i64,
@@ -220,6 +257,7 @@ pub struct BalanceToCodeLog {
 }
 
 // Table: machine_stats
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct MachineStats {
     pub id: i64,
@@ -237,6 +275,7 @@ pub struct MachineStats {
 }
 
 // Table: warning_letters
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WarningLetter {
     pub id: i64,
@@ -256,6 +295,7 @@ pub struct WarningLetter {
 }
 
 // Warning letter view model with username
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WarningLetterView {
     pub id: i64,
@@ -274,6 +314,7 @@ pub struct WarningLetterView {
 }
 
 // Combined machine info with stats
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineWithStats {
     #[serde(flatten)]
@@ -284,6 +325,7 @@ pub struct MachineWithStats {
 }
 
 // Request/response types for API and template rendering
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserSession {
     pub user_id: i64,
@@ -307,6 +349,7 @@ pub struct OpenGFWRule {
 }
 
 // Table: opengfw_logs
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OpenGFWLog {
     pub id: i64,

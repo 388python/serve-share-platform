@@ -212,6 +212,7 @@ pub async fn get_server_opengfw_config(server_id: i64) -> Option<OpenGFWConfig> 
 }
 
 /// Log a blocked connection
+#[allow(dead_code)]
 pub async fn log_blocked_connection(
     machine_id: i64,
     server_id: i64,
@@ -433,6 +434,7 @@ pub async fn get_top_users(limit: i64) -> Vec<(String, i64)> {
 }
 
 /// Initialize default OpenGFW rules
+#[allow(dead_code)]
 pub async fn init_default_rules() {
     let pool = db::get_db();
 

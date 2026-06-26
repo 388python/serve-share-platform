@@ -3,62 +3,123 @@
 {% block title %}{{ site_name }} - 充值{% endblock title %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-12">
-        <h2>充值</h2>
-        <p class="text-muted">为你的账户充值 LDC 余额</p>
+<div class="page-header mb-4">
+    <div class="d-flex align-items-center gap-3">
+        <div class="rounded-circle bg-success-subtle d-flex align-items-center justify-content-center" style="width:56px;height:56px;">
+            <i class="bi bi-wallet2 display-6 text-success"></i>
+        </div>
+        <div>
+            <h2 class="mb-0">账户充值</h2>
+            <p class="text-muted mb-0">为你的账户充值 LDC 余额</p>
+        </div>
     </div>
 </div>
 
 <div class="row">
-    <div class="col-md-6 mx-auto">
-        <div class="card">
-            <div class="card-body">
-                <div class="mb-4">
-                    <div class="row text-center">
-                        <div class="col-6">
-                            <div class="card bg-light">
-                                <div class="card-body">
-                                    <h6>当前 LDC</h6>
-                                    <h4 class="text-primary">{{ user_ldc | default(value="0") }}</h4>
+    <div class="col-md-8 col-lg-6 mx-auto">
+        <div class="card mb-4">
+            <div class="card-body p-4">
+                <div class="row g-3 mb-4">
+                    <div class="col-6">
+                        <div class="card bg-primary-subtle border-0 h-100">
+                            <div class="card-body text-center py-3">
+                                <div class="d-flex align-items-center justify-content-center gap-2 mb-1">
+                                    <i class="bi bi-coin text-primary"></i>
+                                    <span class="text-muted small">当前 LDC</span>
                                 </div>
+                                <h4 class="text-primary fw-bold mb-0">{{ user_ldc | default(value="0") }}</h4>
                             </div>
                         </div>
-                        <div class="col-6">
-                            <div class="card bg-light">
-                                <div class="card-body">
-                                    <h6>当前核时</h6>
-                                    <h4 class="text-success">{{ user_balance | default(value="0") }}</h4>
+                    </div>
+                    <div class="col-6">
+                        <div class="card bg-success-subtle border-0 h-100">
+                            <div class="card-body text-center py-3">
+                                <div class="d-flex align-items-center justify-content-center gap-2 mb-1">
+                                    <i class="bi bi-stopwatch-fill text-success"></i>
+                                    <span class="text-muted small">当前核时</span>
                                 </div>
+                                <h4 class="text-success fw-bold mb-0">{{ user_balance | default(value="0") }}</h4>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="alert alert-info">
-                    <h6 class="alert-heading">充值说明</h6>
-                    <p class="mb-1">充值倍率: {{ recharge_multiplier | default(value="1.0") }}x</p>
-                    <p class="mb-0">每充值 1 元获得 {{ recharge_multiplier | default(value="1.0") }} LDC</p>
+                <div class="alert alert-info mb-4">
+                    <div class="d-flex align-items-start gap-3">
+                        <i class="bi bi-info-circle-fill fs-4 mt-1"></i>
+                        <div>
+                            <h6 class="alert-heading fw-bold mb-1">充值说明</h6>
+                            <p class="mb-1">充值倍率: <strong>{{ recharge_multiplier | default(value="1.0") }}x</strong></p>
+                            <p class="mb-0 small opacity-90">每充值 1 元获得 {{ recharge_multiplier | default(value="1.0") }} LDC</p>
+                        </div>
+                    </div>
                 </div>
 
                 <form method="post" action="/recharge">
-                    <div class="mb-3">
-                        <label for="money" class="form-label">充值金额 (元)</label>
-                        <input type="number" class="form-control" id="money" name="money" required min="0.01" step="0.01" placeholder="输入充值金额">
+                    <div class="mb-4">
+                        <label for="money" class="form-label fw-semibold">
+                            <i class="bi bi-cash-coin me-1 text-primary"></i>充值金额 (元)
+                        </label>
+                        <div class="input-group input-group-lg">
+                            <span class="input-group-text">
+                                <i class="bi bi-currency-yen"></i>
+                            </span>
+                            <input type="number" class="form-control" id="money" name="money" required min="0.01" step="0.01" placeholder="输入充值金额">
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="setAmount(10)">10元</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="setAmount(30)">30元</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="setAmount(50)">50元</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="setAmount(100)">100元</button>
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <div class="card bg-light">
-                            <div class="card-body">
-                                <p class="mb-1">你将获得 <strong id="previewAmount">0</strong> LDC</p>
-                                <p class="mb-0 small text-muted" id="previewFee">手续费: 0 LDC</p>
+
+                    <div class="card bg-light border-0 mb-4">
+                        <div class="card-body p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="text-muted">你将获得</span>
+                                <strong class="text-primary fs-5" id="previewAmount">0 LDC</strong>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="text-muted small">手续费</span>
+                                <span class="text-muted small" id="previewFee">0 LDC</span>
                             </div>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">使用 LinuxDo Credit 支付</button>
+
+                    <button type="submit" class="btn btn-primary btn-lg w-100 fw-semibold">
+                        <i class="bi bi-credit-card me-2"></i>使用 LinuxDo Credit 支付
+                    </button>
                 </form>
 
-                <div class="mt-3 text-center">
-                    <a href="/packages" class="btn btn-outline-secondary">查看套餐</a>
+                <div class="mt-4 text-center">
+                    <a href="/packages" class="btn btn-outline-secondary">
+                        <i class="bi bi-box-seam me-1"></i>查看套餐优惠
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="card border-0">
+            <div class="card-header bg-transparent border-bottom">
+                <h6 class="mb-0 fw-semibold">
+                    <i class="bi bi-shield-check text-success me-2"></i>安全保障
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row g-3 text-center">
+                    <div class="col-4">
+                        <i class="bi bi-lock-fill text-primary fs-3 mb-2 d-block"></i>
+                        <small class="text-muted">加密传输</small>
+                    </div>
+                    <div class="col-4">
+                        <i class="bi bi-shield-fill-check text-success fs-3 mb-2 d-block"></i>
+                        <small class="text-muted">安全支付</small>
+                    </div>
+                    <div class="col-4">
+                        <i class="bi bi-bolt-fill text-warning fs-3 mb-2 d-block"></i>
+                        <small class="text-muted">即时到账</small>
+                    </div>
                 </div>
             </div>
         </div>
@@ -68,15 +129,22 @@
 
 {% block scripts %}
 <script>
-document.getElementById('money').addEventListener('input', function() {
-    var amount = parseFloat(this.value) || 0;
+function setAmount(amount) {
+    document.getElementById('money').value = amount;
+    updatePreview();
+}
+
+function updatePreview() {
+    var amount = parseFloat(document.getElementById('money').value) || 0;
     var multiplier = {{ recharge_multiplier | default(value="1.0") }};
     var feeRate = 0;
     var gross = amount * multiplier;
     var fee = gross * feeRate;
     var net = gross - fee;
-    document.getElementById('previewAmount').textContent = net.toFixed(2);
-    document.getElementById('previewFee').textContent = '手续费: ' + fee.toFixed(2) + ' LDC';
-});
+    document.getElementById('previewAmount').textContent = net.toFixed(2) + ' LDC';
+    document.getElementById('previewFee').textContent = fee.toFixed(2) + ' LDC';
+}
+
+document.getElementById('money').addEventListener('input', updatePreview);
 </script>
 {% endblock scripts %}
