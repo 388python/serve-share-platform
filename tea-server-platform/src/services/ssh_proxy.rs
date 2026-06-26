@@ -31,8 +31,6 @@ pub fn release_port(server_id: i64) {
     ports.as_mut().unwrap().remove(&server_id);
 }
 
-/// Get allocated port for a server (预留)
-#[allow(dead_code)]
 pub fn get_port(server_id: i64) -> Option<u16> {
     init();
     PORT_ALLOCATIONS.lock().unwrap().as_ref().unwrap().get(&server_id).copied()

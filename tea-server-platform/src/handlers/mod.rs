@@ -32,12 +32,8 @@ fn session_key_bytes() -> Vec<u8> {
 
 /// HMAC-SHA256 对给定 payload 签名，返回 64 位 hex 字符串
 fn sign_bytes(payload: &[u8]) -> String {
-    let key = session_key_bytes();
-    if key.is_empty() || key.len() < 16 {
-        tracing::warn!("session_secret is too short or empty — using fallback key (NOT SECURE FOR PRODUCTION)");
-    }
-    let mut mac = HmacSha256::new_from_slice(&key)
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"fallback-signing-key-not-for-production").expect("HMAC init"));
+    let mut mac = HmacSha256::new_from_slice(&session_key_bytes())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default-signing-key").expect("HMAC init"));
     mac.update(payload);
     let result = mac.finalize().into_bytes();
     let mut out = String::with_capacity(result.len() * 2);
@@ -57,12 +53,8 @@ fn verify_sig(payload: &[u8], expected_hex: &str) -> bool {
     if expected.is_empty() {
         return false;
     }
-    let key = session_key_bytes();
-    if key.is_empty() || key.len() < 16 {
-        tracing::warn!("session_secret is too short or empty — using fallback key (NOT SECURE FOR PRODUCTION)");
-    }
-    let mut mac = HmacSha256::new_from_slice(&key)
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"fallback-signing-key-not-for-production").expect("HMAC init"));
+    let mut mac = HmacSha256::new_from_slice(&session_key_bytes())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default-signing-key").expect("HMAC init"));
     mac.update(payload);
     mac.verify_slice(&expected).is_ok()
 }
@@ -923,10 +915,11 @@ pub async fn machine_detail(
     .await
     .unwrap_or(None);
 
-    let m = match machine {
-        Some(m) => m,
-        None => return Err(Redirect::to("/machines?error=not_found")),
-    };
+    if machine.is_none() {
+        return Err(Redirect::to("/machines?error=not_found"));
+    }
+
+    let m = machine.unwrap();
     
     // Get server info
     let server: Option<Server> = sqlx::query_as(

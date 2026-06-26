@@ -129,6 +129,7 @@ async fn handle_socket(socket: WebSocket, machine_id: i64) {
     let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>(10);
 
     let machine_ip_clone = machine_ip.clone();
+    let ssh_port = ssh_port;
 
     // Spawn SSH worker in a separate thread
     let ssh_handle = thread::spawn(move || {
@@ -195,14 +196,14 @@ fn ssh_worker(
     let connect_addr = format!("{}:{}", machine_ip, ssh_port);
 
     // TCP connection with timeout using set_read_timeout
-    let tcp = match TcpStream::connect(&connect_addr) {
+    let mut tcp = match TcpStream::connect(&connect_addr) {
         Ok(s) => {
             let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
             let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
             s
         }
         Err(e) => {
-            let _ = output_tx.blocking_send(
+            let _ = output_tx.send(
                 format!("\x1b[31m[错误] 无法连接到 {}: {}\x1b[0m\r\n", connect_addr, e).into_bytes()
             );
             return;
@@ -212,7 +213,7 @@ fn ssh_worker(
     let mut sess = match Session::new() {
         Ok(s) => s,
         Err(e) => {
-            let _ = output_tx.blocking_send(
+            let _ = output_tx.send(
                 format!("\x1b[31m[错误] SSH会话创建失败: {}\x1b[0m\r\n", e).into_bytes()
             );
             return;
@@ -222,7 +223,7 @@ fn ssh_worker(
     sess.set_tcp_stream(tcp);
 
     if let Err(e) = sess.handshake() {
-        let _ = output_tx.blocking_send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] SSH握手失败: {}\x1b[0m\r\n", e).into_bytes()
         );
         return;
@@ -230,14 +231,14 @@ fn ssh_worker(
 
     let private_key = get_ssh_private_key();
     if private_key.is_empty() || private_key == "NOT_YET_GENERATED" || private_key.contains("FALLBACK") {
-        let _ = output_tx.blocking_send(
+        let _ = output_tx.send(
             "\x1b[31m[错误] 平台SSH密钥未配置，请联系管理员\x1b[0m\r\n".to_string().into_bytes()
         );
         return;
     }
 
     if let Err(e) = userauth_pubkey_from_memory(&sess, "root", &private_key) {
-        let _ = output_tx.blocking_send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] SSH密钥认证失败，请确认机器已注入平台公钥: {}\x1b[0m\r\n", e).into_bytes()
         );
         return;
@@ -246,7 +247,7 @@ fn ssh_worker(
     let mut channel = match sess.channel_session() {
         Ok(c) => c,
         Err(e) => {
-            let _ = output_tx.blocking_send(
+            let _ = output_tx.send(
                 format!("\x1b[31m[错误] SSH通道创建失败: {}\x1b[0m\r\n", e).into_bytes()
             );
             return;
@@ -254,20 +255,20 @@ fn ssh_worker(
     };
 
     if let Err(e) = channel.request_pty("xterm-256color", None, Some((80, 24, 0, 0))) {
-        let _ = output_tx.blocking_send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] PTY请求失败: {}\x1b[0m\r\n", e).into_bytes()
         );
         return;
     }
 
     if let Err(e) = channel.shell() {
-        let _ = output_tx.blocking_send(
+        let _ = output_tx.send(
             format!("\x1b[31m[错误] Shell启动失败: {}\x1b[0m\r\n", e).into_bytes()
         );
         return;
     }
 
-    let _ = output_tx.blocking_send(
+    let _ = output_tx.send(
         format!("\x1b[32m[已连接到 {}]\x1b[0m\r\n", connect_addr).into_bytes()
     );
 

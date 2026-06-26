@@ -48,12 +48,8 @@ fn hmac_key() -> Vec<u8> {
 
 /// HMAC-SHA256 签名，返回 hex 字符串
 fn hmac_hex(payload: &[u8]) -> String {
-    let key = hmac_key();
-    if key.is_empty() || key.len() < 16 {
-        tracing::warn!("session_secret is too short or empty — using fallback key (NOT SECURE FOR PRODUCTION)");
-    }
-    let mut mac = HmacSha256::new_from_slice(&key)
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"fallback-key-not-for-production").expect("HMAC init"));
+    let mut mac = HmacSha256::new_from_slice(&hmac_key())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
     mac.update(payload);
     let result = mac.finalize().into_bytes();
     let mut hex = String::with_capacity(result.len() * 2);
@@ -73,12 +69,8 @@ fn hmac_verify(payload: &[u8], expected_hex: &str) -> bool {
     if expected.is_empty() {
         return false;
     }
-    let key = hmac_key();
-    if key.is_empty() || key.len() < 16 {
-        tracing::warn!("session_secret is too short or empty — using fallback key (NOT SECURE FOR PRODUCTION)");
-    }
-    let mut mac = HmacSha256::new_from_slice(&key)
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"fallback-key-not-for-production").expect("HMAC init"));
+    let mut mac = HmacSha256::new_from_slice(&hmac_key())
+        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
     mac.update(payload);
     mac.verify_slice(&expected).is_ok()
 }
@@ -253,12 +245,11 @@ use axum::{
     response::{IntoResponse, Redirect},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct OAuthAuthorizeQuery {
     pub client_id: String,
     pub redirect_uri: String,
     pub state: Option<String>,
-    #[allow(dead_code)]
     pub response_type: Option<String>,
 }
 

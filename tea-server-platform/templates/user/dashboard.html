@@ -2,162 +2,103 @@
 
 {% block title %}{{ site_name }} - 仪表盘{% endblock title %}
 
-{% block banner %}
-<div class="page-banner">
-    <div class="container">
-        <h1><i class="bi bi-speedometer2 me-2"></i>仪表盘</h1>
-        <p>欢迎回来，{{ user_name | default(value="用户") }}！管理你的机器和查看统计数据。</p>
-    </div>
-</div>
-{% endblock banner %}
-
 {% block content %}
-<!-- 统计卡片 -->
-<div class="row mb-4">
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card stat-card stat-card-primary h-100 border-0">
-            <div class="card-body">
-                <div class="stat-icon mb-3">
-                    <i class="bi bi-gem fs-1"></i>
-                </div>
-                <div class="stat-value">{{ user_ldc | default(value="0") }}</div>
-                <div class="stat-label">LDC 余额</div>
-            </div>
-            <div class="card-footer bg-transparent border-0 p-0">
-                <a href="/recharge" class="btn btn-sm btn-light w-100">
-                    <i class="bi bi-plus me-1"></i>充值
-                </a>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card stat-card stat-card-success h-100 border-0">
-            <div class="card-body">
-                <div class="stat-icon mb-3">
-                    <i class="bi bi-lightning-charge-fill fs-1"></i>
-                </div>
-                <div class="stat-value">{{ user_balance | default(value="0") }}</div>
-                <div class="stat-label">核时余额</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card stat-card stat-card-info h-100 border-0">
-            <div class="card-body">
-                <div class="stat-icon mb-3">
-                    <i class="bi bi-clock-history fs-1"></i>
-                </div>
-                <div class="stat-value">{{ total_usage_hours | default(value="0") }}</div>
-                <div class="stat-label">总使用时长</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-3">
-        <div class="card stat-card stat-card-warning h-100 border-0">
-            <div class="card-body">
-                <div class="stat-icon mb-3">
-                    <i class="bi bi-server fs-1"></i>
-                </div>
-                <div class="stat-value">{{ active_machines | default(value="0") }}</div>
-                <div class="stat-label">运行中机器</div>
-            </div>
-            <div class="card-footer bg-transparent border-0 p-0">
-                <a href="/machines" class="btn btn-sm btn-light w-100">
-                    <i class="bi bi-eye me-1"></i>查看
-                </a>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 我的机器 -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-gradient-primary text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-server me-2"></i>我的机器
-                </h5>
-                <a href="/market" class="btn btn-sm btn-light">
-                    <i class="bi bi-plus-circle me-1"></i>创建机器
-                </a>
+        <h2>欢迎回来，{{ user_name | default(value="用户") }}</h2>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body text-center">
+                <h5 class="card-title">LDC 余额</h5>
+                <p class="card-text display-6">{{ user_ldc | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body text-center">
+                <h5 class="card-title">核时余额</h5>
+                <p class="card-text display-6">{{ user_balance | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body text-center">
+                <h5 class="card-title">总使用时长</h5>
+                <p class="card-text display-6">{{ total_usage_hours | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body text-center">
+                <h5 class="card-title">运行中机器</h5>
+                <p class="card-text display-6">{{ active_machines | default(value="0") }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">我的机器</h5>
+                <a href="/market" class="btn btn-primary btn-sm">创建机器</a>
             </div>
             <div class="card-body">
                 {% if machines %}
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle">
+                    <table class="table table-striped table-hover">
                         <thead>
                             <tr>
-                                <th><i class="bi bi-hash me-1"></i>ID</th>
-                                <th><i class="bi bi-hdd-network me-1"></i>服务器</th>
-                                <th><i class="bi bi-cpu me-1"></i>CPU</th>
-                                <th><i class="bi bi-memory me-1"></i>内存</th>
-                                <th><i class="bi bi-hdd me-1"></i>磁盘</th>
-                                <th><i class="bi bi-activity me-1"></i>状态</th>
-                                <th><i class="bi bi-speedometer me-1"></i>核时/小时</th>
-                                <th><i class="bi bi-calendar me-1"></i>过期时间</th>
-                                <th><i class="bi bi-gear me-1"></i>操作</th>
+                                <th>ID</th>
+                                <th>服务器</th>
+                                <th>CPU</th>
+                                <th>内存</th>
+                                <th>磁盘</th>
+                                <th>状态</th>
+                                <th>核时/小时</th>
+                                <th>过期时间</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for m in machines %}
                             <tr>
-                                <td><code class="bg-light px-2 py-1 rounded">#{{ m.id }}</code></td>
+                                <td>{{ m.id }}</td>
                                 <td>{{ m.server_id }}</td>
-                                <td>
-                                    <span class="badge bg-info-subtle text-info px-2">
-                                        <i class="bi bi-cpu-fill me-1"></i>{{ m.cpu_cores }} 核
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="badge bg-success-subtle text-success px-2">
-                                        <i class="bi bi-memory me-1"></i>{{ m.memory_gb }} GB
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="badge bg-secondary-subtle text-secondary px-2">
-                                        <i class="bi bi-hdd me-1"></i>{{ m.disk_gb }} GB
-                                    </span>
-                                </td>
+                                <td>{{ m.cpu_cores }} 核</td>
+                                <td>{{ m.memory_gb }} GB</td>
+                                <td>{{ m.disk_gb }} GB</td>
                                 <td>
                                     {% if m.status == "running" %}
-                                    <span class="status-badge status-running">
-                                        <i class="bi bi-circle-fill me-1"></i>运行中
-                                    </span>
+                                    <span class="badge bg-success">运行中</span>
                                     {% elif m.status == "pending" %}
-                                    <span class="status-badge status-pending">
-                                        <i class="bi bi-hourglass-split me-1"></i>创建中
-                                    </span>
+                                    <span class="badge bg-info">创建中</span>
                                     {% elif m.status == "failed" %}
-                                    <span class="status-badge status-failed">
-                                        <i class="bi bi-x-circle-fill me-1"></i>创建失败
-                                    </span>
+                                    <span class="badge bg-danger">创建失败</span>
                                     {% else %}
-                                    <span class="status-badge status-stopped">
-                                        <i class="bi bi-pause-circle-fill me-1"></i>已停止
-                                    </span>
+                                    <span class="badge bg-secondary">已停止</span>
                                     {% endif %}
                                 </td>
-                                <td><strong class="text-primary">{{ m.core_hours_per_hour }}</strong></td>
-                                <td><small class="text-muted">{{ m.expires_at }}</small></td>
+                                <td>{{ m.core_hours_per_hour }}</td>
+                                <td>{{ m.expires_at }}</td>
                                 <td>
-                                    <div class="btn-group btn-group-sm" role="group">
-                                        {% if m.status == "running" %}
-                                        <a href="/machines/{{ m.id }}/connect" class="btn btn-primary" title="连接">
-                                            <i class="bi bi-plug"></i>
-                                        </a>
-                                        <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline" data-no-loading>
-                                            <button type="submit" class="btn btn-warning" title="停止">
-                                                <i class="bi bi-stop-circle"></i>
-                                            </button>
-                                        </form>
-                                        {% endif %}
-                                        <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" data-no-loading onsubmit="return confirm('确定要删除这台机器吗？')">
-                                            <button type="submit" class="btn btn-outline-danger" title="删除">
-                                                <i class="bi bi-trash"></i>
-                                            </button>
-                                        </form>
-                                    </div>
+                                    {% if m.status == "running" %}
+                                    <a href="/machines/{{ m.id }}/connect" class="btn btn-sm btn-primary">连接</a>
+                                    <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
+                                        <button type="submit" class="btn btn-sm btn-warning">停止</button>
+                                    </form>
+                                    {% endif %}
+                                    <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
+                                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                                    </form>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -165,15 +106,7 @@
                     </table>
                 </div>
                 {% else %}
-                <div class="text-center py-5">
-                    <div class="empty-state mb-3">
-                        <i class="bi bi-inbox fs-1 text-muted"></i>
-                    </div>
-                    <p class="text-muted mb-3">暂无机器，开始创建你的第一台机器吧！</p>
-                    <a href="/market" class="btn btn-primary btn-lg">
-                        <i class="bi bi-plus-circle me-2"></i>去创建一台机器
-                    </a>
-                </div>
+                <p class="text-muted text-center py-3">暂无机器，<a href="/market">去创建一台</a></p>
                 {% endif %}
             </div>
         </div>
@@ -181,41 +114,34 @@
 </div>
 
 {% if packages %}
-<!-- 已购套餐 -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-gradient-success text-white">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-box-seam me-2"></i>已购套餐
-                </h5>
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">已购套餐</h5>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle">
+                    <table class="table table-striped">
                         <thead>
                             <tr>
-                                <th><i class="bi bi-hash me-1"></i>套餐ID</th>
-                                <th><i class="bi bi-lightning me-1"></i>核时</th>
-                                <th><i class="bi bi-calendar me-1"></i>过期时间</th>
-                                <th><i class="bi bi-activity me-1"></i>状态</th>
+                                <th>套餐ID</th>
+                                <th>核时</th>
+                                <th>过期时间</th>
+                                <th>状态</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for p in packages %}
                             <tr>
-                                <td><code class="bg-light px-2 py-1 rounded">{{ p.package_id }}</code></td>
-                                <td><strong class="text-success">{{ p.core_hours }}</strong></td>
-                                <td><small class="text-muted">{{ p.expires_at | default(value="无限制") }}</small></td>
+                                <td>{{ p.package_id }}</td>
+                                <td>{{ p.core_hours }}</td>
+                                <td>{{ p.expires_at | default(value="无限制") }}</td>
                                 <td>
                                     {% if p.is_active %}
-                                    <span class="status-badge status-running">
-                                        <i class="bi bi-check-circle-fill me-1"></i>有效
-                                    </span>
+                                    <span class="badge bg-success">有效</span>
                                     {% else %}
-                                    <span class="status-badge status-stopped">
-                                        <i class="bi bi-x-circle-fill me-1"></i>已过期
-                                    </span>
+                                    <span class="badge bg-secondary">已过期</span>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -229,97 +155,53 @@
 </div>
 {% endif %}
 
-<!-- API Key 管理 -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-gradient-info text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-key me-2"></i>我的 API Key
-                </h5>
-                <form method="post" action="/dashboard/api-key" style="display:inline" data-no-loading>
-                    <button type="submit" class="btn btn-sm btn-warning">
-                        <i class="bi bi-arrow-repeat me-1"></i>重新生成
-                    </button>
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">我的 API Key</h5>
+                <form method="post" action="/dashboard/api-key" style="display:inline">
+                    <button type="submit" class="btn btn-warning btn-sm">重新生成</button>
                 </form>
             </div>
             <div class="card-body">
                 {% if api_key %}
-                <div class="api-key-display">
-                    <div class="input-group input-group-lg">
-                        <span class="input-group-text bg-light">
-                            <i class="bi bi-key-fill text-primary"></i>
-                        </span>
-                        <input type="text" class="form-control form-control-lg" id="apiKeyDisplay" 
-                               value="{{ api_key | truncate(length=20, end="...") }}" 
-                               readonly data-full-key="{{ api_key }}"
-                               style="font-family: 'Fira Code', monospace;">
-                        <button class="btn btn-outline-primary" type="button" onclick="toggleApiKey()">
-                            <i class="bi bi-eye"></i>
-                        </button>
-                        <button class="btn btn-primary" type="button" onclick="copyApiKey()">
-                            <i class="bi bi-copy"></i>
-                        </button>
-                    </div>
-                    <small class="text-muted mt-2 d-block">
-                        <i class="bi bi-info-circle me-1"></i>
-                        请妥善保管此 Key，用于 API 请求认证。切勿分享给他人！
-                    </small>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="apiKeyDisplay" value="{{ api_key | truncate(length=16, end="...") }}" readonly data-full-key="{{ api_key }}">
+                    <button class="btn btn-outline-secondary" type="button" onclick="var el=document.getElementById('apiKeyDisplay');var full=el.getAttribute('data-full-key');if(el.value===full){el.value=full.substring(0,16)+'...';this.textContent='显示';}else{el.value=full;this.textContent='隐藏';}">显示</button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('apiKeyDisplay').getAttribute('data-full-key'));this.textContent='已复制';setTimeout(()=>this.textContent='复制',2000)">复制</button>
                 </div>
+                <small class="text-muted">请妥善保管此 Key，用于 API 请求认证。点击「显示」查看完整 Key</small>
                 {% else %}
-                <div class="text-center py-4">
-                    <div class="empty-state mb-3">
-                        <i class="bi bi-key fs-1 text-muted"></i>
-                    </div>
-                    <p class="text-muted mb-3">尚未生成 API Key</p>
-                    <form id="genApiKeyForm" method="post" action="/dashboard/api-key" data-no-loading>
-                        <button type="submit" class="btn btn-primary btn-lg">
-                            <i class="bi bi-plus-circle me-2"></i>生成 API Key
-                        </button>
-                    </form>
+                <div class="input-group">
+                    <input type="text" class="form-control" value="尚未生成 API Key" readonly disabled>
+                    <button class="btn btn-primary" type="submit" form="genApiKeyForm">生成 API Key</button>
                 </div>
+                <form id="genApiKeyForm" method="post" action="/dashboard/api-key" style="display:none"></form>
                 {% endif %}
             </div>
         </div>
     </div>
 </div>
 
-<!-- 我的服务器 -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-gradient-secondary text-white">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-hdd-network me-2"></i>我的服务器
-                </h5>
-            </div>
+        <div class="card">
+            <div class="card-header"><h5 class="mb-0">我的服务器</h5></div>
             <div class="card-body">
                 {% if my_servers %}
-                <div class="server-list">
+                <div class="list-group">
                     {% for s in my_servers %}
-                    <div class="server-item d-flex justify-content-between align-items-center p-3 mb-2 bg-light rounded">
-                        <div class="server-info">
-                            <div class="server-name">
-                                <strong>{{ s.name }}</strong>
-                                {% if s.is_premium %}
-                                <span class="badge bg-danger ms-2">
-                                    <i class="bi bi-star-fill me-1"></i>茶的优选
-                                </span>
-                                {% endif %}
-                            </div>
-                            <small class="text-muted d-block mt-1">
-                                <i class="bi bi-geo-alt me-1"></i>{{ s.ip }} · 
-                                <i class="bi bi-cpu me-1"></i>{{ s.cpu_cores }}核 · 
-                                <i class="bi bi-memory me-1"></i>{{ s.memory_gb }}GB
-                            </small>
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>{{ s.name }}</strong>
+                            {% if s.is_premium %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
+                            <small class="text-muted ms-2">{{ s.ip }} · {{ s.cpu_cores }}核 / {{ s.memory_gb }}GB</small>
                         </div>
-                        <div class="server-actions">
+                        <div>
                             {% if premium_enabled and not s.is_premium %}
-                            <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline" data-no-loading>
-                                <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    <i class="bi bi-star me-1"></i>购买优选
-                                    <span class="badge bg-danger ms-1">{{ premium_ldc_cost }} LDC</span>
-                                </button>
+                            <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">购买优选 ({{ premium_ldc_cost }} LDC)</button>
                             </form>
                             {% endif %}
                         </div>
@@ -327,213 +209,40 @@
                     {% endfor %}
                 </div>
                 {% else %}
-                <div class="text-center py-4">
-                    <div class="empty-state mb-3">
-                        <i class="bi bi-hdd fs-1 text-muted"></i>
-                    </div>
-                    <p class="text-muted mb-3">暂无贡献的服务器</p>
-                    <a href="/servers/contribute" class="btn btn-outline-primary">
-                        <i class="bi bi-plus-circle me-2"></i>贡献一台服务器
-                    </a>
-                </div>
+                <p class="text-muted">暂无贡献的服务器</p>
                 {% endif %}
             </div>
         </div>
     </div>
 </div>
 
-<!-- 余额兑换码 -->
 <div class="row mb-4">
-    <div class="col-md-6 mb-4">
-        <div class="card border-0 shadow-sm h-100">
-            <div class="card-header bg-gradient-warning text-white">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-ticket-perforated me-2"></i>余额兑换码
-                </h5>
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">余额兑换码</h5>
             </div>
-            <div class="card-body">
-                <p class="text-muted mb-3">
-                    将余额转换为兑换码分享给他人，让更多人享受平台的便利。
-                </p>
-                <a href="/balance-to-code" class="btn btn-warning btn-lg w-100">
-                    <i class="bi bi-arrow-right-circle me-2"></i>立即兑换
-                </a>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-6 mb-4">
-        <div class="card border-0 shadow-sm h-100 checkin-card">
-            <div class="card-header bg-gradient-success text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-calendar-check me-2"></i>每日签到
-                </h5>
-                <form method="post" action="/checkin" style="display:inline" data-no-loading>
-                    <button type="submit" class="btn btn-sm btn-light">
-                        <i class="bi bi-check-circle me-1"></i>立即签到
-                    </button>
-                </form>
-            </div>
-            <div class="card-body">
-                <div class="checkin-info">
-                    <i class="bi bi-gift fs-1 text-success mb-2"></i>
-                    <p class="mb-0">每日签到可获取核时奖励，连续签到奖励更多！</p>
-                    <small class="text-muted">坚持签到，福利多多</small>
-                </div>
+            <div class="card-body text-center">
+                <p class="card-text">将余额转换为兑换码分享给他人</p>
+                <a href="/balance-to-code" class="btn btn-outline-primary">立即兑换</a>
             </div>
         </div>
     </div>
 </div>
 
-<style>
-    /* 统计卡片样式 */
-    .stat-card {
-        text-align: center;
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .stat-card .stat-icon {
-        opacity: 0.15;
-        position: absolute;
-        top: 10px;
-        right: 15px;
-    }
-    
-    .stat-card .stat-icon i {
-        color: inherit;
-    }
-    
-    .stat-card-primary {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: #fff;
-    }
-    
-    .stat-card-success {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        color: #fff;
-    }
-    
-    .stat-card-info {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: #fff;
-    }
-    
-    .stat-card-warning {
-        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        color: #fff;
-    }
-    
-    .stat-card .stat-value {
-        font-size: 2.5rem;
-        font-weight: 700;
-        margin: 0.5rem 0;
-    }
-    
-    .stat-card .stat-label {
-        font-size: 0.9rem;
-        opacity: 0.9;
-        margin-bottom: 1rem;
-    }
-    
-    /* 状态徽章 */
-    .status-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.35rem 0.75rem;
-        border-radius: 100px;
-        font-size: 0.85rem;
-        font-weight: 500;
-    }
-    
-    .status-running {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-    }
-    
-    .status-pending {
-        background: rgba(59, 130, 246, 0.15);
-        color: #3b82f6;
-    }
-    
-    .status-failed {
-        background: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
-    }
-    
-    .status-stopped {
-        background: rgba(100, 116, 139, 0.15);
-        color: #64748b;
-    }
-    
-    /* 空状态 */
-    .empty-state {
-        animation: float 3s ease-in-out infinite;
-    }
-    
-    @keyframes float {
-        0%, 100% { transform: translateY(0); }
-        50% { transform: translateY(-10px); }
-    }
-    
-    /* API Key 显示 */
-    .api-key-display input {
-        font-size: 1.1rem;
-    }
-    
-    /* 签到卡片 */
-    .checkin-card .checkin-info {
-        text-align: center;
-        padding: 1rem 0;
-    }
-    
-    /* 服务器项 */
-    .server-item {
-        transition: all 0.2s ease;
-    }
-    
-    .server-item:hover {
-        background: var(--primary-subtle) !important;
-        transform: translateX(5px);
-    }
-    
-    /* 响应式 */
-    @media (max-width: 768px) {
-        .stat-card .stat-value {
-            font-size: 1.8rem;
-        }
-        
-        .stat-card .stat-icon {
-            display: none;
-        }
-    }
-</style>
-
-<script>
-function toggleApiKey() {
-    const el = document.getElementById('apiKeyDisplay');
-    const full = el.getAttribute('data-full-key');
-    const btn = el.nextElementSibling;
-    
-    if (el.value === full) {
-        el.value = full.substring(0, 20) + '...';
-        btn.innerHTML = '<i class="bi bi-eye"></i>';
-    } else {
-        el.value = full;
-        btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
-    }
-}
-
-function copyApiKey() {
-    const el = document.getElementById('apiKeyDisplay');
-    const full = el.getAttribute('data-full-key');
-    navigator.clipboard.writeText(full).then(() => {
-        const btn = el.parentElement.querySelector('.btn-primary');
-        btn.innerHTML = '<i class="bi bi-check"></i>';
-        setTimeout(() => {
-            btn.innerHTML = '<i class="bi bi-copy"></i>';
-        }, 2000);
-    });
-}
-</script>
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">每日签到</h5>
+                <form method="post" action="/checkin">
+                    <button type="submit" class="btn btn-success">立即签到</button>
+                </form>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-0">每日签到可获取核时奖励，连续签到奖励更多！</p>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock content %}

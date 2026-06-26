@@ -1,6 +1,6 @@
 use crate::db;
 use crate::services::session::agent_api_key;
-
+use tracing;
 
 /// Known VPN protocol ports and signatures to detect
 const VPN_PORTS: &[u16] = &[

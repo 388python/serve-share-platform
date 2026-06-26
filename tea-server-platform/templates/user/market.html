@@ -2,134 +2,71 @@
 
 {% block title %}{{ site_name }} - 机器市场{% endblock title %}
 
-{% block banner %}
-<div class="page-banner">
-    <div class="container">
-        <h1><i class="bi bi-store me-2"></i>机器市场</h1>
-        <p>从可用服务器中选择一台创建你的虚拟机，享受高性能计算资源。</p>
-    </div>
-</div>
-{% endblock banner %}
-
 {% block content %}
-<!-- 搜索和筛选 -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="card border-0 shadow-sm p-3">
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <div class="search-box">
-                    <div class="input-group">
-                        <span class="input-group-text bg-light">
-                            <i class="bi bi-search"></i>
-                        </span>
-                        <input type="text" class="form-control" id="serverSearch" 
-                               placeholder="搜索服务器名称或IP地址..." onkeyup="searchServers()">
-                    </div>
-                </div>
-                <div class="filter-buttons d-flex gap-2">
-                    <select class="form-select form-select-sm" id="virtTypeFilter" onchange="filterServers()">
-                        <option value="all">全部虚拟化</option>
-                        <option value="lxc">LXC</option>
-                        <option value="kvm">KVM</option>
-                    </select>
-                    <select class="form-select form-select-sm" id="premiumFilter" onchange="filterServers()">
-                        <option value="all">全部类型</option>
-                        <option value="premium">茶的优选</option>
-                        <option value="normal">普通服务器</option>
-                    </select>
-                </div>
-            </div>
-        </div>
+        <h2>机器市场</h2>
+        <p class="text-muted">从可用服务器中选择一台创建你的虚拟机</p>
     </div>
 </div>
 
-<!-- 服务器网格 -->
-<div class="row" id="serversGrid">
+<div class="row">
     {% if servers %}
     {% for s in servers %}
-    <div class="col-md-6 col-lg-4 mb-4 server-card-wrapper" 
-         data-virt="{{ s.virt_type }}" 
-         data-premium="{{ 'premium' if s.is_premium else 'normal' }}"
-         data-name="{{ s.name | lower }}"
-         data-ip="{{ s.ip }}">
-        <div class="card server-card h-100 border-0 shadow-sm hover-card">
-            {% if s.is_premium and premium_enabled %}
-            <div class="premium-badge">
-                <i class="bi bi-star-fill"></i>
-                <span>茶的优选</span>
-            </div>
-            {% endif %}
-            
-            <!-- 服务器头部 -->
-            <div class="server-card-header p-3 bg-gradient-{{ 'danger' if s.is_premium else 'primary' }} text-white">
-                <div class="d-flex align-items-center justify-content-between">
-                    <div>
-                        <h5 class="mb-0 fw-semibold">
-                            <i class="bi bi-hdd-network me-2"></i>{{ s.name }}
-                        </h5>
-                        <small class="opacity-75">{{ s.provider | default(value="未知供应商") }}</small>
-                    </div>
-                    <div class="virt-badge">
-                        <span class="badge bg-light text-dark">{{ s.virt_type | upper }}</span>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 服务器信息 -->
-            <div class="card-body p-4">
-                <!-- 配置规格 -->
-                <div class="server-specs mb-3">
-                    <div class="spec-row">
-                        <div class="spec-item">
-                            <i class="bi bi-cpu-fill text-primary"></i>
-                            <span>{{ s.cpu_cores }} 核</span>
-                        </div>
-                        <div class="spec-item">
-                            <i class="bi bi-memory text-success"></i>
-                            <span>{{ s.memory_gb }} GB</span>
-                        </div>
-                        <div class="spec-item">
-                            <i class="bi bi-hdd text-warning"></i>
-                            <span>{{ s.disk_gb }} GB</span>
-                        </div>
-                    </div>
-                    <div class="spec-row mt-2">
-                        <div class="spec-item">
-                            <i class="bi bi-speedometer2 text-info"></i>
-                            <span>{{ s.bandwidth_mbps }} Mbps</span>
-                        </div>
-                        <div class="spec-item">
-                            <i class="bi bi-geo-alt text-danger"></i>
-                            <span>{{ s.ip }}</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 服务器描述 -->
-                {% if s.description %}
-                <div class="server-description mb-3">
-                    <small class="text-muted">{{ s.description | truncate(length=60) }}</small>
-                </div>
-                {% endif %}
-                
-                <!-- 详细信息 -->
-                <div class="server-details">
-                    <div class="detail-row">
-                        <small class="text-muted">系统版本</small>
-                        <span class="badge bg-secondary">{{ s.linux_version | default(value="未知") }}</span>
-                    </div>
-                    <div class="detail-row">
-                        <small class="text-muted">到期时间</small>
-                        <strong class="text-primary">{{ s.expires_at }}</strong>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- 操作按钮 -->
-            <div class="card-footer bg-transparent border-0 p-3">
-                <button type="button" class="btn btn-{{ 'danger' if s.is_premium else 'primary' }} w-100 btn-lg" 
-                        data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
-                    <i class="bi bi-plus-circle me-2"></i>选择此服务器
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">
+                    {{ s.name }}
+                    {% if s.is_premium and premium_enabled %}<span class="badge bg-danger ms-2">茶的优选</span>{% endif %}
+                </h5>
+                <ul class="list-group list-group-flush mb-3">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>CPU</span>
+                        <span class="fw-bold">{{ s.cpu_cores }} 核</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>内存</span>
+                        <span class="fw-bold">{{ s.memory_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>带宽</span>
+                        <span class="fw-bold">{{ s.bandwidth_mbps }} Mbps</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>磁盘</span>
+                        <span class="fw-bold">{{ s.disk_gb }} GB</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>到期时间</span>
+                        <span class="fw-bold">{{ s.expires_at }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>虚拟化</span>
+                        <span class="badge bg-info">{{ s.virt_type | upper }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>服务器地址</span>
+                        <span class="fw-bold">{{ s.ip }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>系统版本</span>
+                        <span class="fw-bold">{% if s.linux_version %}{{ s.linux_version }}{% else %}未知{% endif %}</span>
+                    </li>
+                    {% if s.provider %}
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>供应商</span>
+                        <span class="fw-bold">{{ s.provider }}</span>
+                    </li>
+                    {% endif %}
+                    {% if s.description %}
+                    <li class="list-group-item">
+                        <small class="text-muted">{{ s.description | truncate(length=80) }}</small>
+                    </li>
+                    {% endif %}
+                </ul>
+                <button type="button" class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#selectModal{{ s.id }}">
+                    选择此服务器
                 </button>
             </div>
         </div>
@@ -137,149 +74,65 @@
 
     <!-- Select Modal -->
     <div class="modal fade" id="selectModal{{ s.id }}" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered modal-lg">
-            <div class="modal-content border-0 shadow-lg">
-                <div class="modal-header bg-gradient-{{ 'danger' if s.is_premium else 'primary' }} text-white">
-                    <h5 class="modal-title fw-semibold">
-                        <i class="bi bi-plus-circle me-2"></i>配置机器 - {{ s.name }}
-                    </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">配置机器 - {{ s.name }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <form method="post" action="/machines/create">
                     <div class="modal-body">
                         <input type="hidden" name="server_id" value="{{ s.id }}">
-                        
-                        <!-- 配置预览 -->
-                        <div class="config-preview mb-4">
-                            <div class="row g-3">
-                                <div class="col-md-4">
-                                    <div class="preview-item">
-                                        <i class="bi bi-cpu-fill text-primary"></i>
-                                        <div>
-                                            <small class="text-muted">最大 CPU</small>
-                                            <strong>{{ s.cpu_cores }} 核</strong>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="preview-item">
-                                        <i class="bi bi-memory text-success"></i>
-                                        <div>
-                                            <small class="text-muted">最大内存</small>
-                                            <strong>{{ s.memory_gb }} GB</strong>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="preview-item">
-                                        <i class="bi bi-hdd text-warning"></i>
-                                        <div>
-                                            <small class="text-muted">最大磁盘</small>
-                                            <strong>{{ s.disk_gb }} GB</strong>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">CPU 核心数 (最大 {{ s.cpu_cores }})</label>
+                            <input type="number" class="form-control" name="cpu_cores" required min="1" max="{{ s.cpu_cores }}" value="1">
                         </div>
-                        
-                        <!-- 配置表单 -->
-                        <div class="config-form">
-                            <div class="row g-3">
-                                <div class="col-md-4">
-                                    <label class="form-label fw-medium">
-                                        <i class="bi bi-cpu me-1"></i>CPU 核心数
-                                    </label>
-                                    <input type="number" class="form-control form-control-lg" name="cpu_cores" 
-                                           required min="1" max="{{ s.cpu_cores }}" value="1"
-                                           onchange="updateEstimate('{{ s.id }}', {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }})">
-                                    <small class="text-muted">可用 {{ s.cpu_cores }} 核</small>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-medium">
-                                        <i class="bi bi-memory me-1"></i>内存 GB
-                                    </label>
-                                    <input type="number" class="form-control form-control-lg" name="memory_gb" 
-                                           required min="0.1" max="{{ s.memory_gb }}" value="1" step="0.1"
-                                           onchange="updateEstimate('{{ s.id }}', {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }})">
-                                    <small class="text-muted">可用 {{ s.memory_gb }} GB</small>
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label fw-medium">
-                                        <i class="bi bi-hdd me-1"></i>磁盘 GB
-                                    </label>
-                                    <input type="number" class="form-control form-control-lg" name="disk_gb" 
-                                           required min="1" max="{{ s.disk_gb }}" value="10" step="0.1"
-                                           onchange="updateEstimate('{{ s.id }}', {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }})">
-                                    <small class="text-muted">可用 {{ s.disk_gb }} GB</small>
-                                </div>
+                        <div class="mb-3">
+                            <label class="form-label">内存 GB (最大 {{ s.memory_gb }})</label>
+                            <input type="number" class="form-control" name="memory_gb" required min="0.1" max="{{ s.memory_gb }}" value="1" step="0.1">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">磁盘 GB (最大 {{ s.disk_gb }})</label>
+                            <input type="number" class="form-control" name="disk_gb" required min="1" max="{{ s.disk_gb }}" value="10" step="0.1">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">系统镜像</label>
+                            <select class="form-select" name="image" id="imageSelect{{ s.id }}" required onchange="onImageChange('{{ s.id }}')">
+                                <optgroup label="Linux 系统">
+                                    <option value="ubuntu:22.04" selected>Ubuntu 22.04 LTS</option>
+                                    <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
+                                    <option value="debian:12">Debian 12</option>
+                                    <option value="debian:11">Debian 11</option>
+                                    <option value="centos:9">CentOS Stream 9</option>
+                                    <option value="alpine:3.19">Alpine Linux 3.19</option>
+                                </optgroup>
+                                {% if s.virt_type == 'kvm' %}
+                                <optgroup label="Windows 系统 (仅 KVM)">
+                                    <option value="windows:2022">Windows Server 2022</option>
+                                    <option value="windows:2019">Windows Server 2019</option>
+                                    <option value="windows:2025">Windows Server 2025</option>
+                                    <option value="windows:10">Windows 10</option>
+                                    <option value="windows:11">Windows 11</option>
+                                </optgroup>
+                                {% endif %}
+                            </select>
+                            <small class="text-muted" id="imageNote{{ s.id }}">Linux 系统支持 SSH 连接</small>
+                        </div>
+                        <div class="mb-3" id="passwordField{{ s.id }}">
+                            <label class="form-label">Root 密码</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" name="root_password" id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" required minlength="6">
+                                <button class="btn btn-outline-secondary" type="button" onclick="toggleRootPassword('{{ s.id }}')">显示</button>
                             </div>
-                            
-                            <div class="row g-3 mt-3">
-                                <div class="col-md-6">
-                                    <label class="form-label fw-medium">
-                                        <i class="bi bi-ubuntu me-1"></i>系统镜像
-                                    </label>
-                                    <select class="form-select form-select-lg" name="image" id="imageSelect{{ s.id }}" required onchange="onImageChange('{{ s.id }}')">
-                                        <optgroup label="🐧 Linux 系统">
-                                            <option value="ubuntu:22.04" selected>Ubuntu 22.04 LTS</option>
-                                            <option value="ubuntu:24.04">Ubuntu 24.04 LTS</option>
-                                            <option value="debian:12">Debian 12</option>
-                                            <option value="debian:11">Debian 11</option>
-                                            <option value="centos:9">CentOS Stream 9</option>
-                                            <option value="alpine:3.19">Alpine Linux 3.19</option>
-                                        </optgroup>
-                                        {% if s.virt_type == 'kvm' %}
-                                        <optgroup label="🪟 Windows 系统 (仅 KVM)">
-                                            <option value="windows:2022">Windows Server 2022</option>
-                                            <option value="windows:2019">Windows Server 2019</option>
-                                            <option value="windows:2025">Windows Server 2025</option>
-                                            <option value="windows:10">Windows 10</option>
-                                            <option value="windows:11">Windows 11</option>
-                                        </optgroup>
-                                        {% endif %}
-                                    </select>
-                                    <small class="text-muted" id="imageNote{{ s.id }}">
-                                        <i class="bi bi-info-circle me-1"></i>Linux 系统支持 SSH 连接
-                                    </small>
-                                </div>
-                                <div class="col-md-6" id="passwordField{{ s.id }}">
-                                    <label class="form-label fw-medium">
-                                        <i class="bi bi-key me-1"></i>Root 密码
-                                    </label>
-                                    <div class="input-group input-group-lg">
-                                        <input type="password" class="form-control" name="root_password" 
-                                               id="rootPassword{{ s.id }}" placeholder="请设置 root 密码" 
-                                               required minlength="6">
-                                        <button class="btn btn-outline-secondary" type="button" onclick="toggleRootPassword('{{ s.id }}')">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
-                                    </div>
-                                    <small class="text-muted">
-                                        <i class="bi bi-shield-check me-1"></i>至少 6 位，建议使用强密码
-                                    </small>
-                                </div>
-                            </div>
-                            
-                            <!-- 资费说明 -->
-                            <div class="pricing-info mt-4 p-3 bg-light rounded">
-                                <div class="d-flex align-items-center mb-2">
-                                    <i class="bi bi-lightning-charge-fill text-warning me-2"></i>
-                                    <strong>核时消耗预估</strong>
-                                    <span class="badge bg-primary ms-2" id="estimate{{ s.id }}">计算中...</span>
-                                </div>
-                                <small class="text-muted">
-                                    核时消耗 = CPU核数 × {{ s.cpu_multiplier }} + 内存GB × {{ s.memory_multiplier }} + 磰盘GB × {{ s.disk_multiplier }}
-                                </small>
-                            </div>
+                            <small class="text-muted">至少 6 位，建议使用强密码</small>
+                        </div>
+                        <div class="alert alert-info">
+                            <small>核时消耗 = CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
                         </div>
                     </div>
-                    <div class="modal-footer bg-light">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                            <i class="bi bi-x me-1"></i>取消
-                        </button>
-                        <button type="submit" class="btn btn-{{ 'danger' if s.is_premium else 'primary' }}">
-                            <i class="bi bi-check-circle me-1"></i>确认创建
-                        </button>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">确认创建</button>
                     </div>
                 </form>
             </div>
@@ -288,193 +141,29 @@
     {% endfor %}
     {% else %}
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
+        <div class="card">
             <div class="card-body text-center py-5">
-                <div class="empty-state mb-4">
-                    <i class="bi bi-inbox fs-1 text-muted"></i>
-                </div>
-                <h5 class="text-muted mb-3">暂无可用服务器</h5>
-                <p class="text-muted small mb-4">目前没有活跃的服务器可供选择，请稍后再来。</p>
-                <a href="/servers/contribute" class="btn btn-primary btn-lg">
-                    <i class="bi bi-plus-circle me-2"></i>贡献一台服务器
-                </a>
+                <h5 class="text-muted">暂无可用服务器</h5>
+                <p>目前没有活跃的服务器可供选择，请稍后再来。</p>
+                <a href="/servers/contribute" class="btn btn-primary">贡献一台服务器</a>
             </div>
         </div>
     </div>
     {% endif %}
 </div>
+{% endblock content %}
 
-<style>
-    /* 服务器卡片样式 */
-    .server-card {
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .server-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
-    }
-    
-    /* 优选徽章 */
-    .premium-badge {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        background: linear-gradient(135deg, #f59e0b, #d97706);
-        color: #fff;
-        padding: 6px 12px;
-        border-radius: 100px;
-        font-size: 0.8rem;
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        z-index: 10;
-        animation: shimmer 2s infinite;
-    }
-    
-    @keyframes shimmer {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.8; }
-    }
-    
-    /* 规格行 */
-    .spec-row {
-        display: flex;
-        gap: 1.5rem;
-        flex-wrap: wrap;
-    }
-    
-    .spec-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .spec-item i {
-        font-size: 1.2rem;
-    }
-    
-    /* 详细信息行 */
-    .detail-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.5rem 0;
-        border-bottom: 1px solid var(--gray-100);
-    }
-    
-    .detail-row:last-child {
-        border-bottom: none;
-    }
-    
-    /* 配置预览 */
-    .preview-item {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 1rem;
-        background: var(--gray-50);
-        border-radius: 8px;
-        text-align: center;
-        justify-content: center;
-    }
-    
-    .preview-item i {
-        font-size: 1.5rem;
-    }
-    
-    .preview-item div {
-        display: flex;
-        flex-direction: column;
-    }
-    
-    /* 渐变危险色 */
-    .bg-gradient-danger {
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-    }
-    
-    /* 搜索框 */
-    .search-box {
-        flex: 1;
-        max-width: 400px;
-    }
-    
-    /* 响应式 */
-    @media (max-width: 768px) {
-        .search-box {
-            max-width: 100%;
-            width: 100%;
-            margin-bottom: 0.5rem;
-        }
-        
-        .filter-buttons {
-            width: 100%;
-        }
-        
-        .filter-buttons select {
-            width: 50%;
-        }
-        
-        .spec-row {
-            gap: 1rem;
-        }
-        
-        .server-card-header h5 {
-            font-size: 1rem;
-        }
-    }
-</style>
-
+{% block scripts %}
 <script>
-function searchServers() {
-    const query = document.getElementById('serverSearch').value.toLowerCase();
-    const cards = document.querySelectorAll('.server-card-wrapper');
-    
-    cards.forEach(card => {
-        const name = card.getAttribute('data-name');
-        const ip = card.getAttribute('data-ip');
-        
-        if (name.includes(query) || ip.includes(query)) {
-            card.style.display = '';
-        } else {
-            card.style.display = 'none';
-        }
-    });
-}
-
-function filterServers() {
-    const virtFilter = document.getElementById('virtTypeFilter').value;
-    const premiumFilter = document.getElementById('premiumFilter').value;
-    const cards = document.querySelectorAll('.server-card-wrapper');
-    
-    cards.forEach(card => {
-        const virt = card.getAttribute('data-virt');
-        const premium = card.getAttribute('data-premium');
-        
-        const virtMatch = virtFilter === 'all' || virt === virtFilter;
-        const premiumMatch = premiumFilter === 'all' || premium === premiumFilter;
-        
-        if (virtMatch && premiumMatch) {
-            card.style.display = '';
-        } else {
-            card.style.display = 'none';
-        }
-    });
-}
-
 function toggleRootPassword(serverId) {
     const input = document.getElementById('rootPassword' + serverId);
-    const btn = input.nextElementSibling.querySelector('i');
-    
+    const btn = input.nextElementSibling;
     if (input.type === 'password') {
         input.type = 'text';
-        btn.className = 'bi bi-eye-slash';
+        btn.textContent = '隐藏';
     } else {
         input.type = 'password';
-        btn.className = 'bi bi-eye';
+        btn.textContent = '显示';
     }
 }
 
@@ -487,24 +176,14 @@ function onImageChange(serverId) {
     const value = select.value;
     
     if (value.startsWith('windows:')) {
-        note.innerHTML = '<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Windows 系统支持 RDP 连接，无 SSH</span>';
+        note.innerHTML = '<span class="text-warning">⚠️ Windows 系统支持 RDP 连接，无 SSH</span>';
         passwordField.style.display = 'none';
         passwordInput.removeAttribute('required');
     } else {
-        note.innerHTML = '<i class="bi bi-info-circle me-1"></i>Linux 系统支持 SSH 连接';
+        note.textContent = 'Linux 系统支持 SSH 连接';
         passwordField.style.display = 'block';
         passwordInput.setAttribute('required', 'required');
     }
 }
-
-function updateEstimate(serverId, cpuMult, memMult, diskMult) {
-    const form = document.querySelector(`#selectModal${serverId} form`);
-    const cpu = parseFloat(form.querySelector('input[name="cpu_cores"]').value) || 0;
-    const mem = parseFloat(form.querySelector('input[name="memory_gb"]').value) || 0;
-    const disk = parseFloat(form.querySelector('input[name="disk_gb"]').value) || 0;
-    
-    const estimate = (cpu * cpuMult) + (mem * memMult) + (disk * diskMult);
-    document.getElementById(`estimate${serverId}`).textContent = estimate.toFixed(2) + ' 核时/小时';
-}
 </script>
-{% endblock content %}
+{% endblock scripts %}
