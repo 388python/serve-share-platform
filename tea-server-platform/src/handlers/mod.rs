@@ -426,6 +426,37 @@ pub async fn user_dashboard(
     .await
     .unwrap_or_default();
 
+    // Calculate frozen owner earnings for display
+    let freeze_days: i64 = db::get_config("owner_income_freeze_days")
+        .await
+        .unwrap_or_else(|| "14".to_string())
+        .parse()
+        .unwrap_or(14);
+    let total_owner_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (total_regular_income, total_bonus_income) = total_owner_income.unwrap_or((0.0, 0.0));
+
+    let freeze_threshold = chrono::Utc::now() - chrono::Duration::days(freeze_days);
+    let withdrawable_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ? AND created_at <= ?"
+    )
+    .bind(user_id)
+    .bind(freeze_threshold)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (withdrawable_regular, withdrawable_bonus) = withdrawable_income.unwrap_or((0.0, 0.0));
+
+    let frozen_regular = (total_regular_income - withdrawable_regular).max(0.0);
+    let frozen_bonus = (total_bonus_income - withdrawable_bonus).max(0.0);
+    let available_regular = (user.0 - frozen_regular).max(0.0);
+    let available_bonus = (user.1 - frozen_bonus).max(0.0);
+
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("user_hours", &format!("{:.2}", user.0));
@@ -433,6 +464,12 @@ pub async fn user_dashboard(
     ctx.insert("api_key", &api_key.unwrap_or_default());
     ctx.insert("machines", &machines);
     ctx.insert("packages", &packages);
+    ctx.insert("frozen_regular", &frozen_regular);
+    ctx.insert("frozen_bonus", &frozen_bonus);
+    ctx.insert("available_regular", &available_regular);
+    ctx.insert("available_bonus", &available_bonus);
+    ctx.insert("freeze_days", &freeze_days);
+    ctx.insert("is_owner", &(total_regular_income > 0.0 || total_bonus_income > 0.0));
 
     let rendered = state
         .templates
@@ -989,6 +1026,19 @@ pub async fn create_machine(
             return Redirect::to("/machines?error=db").into_response();
         }
     };
+
+    // Log owner income for freeze period tracking
+    if bonus_deduct > 0.0 || regular_deduct > 0.0 {
+        let _ = sqlx::query(
+            "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'machine_create', ?)"
+        )
+        .bind(server_owner_id)
+        .bind(regular_deduct)
+        .bind(bonus_deduct)
+        .bind(machine_id)
+        .execute(&mut *tx)
+        .await;
+    }
 
     if let Err(e) = tx.commit().await {
         tracing::error!("Failed to commit transaction: {}", e);
@@ -1925,7 +1975,48 @@ pub async fn balance_to_code(
         return Redirect::to("/dashboard?error=daily_limit").into_response();
     }
 
-    // 5. 事务：原子扣减余额 + 生成兑换码
+    // 5. 检查14天冻结期（机主收入到账后14天才能提现）
+    let freeze_days: i64 = db::get_config("owner_income_freeze_days")
+        .await
+        .unwrap_or_else(|| "14".to_string())
+        .parse()
+        .unwrap_or(14);
+
+    let total_owner_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (total_regular_income, _total_bonus_income) = total_owner_income.unwrap_or((0.0, 0.0));
+
+    let freeze_threshold = chrono::Utc::now() - chrono::Duration::days(freeze_days);
+    let withdrawable_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ? AND created_at <= ?"
+    )
+    .bind(user_id)
+    .bind(freeze_threshold)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (withdrawable_regular, _withdrawable_bonus) = withdrawable_income.unwrap_or((0.0, 0.0));
+
+    let frozen_regular = (total_regular_income - withdrawable_regular).max(0.0);
+
+    let user_balance: Option<(f64,)> = sqlx::query_as("SELECT core_hours FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+    let user_core_hours = user_balance.map(|b| b.0).unwrap_or(0.0);
+    let available = (user_core_hours - frozen_regular).max(0.0);
+
+    if total_deduct > available {
+        return Redirect::to(&format!("/dashboard?error=frozen_balance&frozen={:.2}&available={:.2}&days={}", frozen_regular, available, freeze_days)).into_response();
+    }
+
+    // 6. 事务：原子扣减余额 + 生成兑换码
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(_) => return Redirect::to("/dashboard?error=system_error").into_response(),

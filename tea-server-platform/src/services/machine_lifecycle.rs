@@ -547,6 +547,17 @@ pub async fn charge_nat_port_add(machine_id: i64, port_count: i32) -> anyhow::Re
         .await?;
     }
 
+    // Log owner income for freeze period tracking
+    sqlx::query(
+        "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'nat_port', ?)"
+    )
+    .bind(server_owner_id)
+    .bind(regular_to_charge)
+    .bind(bonus_to_charge)
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
     let new_per_hour = old_per_hour + total_additional_per_hour;
     let new_regular_used = regular_used + regular_to_charge;
     let new_bonus_used = bonus_used + bonus_to_charge;
@@ -675,6 +686,19 @@ pub async fn refund_nat_port_remove(machine_id: i64, port_count: i32) -> anyhow:
         .bind(actual_regular_refund)
         .bind(server_owner_id)
         .bind(actual_regular_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+
+    // Log negative owner income for refund tracking
+    if actual_bonus_refund > 0.0 || actual_regular_refund > 0.0 {
+        let _ = sqlx::query(
+            "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'nat_port_refund', ?)"
+        )
+        .bind(server_owner_id)
+        .bind(-actual_regular_refund)
+        .bind(-actual_bonus_refund)
+        .bind(machine_id)
         .execute(&mut *tx)
         .await;
     }

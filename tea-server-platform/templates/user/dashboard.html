@@ -24,6 +24,14 @@
             <div class="stat-content">
                 <div class="stat-value">{{ user_balance | default(value="0") }}</div>
                 <div class="stat-label">核时余额</div>
+                {% if is_owner %}
+                <div class="mt-1 small">
+                    <span class="text-white-50">可用: {{ "%.2f"|format(available_regular) }}</span>
+                    {% if frozen_regular > 0 %}
+                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ "%.2f"|format(frozen_regular) }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -35,6 +43,14 @@
             <div class="stat-content">
                 <div class="stat-value">{{ bonus_hours | default(value="0") }}</div>
                 <div class="stat-label">赠额核时</div>
+                {% if is_owner %}
+                <div class="mt-1 small">
+                    <span class="text-white-50">可用: {{ "%.2f"|format(available_bonus) }}</span>
+                    {% if frozen_bonus > 0 %}
+                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ "%.2f"|format(frozen_bonus) }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -58,6 +74,16 @@
                 <div class="stat-value">{{ active_machines | default(value="0") }}</div>
                 <div class="stat-label">运行中机器</div>
             </div>
+        </div>
+    </div>
+</div>
+
+<div id="error-alert" class="row mb-4" style="display:none;">
+    <div class="col-12">
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <span id="error-message"></span>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
     </div>
 </div>
@@ -323,3 +349,48 @@
     </div>
 </div>
 {% endblock content %}
+
+{% block scripts %}
+<script>
+// Display error messages from URL parameters
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
+    if (!error) return;
+
+    let message = '';
+    switch(error) {
+        case 'frozen_balance':
+            const frozen = params.get('frozen') || '0';
+            const available = params.get('available') || '0';
+            const days = params.get('days') || '14';
+            message = `提现失败：普通核时中有 ${parseFloat(frozen).toFixed(2)} 核时处于${days}天冻结期内（机主收入到账后${days}天才能提现）。当前可用额度: ${parseFloat(available).toFixed(2)} 核时。`;
+            break;
+        case 'insufficient_funds':
+            message = '余额不足，请充值后再试。';
+            break;
+        case 'daily_limit':
+            message = '今日兑换/提现次数已达上限，请明天再试。';
+            break;
+        case 'invalid_amount':
+            message = '无效的金额，请输入正确的数值。';
+            break;
+        case 'min_amount':
+            message = '兑换金额不能小于1核时。';
+            break;
+        case 'feature_disabled':
+            message = '该功能当前未启用。';
+            break;
+        default:
+            message = '操作失败：' + error;
+    }
+
+    const alertDiv = document.getElementById('error-alert');
+    const msgSpan = document.getElementById('error-message');
+    if (alertDiv && msgSpan) {
+        msgSpan.textContent = message;
+        alertDiv.style.display = '';
+    }
+})();
+</script>
+{% endblock scripts %}

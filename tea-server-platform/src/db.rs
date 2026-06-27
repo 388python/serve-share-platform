@@ -374,6 +374,23 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Create owner_income_logs table for tracking merchant earnings freeze period
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS owner_income_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            regular_amount REAL NOT NULL DEFAULT 0,
+            bonus_amount REAL NOT NULL DEFAULT 0,
+            source_type TEXT NOT NULL DEFAULT '',
+            source_id INTEGER,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Create withdraw_orders table
     sqlx::query(
         r#"
@@ -700,6 +717,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("balance_to_code_fee", "0.05"),
         ("balance_to_code_daily_limit", "5"),
         ("balance_to_code_enabled", "true"),
+        ("owner_income_freeze_days", "14"),
         ("premium_enabled", "false"),
         ("premium_ldc_cost", "100"),
         ("opengfw_enabled", "false"),

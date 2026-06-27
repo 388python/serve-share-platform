@@ -723,6 +723,19 @@ async fn api_machines_create(
 
     let machine_id = result.last_insert_rowid();
 
+    // Log owner income for freeze period tracking
+    if bonus_used > 0.0 || regular_used > 0.0 {
+        let _ = sqlx::query(
+            "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'machine_create', ?)"
+        )
+        .bind(server.owner_id)
+        .bind(regular_used)
+        .bind(bonus_used)
+        .bind(machine_id)
+        .execute(&mut *tx)
+        .await;
+    }
+
     if let Err(err) = tx.commit().await {
         tracing::error!("failed to commit machine create transaction: {}", err);
         return (
@@ -1737,15 +1750,45 @@ async fn api_balance_to_code(
     let total_deduct = req.amount + fee;
     let is_bonus = req.use_bonus.unwrap_or(false);
 
+    // Check 14-day freeze period for owner earnings
+    let freeze_days: i64 = db::get_config("owner_income_freeze_days").await
+        .unwrap_or_else(|| "14".to_string()).parse().unwrap_or(14);
+
+    let total_owner_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ?"
+    ).bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+    let (total_regular_income, total_bonus_income) = total_owner_income.unwrap_or((0.0, 0.0));
+
+    let freeze_threshold = chrono::Utc::now() - chrono::Duration::days(freeze_days);
+    let withdrawable_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ? AND created_at <= ?"
+    ).bind(user_id).bind(freeze_threshold).fetch_optional(pool).await.unwrap_or(None);
+    let (withdrawable_regular, withdrawable_bonus) = withdrawable_income.unwrap_or((0.0, 0.0));
+
+    let frozen_regular = (total_regular_income - withdrawable_regular).max(0.0);
+    let frozen_bonus = (total_bonus_income - withdrawable_bonus).max(0.0);
+
     if is_bonus {
-        if user.bonus_core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_bonus"}))).into_response();
+        let available = (user.bonus_core_hours - frozen_bonus).max(0.0);
+        if total_deduct > available {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": "frozen_balance",
+                "message": format!("赠额核时中有 {:.4} 处于{}天冻结期内，暂不可提现。可用额度: {:.4}", frozen_bonus, freeze_days, available),
+                "frozen": frozen_bonus,
+                "available": available
+            }))).into_response();
         }
         let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
             .bind(total_deduct).bind(user_id).execute(pool).await;
     } else {
-        if user.core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_balance"}))).into_response();
+        let available = (user.core_hours - frozen_regular).max(0.0);
+        if total_deduct > available {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": "frozen_balance",
+                "message": format!("普通核时中有 {:.4} 处于{}天冻结期内，暂不可提现。可用额度: {:.4}", frozen_regular, freeze_days, available),
+                "frozen": frozen_regular,
+                "available": available
+            }))).into_response();
         }
         let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
             .bind(total_deduct).bind(user_id).execute(pool).await;
