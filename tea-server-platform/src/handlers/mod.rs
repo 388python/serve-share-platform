@@ -305,6 +305,85 @@ pub async fn logout(cookies: Cookies) -> impl IntoResponse {
 
 // ---- User Page Handlers ----
 
+pub async fn redeem_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (_user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let rendered = state
+        .templates
+        .render("user/redeem.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+pub async fn redeem_submit(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (user_id, _username, _is_admin) = match require_auth(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let code = form.get("code").cloned().unwrap_or_default();
+    if code.is_empty() {
+        return Redirect::to("/redeem?error=empty_code").into_response();
+    }
+
+    let pool = db::get_db();
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return Redirect::to("/redeem?error=system_error").into_response(),
+    };
+
+    // 查询兑换码（加锁）
+    let code_info: Option<(i64, String, f64)> = sqlx::query_as(
+        "SELECT id, code_type, COALESCE(core_hours, 0) FROM redeem_codes WHERE code = ? AND is_used = 0",
+    )
+    .bind(&code)
+    .fetch_optional(&mut *tx)
+    .await
+    .unwrap_or(None);
+
+    let (code_id, code_type, core_hours_val) = match code_info {
+        Some(c) => c,
+        None => {
+            let _ = tx.rollback().await;
+            return Redirect::to("/redeem?error=invalid_code").into_response();
+        }
+    };
+
+    // 标记为已使用
+    let _ = sqlx::query(
+        "UPDATE redeem_codes SET is_used = 1, used_by = ?, used_at = CURRENT_TIMESTAMP WHERE id = ?",
+    )
+    .bind(user_id)
+    .bind(code_id)
+    .execute(&mut *tx)
+    .await;
+
+    // 根据类型发放奖励
+    if code_type == "core_hours" {
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(core_hours_val)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await;
+    }
+
+    if tx.commit().await.is_err() {
+        return Redirect::to("/redeem?error=system_error").into_response();
+    }
+
+    Redirect::to("/redeem?success=1").into_response()
+}
+
 pub async fn user_dashboard(
     State(state): State<AppState>,
     cookies: Cookies,
@@ -676,16 +755,23 @@ pub async fn create_machine(
     let hours = (duration_days * 24) as f64;
     let cost = hours * (form.cpu_cores as f64 * cpu_mul + form.memory_gb * mem_mul + form.disk_gb * disk_mul) * 0.01;
 
-    // 查询用户余额
-    let current_hours: f64 = sqlx::query_scalar("SELECT core_hours FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0.0);
+    // 查询用户余额（regular + bonus）
+    let user_balance: (f64, f64) = sqlx::query_as(
+        "SELECT core_hours, bonus_core_hours FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0.0, 0.0));
 
-    if current_hours < cost {
+    let total_balance = user_balance.0 + user_balance.1;
+    if total_balance < cost {
         return Redirect::to("/machines?error=insufficient_funds").into_response();
     }
+
+    // 计算bonus和regular各扣多少（优先扣bonus）
+    let bonus_deduct = user_balance.1.min(cost);
+    let regular_deduct = cost - bonus_deduct;
 
     // 在事务中检查服务器剩余资源并创建机器
     let mut tx = match pool.begin().await {
@@ -723,38 +809,56 @@ pub async fn create_machine(
         return Redirect::to("/machines?error=insufficient_disk").into_response();
     }
 
-    // 扣费
-    let debit = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?")
-        .bind(cost)
+    // 扣费（优先扣bonus，再扣regular）
+    let mut debit_ok = true;
+
+    if bonus_deduct > 0.0 {
+        let res = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+        )
+        .bind(bonus_deduct)
         .bind(user_id)
-        .bind(cost)
+        .bind(bonus_deduct)
         .execute(&mut *tx)
         .await;
-
-    match debit {
-        Ok(res) if res.rows_affected() > 0 => {}
-        Ok(_) => {
-            let _ = tx.rollback().await;
-            return Redirect::to("/machines?error=insufficient_funds").into_response();
-        }
-        Err(e) => {
-            tracing::error!("Failed to debit: {}", e);
-            let _ = tx.rollback().await;
-            return Redirect::to("/machines?error=db").into_response();
+        if res.is_err() || res.unwrap().rows_affected() == 0 {
+            debit_ok = false;
         }
     }
 
-    // 给机主加钱
-    let credit = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-        .bind(cost)
-        .bind(server_owner_id)
+    if debit_ok && regular_deduct > 0.0 {
+        let res = sqlx::query(
+            "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+        )
+        .bind(regular_deduct)
+        .bind(user_id)
+        .bind(regular_deduct)
         .execute(&mut *tx)
         .await;
+        if res.is_err() || res.unwrap().rows_affected() == 0 {
+            debit_ok = false;
+        }
+    }
 
-    if credit.is_err() {
-        tracing::error!("Failed to credit server owner: {}", credit.unwrap_err());
+    if !debit_ok {
         let _ = tx.rollback().await;
-        return Redirect::to("/machines?error=db").into_response();
+        return Redirect::to("/machines?error=insufficient_funds").into_response();
+    }
+
+    // 给机主加钱（bonus部分加bonus，regular部分加regular）
+    if bonus_deduct > 0.0 {
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?")
+            .bind(bonus_deduct)
+            .bind(server_owner_id)
+            .execute(&mut *tx)
+            .await;
+    }
+    if regular_deduct > 0.0 {
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+            .bind(regular_deduct)
+            .bind(server_owner_id)
+            .execute(&mut *tx)
+            .await;
     }
 
     let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
@@ -762,7 +866,7 @@ pub async fn create_machine(
     let root_password_val = form.root_password.as_deref().unwrap_or("");
 
     let insert = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, root_password, image, app_image, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, root_password, image, app_image, regular_core_hours_used, bonus_core_hours_used, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -775,6 +879,8 @@ pub async fn create_machine(
     .bind(root_password_val)
     .bind(&image)
     .bind(&app_image)
+    .bind(regular_deduct)
+    .bind(bonus_deduct)
     .execute(&mut *tx)
     .await;
 
@@ -809,8 +915,8 @@ pub async fn create_machine(
             memory_gb: form.memory_gb,
             disk_gb: form.disk_gb,
             agent_key: agent_key.clone(),
-            regular_used: cost,
-            bonus_used: 0.0,
+            regular_used: regular_deduct,
+            bonus_used: bonus_deduct,
             used_hours: hours,
             image,
             app_image,
@@ -896,10 +1002,8 @@ pub async fn delete_machine(
         return Redirect::to("/machines").into_response();
     }
 
-    let _ = sqlx::query("UPDATE machines SET status = 'deleted' WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await;
+    // 删除机器并按剩余时间退款
+    let _ = services::machine_lifecycle::refund_machine_remaining(id).await;
 
     Redirect::to("/machines").into_response()
 }
@@ -1733,6 +1837,8 @@ pub async fn balance_to_code(
 
     // 生成兑换码
     let code = format!("LDC{}", Uuid::new_v4().simple().to_string().to_uppercase());
+
+    // 写入 balance_to_code_logs 记录
     let insert_result = sqlx::query(
         "INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code, status) VALUES (?, ?, ?, 0, ?, 'active')",
     )
@@ -1744,6 +1850,20 @@ pub async fn balance_to_code(
     .await;
 
     if insert_result.is_err() {
+        let _ = tx.rollback().await;
+        return Redirect::to("/dashboard?error=system_error").into_response();
+    }
+
+    // 同时写入 redeem_codes 表，使其可以被核销
+    let redeem_result = sqlx::query(
+        "INSERT INTO redeem_codes (code, code_type, core_hours) VALUES (?, 'core_hours', ?)",
+    )
+    .bind(&code)
+    .bind(amount)
+    .execute(&mut *tx)
+    .await;
+
+    if redeem_result.is_err() {
         let _ = tx.rollback().await;
         return Redirect::to("/dashboard?error=system_error").into_response();
     }

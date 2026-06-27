@@ -686,7 +686,7 @@ async fn api_machines_create(
     let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours, regular_core_hours_used, bonus_core_hours_used) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -703,6 +703,8 @@ async fn api_machines_create(
     .bind(&app_image)
     .bind(&app_secrets)
     .bind(free_nat_hours)
+    .bind(regular_used)
+    .bind(bonus_used)
     .execute(&mut *tx)
     .await;
 

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::db;
@@ -299,4 +300,116 @@ async fn fail_machine_and_refund(job: &MachineProvisioningJob) -> anyhow::Result
 
     tx.commit().await?;
     Ok(())
+}
+
+/// 机器删除/到期时按剩余时间比例退款
+pub async fn refund_machine_remaining(machine_id: i64) -> anyhow::Result<(f64, f64)> {
+    let pool = db::get_db();
+    let mut tx = pool.begin().await?;
+
+    // 查询机器信息
+    let machine: Option<(i64, i64, f64, f64, DateTime<Utc>, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT user_id, server_id, regular_core_hours_used, bonus_core_hours_used, created_at, expires_at, status FROM machines WHERE id = ?",
+    )
+    .bind(machine_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (user_id, server_id, regular_used, bonus_used, created_at, expires_at, status) = match machine {
+        Some(m) => m,
+        None => return Ok((0.0, 0.0)),
+    };
+
+    // 只对running/stopped状态的机器退款（pending/failed/deleted/expired不处理）
+    if status != "running" && status != "stopped" {
+        return Ok((0.0, 0.0));
+    }
+
+    // 查询机主ID
+    let server_owner_id: Option<i64> = sqlx::query_scalar(
+        "SELECT owner_id FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let server_owner_id = match server_owner_id {
+        Some(id) => id,
+        None => return Ok((0.0, 0.0)),
+    };
+
+    // 计算剩余时间比例
+    let now = Utc::now();
+    let total_duration = expires_at.signed_duration_since(created_at).num_seconds() as f64;
+    let elapsed = now.signed_duration_since(created_at).num_seconds() as f64;
+
+    if total_duration <= 0.0 || elapsed >= total_duration {
+        // 已经过期或时间异常，不退款
+        return Ok((0.0, 0.0));
+    }
+
+    let remaining_ratio = 1.0 - (elapsed / total_duration);
+    if remaining_ratio <= 0.0 {
+        return Ok((0.0, 0.0));
+    }
+
+    let regular_refund = regular_used * remaining_ratio;
+    let bonus_refund = bonus_used * remaining_ratio;
+
+    // 更新机器状态为deleted
+    let updated = sqlx::query(
+        "UPDATE machines SET status = 'deleted' WHERE id = ? AND status IN ('running', 'stopped')",
+    )
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Ok((0.0, 0.0));
+    }
+
+    // 退给用户（bonus退bonus，regular退regular）
+    if bonus_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?"
+        )
+        .bind(bonus_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if regular_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET core_hours = core_hours + ? WHERE id = ?"
+        )
+        .bind(regular_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // 从机主扣回（bonus扣bonus，regular扣regular）
+    if bonus_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+        )
+        .bind(bonus_refund)
+        .bind(server_owner_id)
+        .bind(bonus_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+    if regular_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+        )
+        .bind(regular_refund)
+        .bind(server_owner_id)
+        .bind(regular_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+
+    tx.commit().await?;
+    Ok((regular_refund, bonus_refund))
 }

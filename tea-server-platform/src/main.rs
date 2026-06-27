@@ -297,6 +297,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/free-plan", post(handlers::free_plan))
         // Balance to code
         .route("/balance-to-code", post(handlers::balance_to_code))
+        // Redeem code
+        .route("/redeem", get(handlers::redeem_page))
+        .route("/redeem", post(handlers::redeem_submit))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
