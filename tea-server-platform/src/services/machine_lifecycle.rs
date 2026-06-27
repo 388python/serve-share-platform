@@ -180,12 +180,20 @@ async fn mark_machine_running(
         .map(|v| v.to_string())
         .unwrap_or_default();
 
+    // 提取端口信息
+    let ssh_port = create_data.get("ssh_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let vnc_port = create_data.get("vnc_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let web_port = create_data.get("novnc_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+
     let updated = sqlx::query(
-        "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ? WHERE id = ? AND status = 'pending'",
+        "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ?, ssh_port = ?, vnc_port = ?, web_port = ? WHERE id = ? AND status = 'pending'",
     )
     .bind(root_password)
     .bind(ip)
     .bind(app_secrets)
+    .bind(ssh_port)
+    .bind(vnc_port)
+    .bind(web_port)
     .bind(machine_id)
     .execute(&mut *tx)
     .await?;

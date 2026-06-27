@@ -741,22 +741,66 @@ pub async fn create_machine(
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
 
     // 检查服务器是否存在且活跃，包括资源总量
-    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String, String, i64)> = sqlx::query_as(
-        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type, agent_key, owner_id FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
+    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String, String, i64, bool, i32, i32, f64, f64)> = sqlx::query_as(
+        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type, agent_key, owner_id, expose_ip, nat_port_start, nat_port_end, nat_multiplier, free_nat_hours FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(form.server_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt, agent_key, server_owner_id) = match server {
+    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt, agent_key, server_owner_id, expose_ip, nat_port_start, nat_port_end, nat_multiplier, free_nat_hours_server) = match server {
         Some(s) => s,
         None => return Redirect::to("/machines?error=server_unavailable").into_response(),
     };
 
-    // 简化计费：小时 * (cpu * cpu_mul + memory * mem_mul + disk * disk_mul) * 0.01
     let hours = (duration_days * 24) as f64;
-    let cost = hours * (form.cpu_cores as f64 * cpu_mul + form.memory_gb * mem_mul + form.disk_gb * disk_mul) * 0.01;
+    let image = form.image.as_deref().unwrap_or("ubuntu:22.04");
+    let is_windows = image.starts_with("windows:");
+    let is_kvm = virt_type == "kvm";
+
+    // 计算 NAT 端口数量
+    let nat_ports = if expose_ip && nat_port_start > 0 {
+        if is_kvm {
+            if is_windows { 3 } else { 2 }
+        } else {
+            1
+        }
+    } else {
+        0
+    };
+
+    // 计算 NAT 费用
+    let global_nat = db::get_config("global_nat_multiplier")
+        .await
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    let nat_cost_per_hour = nat_ports as f64 * nat_multiplier * global_nat;
+
+    // 应用免费 NAT 额度
+    let free_nat_amount = if free_nat_hours_server > 0.0 && nat_cost_per_hour > 0.0 {
+        (free_nat_hours_server.min(hours) * nat_cost_per_hour).min(nat_cost_per_hour * hours)
+    } else {
+        0.0
+    };
+
+    // 计算基础费用
+    let ch_per_hour = services::core_hours::calculate_core_hours_per_hour(
+        form.cpu_cores,
+        form.memory_gb,
+        0.0,
+        form.disk_gb,
+        cpu_mul,
+        mem_mul,
+        1.0,
+        disk_mul,
+        0,
+        0.0,
+    )
+    .await;
+
+    let nat_cost = (nat_cost_per_hour * hours) - free_nat_amount;
+    let cost = ch_per_hour * hours + nat_cost.max(0.0);
 
     // 查询用户余额（regular + bonus）
     let user_balance: (f64, f64) = sqlx::query_as(
@@ -816,6 +860,38 @@ pub async fn create_machine(
     if used_disk + form.disk_gb > total_disk {
         let _ = tx.rollback().await;
         return Redirect::to("/machines?error=insufficient_disk").into_response();
+    }
+
+    // 检查 NAT 端口容量
+    if expose_ip && nat_port_start > 0 && nat_ports > 0 {
+        let used_ports_query = r#"
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN virt_type = 'kvm' AND image LIKE 'windows:%' THEN 3
+                    WHEN virt_type = 'kvm' THEN 2
+                    ELSE 1
+                END
+            ), 0)
+            FROM machines 
+            WHERE server_id = ? AND status IN ('pending', 'running')
+        "#;
+        let used_ports: (i64,) = match sqlx::query_as(used_ports_query)
+            .bind(sid)
+            .fetch_one(&mut *tx)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Failed to query used NAT ports: {}", e);
+                let _ = tx.rollback().await;
+                return Redirect::to("/machines?error=db").into_response();
+            }
+        };
+        let total_available_nat = (nat_port_end - nat_port_start) as i64;
+        if used_ports.0 + nat_ports as i64 > total_available_nat {
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=no_nat_ports").into_response();
+        }
     }
 
     // 扣费（优先扣bonus，再扣regular）
@@ -885,7 +961,7 @@ pub async fn create_machine(
     let root_password_val = form.root_password.as_deref().unwrap_or("");
 
     let insert = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, root_password, image, app_image, regular_core_hours_used, bonus_core_hours_used, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), NULL, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, used_hours, root_password, image, app_image, free_nat_hours, regular_core_hours_used, bonus_core_hours_used, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -893,11 +969,13 @@ pub async fn create_machine(
     .bind(form.memory_gb)
     .bind(form.disk_gb)
     .bind(&virt_type)
-    .bind(0.01)
+    .bind(ch_per_hour)
     .bind(duration_days)
+    .bind(hours)
     .bind(root_password_val)
     .bind(&image)
     .bind(&app_image)
+    .bind(free_nat_hours_server)
     .bind(regular_deduct)
     .bind(bonus_deduct)
     .execute(&mut *tx)
