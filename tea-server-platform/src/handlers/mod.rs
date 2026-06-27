@@ -377,7 +377,10 @@ pub async fn redeem_submit(
             .await;
     }
 
-    if tx.commit().await.is_err() {
+    let commit_result = tx.commit().await;
+    if commit_result.is_err() {
+        // 提交失败时不需要回滚，因为事务已经回滚
+        tracing::error!("Failed to commit redeem transaction: {:?}", commit_result.err());
         return Redirect::to("/redeem?error=system_error").into_response();
     }
 
@@ -783,17 +786,23 @@ pub async fn create_machine(
     };
 
     // 原子查询当前已使用资源
-    let used: (Option<i64>, Option<f64>, Option<f64>) = sqlx::query_as(
+    let used: (i64, f64, f64) = match sqlx::query_as(
         "SELECT COALESCE(SUM(cpu_cores), 0), COALESCE(SUM(memory_gb), 0.0), COALESCE(SUM(disk_gb), 0.0) FROM machines WHERE server_id = ? AND status IN ('pending', 'running')"
     )
     .bind(sid)
     .fetch_one(&mut *tx)
-    .await
-    .unwrap_or((Some(0), Some(0.0), Some(0.0)));
+    .await {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!("Failed to query used resources: {}", e);
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
+        }
+    };
 
-    let used_cpu = used.0.unwrap_or(0) as i32;
-    let used_mem = used.1.unwrap_or(0.0);
-    let used_disk = used.2.unwrap_or(0.0);
+    let used_cpu = used.0 as i32;
+    let used_mem = used.1;
+    let used_disk = used.2;
 
     // 检查是否有足够的剩余资源
     if used_cpu + form.cpu_cores > total_cpu {
@@ -847,18 +856,28 @@ pub async fn create_machine(
 
     // 给机主加钱（bonus部分加bonus，regular部分加regular）
     if bonus_deduct > 0.0 {
-        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?")
+        let res = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?")
             .bind(bonus_deduct)
             .bind(server_owner_id)
             .execute(&mut *tx)
             .await;
+        if res.is_err() {
+            tracing::error!("Failed to add bonus to server owner: {:?}", res.err());
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
+        }
     }
     if regular_deduct > 0.0 {
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+        let res = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
             .bind(regular_deduct)
             .bind(server_owner_id)
             .execute(&mut *tx)
             .await;
+        if res.is_err() {
+            tracing::error!("Failed to add regular to server owner: {:?}", res.err());
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
+        }
     }
 
     let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
@@ -1003,7 +1022,21 @@ pub async fn delete_machine(
     }
 
     // 删除机器并按剩余时间退款
-    let _ = services::machine_lifecycle::refund_machine_remaining(id).await;
+    match services::machine_lifecycle::refund_machine_remaining(id).await {
+        Ok((regular_refund, bonus_refund)) => {
+            if regular_refund > 0.0 || bonus_refund > 0.0 {
+                tracing::info!(
+                    machine_id = id,
+                    regular_refund = regular_refund,
+                    bonus_refund = bonus_refund,
+                    "machine deleted, refund processed"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::error!(machine_id = id, error = %e, "failed to process refund on machine deletion");
+        }
+    }
 
     Redirect::to("/machines").into_response()
 }

@@ -317,11 +317,15 @@ pub async fn refund_machine_remaining(machine_id: i64) -> anyhow::Result<(f64, f
 
     let (user_id, server_id, regular_used, bonus_used, created_at, expires_at, status) = match machine {
         Some(m) => m,
-        None => return Ok((0.0, 0.0)),
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
     };
 
     // 只对running/stopped状态的机器退款（pending/failed/deleted/expired不处理）
     if status != "running" && status != "stopped" {
+        let _ = tx.rollback().await;
         return Ok((0.0, 0.0));
     }
 
@@ -335,7 +339,10 @@ pub async fn refund_machine_remaining(machine_id: i64) -> anyhow::Result<(f64, f
 
     let server_owner_id = match server_owner_id {
         Some(id) => id,
-        None => return Ok((0.0, 0.0)),
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
     };
 
     // 计算剩余时间比例
