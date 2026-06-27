@@ -2394,7 +2394,6 @@ async fn api_machine_port_forward_add(
     match resp {
         Ok(r) if r.status().is_success() => {
             let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
-            // Save to database
             let hp = data.get("host_port").and_then(|v| v.as_i64()).unwrap_or(host_port as i64) as i32;
             let vip = data.get("vm_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
             
@@ -2413,7 +2412,25 @@ async fn api_machine_port_forward_add(
             .await
             .ok();
 
-            (StatusCode::OK, Json(data)).into_response()
+            match crate::services::machine_lifecycle::charge_nat_port_add(id, 1).await {
+                Ok((regular, bonus)) => {
+                    let mut result = data.clone();
+                    result["regular_charged"] = json!(regular);
+                    result["bonus_charged"] = json!(bonus);
+                    result["total_charged"] = json!(regular + bonus);
+                    (StatusCode::OK, Json(result)).into_response()
+                }
+                Err(e) => {
+                    tracing::warn!(machine_id = id, error = %e, "failed to charge for NAT port, rolling back db record");
+                    let _ = sqlx::query("DELETE FROM port_forwards WHERE machine_id = ? AND host_port = ? AND user_id = ?")
+                        .bind(id)
+                        .bind(hp)
+                        .bind(user_id)
+                        .execute(pool)
+                        .await;
+                    (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "insufficient balance", "detail": e.to_string()}))).into_response()
+                }
+            }
         },
         Ok(r) => {
             let msg = r.text().await.unwrap_or_default();
@@ -2474,7 +2491,6 @@ async fn api_machine_port_forward_delete(
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            // Remove from database
             sqlx::query("DELETE FROM port_forwards WHERE machine_id = ? AND host_port = ? AND user_id = ?")
                 .bind(id)
                 .bind(host_port)
@@ -2483,8 +2499,23 @@ async fn api_machine_port_forward_delete(
                 .await
                 .ok();
             
+            let refund_result = crate::services::machine_lifecycle::refund_nat_port_remove(id, 1).await;
             let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
-            (StatusCode::OK, Json(data)).into_response()
+            let mut result = data.clone();
+            
+            match refund_result {
+                Ok((regular, bonus)) => {
+                    result["regular_refunded"] = json!(regular);
+                    result["bonus_refunded"] = json!(bonus);
+                    result["total_refunded"] = json!(regular + bonus);
+                }
+                Err(e) => {
+                    tracing::warn!(machine_id = id, error = %e, "failed to refund for NAT port removal");
+                    result["refund_warning"] = json!(e.to_string());
+                }
+            }
+            
+            (StatusCode::OK, Json(result)).into_response()
         },
         Ok(r) => {
             let msg = r.text().await.unwrap_or_default();
