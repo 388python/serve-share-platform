@@ -725,7 +725,7 @@ async fn api_machines_create(
 
     // Log owner income for freeze period tracking
     if bonus_used > 0.0 || regular_used > 0.0 {
-        let _ = sqlx::query(
+        let log_result = sqlx::query(
             "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'machine_create', ?)"
         )
         .bind(server.owner_id)
@@ -734,6 +734,15 @@ async fn api_machines_create(
         .bind(machine_id)
         .execute(&mut *tx)
         .await;
+        if let Err(e) = log_result {
+            tracing::error!("failed to log owner income: {}", e);
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to log owner income" })),
+            )
+                .into_response();
+        }
     }
 
     if let Err(err) = tx.commit().await {

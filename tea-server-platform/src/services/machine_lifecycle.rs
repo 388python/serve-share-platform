@@ -692,7 +692,7 @@ pub async fn refund_nat_port_remove(machine_id: i64, port_count: i32) -> anyhow:
 
     // Log negative owner income for refund tracking
     if actual_bonus_refund > 0.0 || actual_regular_refund > 0.0 {
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'nat_port_refund', ?)"
         )
         .bind(server_owner_id)
@@ -700,7 +700,7 @@ pub async fn refund_nat_port_remove(machine_id: i64, port_count: i32) -> anyhow:
         .bind(-actual_bonus_refund)
         .bind(machine_id)
         .execute(&mut *tx)
-        .await;
+        .await?;
     }
 
     let new_per_hour = (old_per_hour - remove_per_hour).max(0.0);

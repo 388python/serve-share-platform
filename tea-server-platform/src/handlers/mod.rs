@@ -1029,7 +1029,7 @@ pub async fn create_machine(
 
     // Log owner income for freeze period tracking
     if bonus_deduct > 0.0 || regular_deduct > 0.0 {
-        let _ = sqlx::query(
+        let log_result = sqlx::query(
             "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'machine_create', ?)"
         )
         .bind(server_owner_id)
@@ -1038,6 +1038,11 @@ pub async fn create_machine(
         .bind(machine_id)
         .execute(&mut *tx)
         .await;
+        if let Err(e) = log_result {
+            tracing::error!("Failed to log owner income: {}", e);
+            let _ = tx.rollback().await;
+            return Redirect::to("/machines?error=db").into_response();
+        }
     }
 
     if let Err(e) = tx.commit().await {
