@@ -5,6 +5,7 @@ use crate::db;
 pub struct MachineProvisioningJob {
     pub machine_id: i64,
     pub user_id: i64,
+    pub server_owner_id: i64,
     pub server_ip: String,
     pub machine_name: String,
     pub virt_type: String,
@@ -265,12 +266,35 @@ async fn fail_machine_and_refund(job: &MachineProvisioningJob) -> anyhow::Result
             .await?;
 
     if updated.rows_affected() > 0 {
+        // 退还给用户
         sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ?, core_hours = core_hours + ? WHERE id = ?")
             .bind(job.bonus_used)
             .bind(job.regular_used)
             .bind(job.user_id)
             .execute(&mut *tx)
             .await?;
+
+        // 从机主扣回（bonus扣bonus，regular扣regular）
+        if job.bonus_used > 0.0 {
+            sqlx::query(
+                "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+            )
+            .bind(job.bonus_used)
+            .bind(job.server_owner_id)
+            .bind(job.bonus_used)
+            .execute(&mut *tx)
+            .await?;
+        }
+        if job.regular_used > 0.0 {
+            sqlx::query(
+                "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+            )
+            .bind(job.regular_used)
+            .bind(job.server_owner_id)
+            .bind(job.regular_used)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     tx.commit().await?;

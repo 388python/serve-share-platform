@@ -665,15 +665,15 @@ pub async fn create_machine(
     let virt_type = form.virt_type.unwrap_or_else(|| "lxd".to_string());
 
     // 检查服务器是否存在且活跃，包括资源总量
-    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String, String)> = sqlx::query_as(
-        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type, agent_key FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
+    let server: Option<(i64, String, f64, f64, f64, i32, f64, f64, String, String, i64)> = sqlx::query_as(
+        "SELECT id, ip, cpu_multiplier, memory_multiplier, disk_multiplier, cpu_cores, memory_gb, disk_gb, virt_type, agent_key, owner_id FROM servers WHERE id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP",
     )
     .bind(form.server_id)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt, agent_key) = match server {
+    let (sid, ip, cpu_mul, mem_mul, disk_mul, total_cpu, total_mem, total_disk, _server_virt, agent_key, server_owner_id) = match server {
         Some(s) => s,
         None => return Redirect::to("/machines?error=server_unavailable").into_response(),
     };
@@ -750,6 +750,19 @@ pub async fn create_machine(
         }
     }
 
+    // 给机主加钱
+    let credit = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+        .bind(cost)
+        .bind(server_owner_id)
+        .execute(&mut *tx)
+        .await;
+
+    if credit.is_err() {
+        tracing::error!("Failed to credit server owner: {}", credit.unwrap_err());
+        let _ = tx.rollback().await;
+        return Redirect::to("/machines?error=db").into_response();
+    }
+
     let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
     let app_image = form.app_image.unwrap_or_default();
     let root_password_val = form.root_password.as_deref().unwrap_or("");
@@ -794,6 +807,7 @@ pub async fn create_machine(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
+            server_owner_id,
             server_ip: ip,
             machine_name,
             virt_type,
@@ -1099,7 +1113,7 @@ pub async fn recharge_callback(
     .await
     .unwrap_or(None);
 
-    let (order_id, user_id, _ldc_amount, status) = match order {
+    let (order_id, user_id, package_core_hours, status) = match order {
         Some(o) => o,
         None => {
             tracing::warn!(%out_trade_no, "recharge callback: order not found");
@@ -1113,7 +1127,7 @@ pub async fn recharge_callback(
         return "success";
     }
 
-    // 5. 计算到账金额（考虑充值倍率）
+    // 5. 计算到账核时数（考虑充值倍率和手续费）
     let multiplier: f64 = db::get_config("recharge_multiplier")
         .await
         .and_then(|v| v.parse().ok())
@@ -1122,9 +1136,9 @@ pub async fn recharge_callback(
         .await
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
-    let actual_add = (total_fee * multiplier) * (1.0 - fee);
+    let actual_core_hours = package_core_hours * multiplier * (1.0 - fee);
 
-    // 6. 原子更新订单状态 + 增加用户余额（使用事务保证一致性）
+    // 6. 原子更新订单状态 + 增加用户核时余额（使用事务保证一致性）
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -1148,16 +1162,16 @@ pub async fn recharge_callback(
         return "success";
     }
 
-    // 增加用户余额
-    let add_result = sqlx::query("UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?")
-        .bind(actual_add)
+    // 增加用户核时余额（充值得到的是普通核时，不是赠额）
+    let add_result = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+        .bind(actual_core_hours)
         .bind(user_id)
         .execute(&mut *tx)
         .await;
 
     if add_result.is_err() {
         let _ = tx.rollback().await;
-        tracing::error!("recharge callback: failed to add user balance");
+        tracing::error!("recharge callback: failed to add user core_hours");
         return "fail";
     }
 
@@ -1166,7 +1180,7 @@ pub async fn recharge_callback(
         return "fail";
     }
 
-    tracing::info!(%out_trade_no, %user_id, %total_fee, %actual_add, "recharge callback: success");
+    tracing::info!(%out_trade_no, %user_id, %total_fee, %actual_core_hours, "recharge callback: success");
     "success"
 }
 

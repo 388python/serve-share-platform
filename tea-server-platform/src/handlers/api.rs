@@ -746,6 +746,7 @@ async fn api_machines_create(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
+            server_owner_id: server.owner_id,
             server_ip,
             machine_name,
             virt_type,
