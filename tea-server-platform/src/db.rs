@@ -721,6 +721,27 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             .await?;
     }
 
+    // Create port_forwards table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS port_forwards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            server_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            protocol TEXT NOT NULL DEFAULT 'tcp',
+            host_port INTEGER NOT NULL,
+            vm_port INTEGER NOT NULL,
+            vm_ip TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

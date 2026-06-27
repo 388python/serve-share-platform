@@ -88,6 +88,23 @@ pub struct Machine {
     pub free_nat_hours: Option<f64>,   // 该机器的免费 NAT 额度（小时）
 }
 
+// Table: port_forwards
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PortForward {
+    pub id: i64,
+    pub machine_id: i64,
+    pub server_id: i64,
+    pub user_id: i64,
+    pub name: String,
+    pub protocol: String,
+    pub host_port: i32,
+    pub vm_port: i32,
+    pub vm_ip: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+}
+
 // 应用镜像定义
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]

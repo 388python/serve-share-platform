@@ -2255,6 +2255,245 @@ async fn api_machine_app_uninstall(
     }
 }
 
+// GET /api/v1/machines/:id/port-forwards - List port forwards
+async fn api_machine_port_forwards_list(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, _status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    // Get server info
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forwards/{}", ip, machine_name);
+
+    let resp = client
+        .get(&url)
+        .header("X-API-Key", &agent_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let data: Value = r.json().await.unwrap_or(json!({"forwards": []}));
+            (StatusCode::OK, Json(data)).into_response()
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "failed to list", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/port-forwards - Add port forward
+async fn api_machine_port_forward_add(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let vm_port = body.get("vm_port").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let protocol = body.get("protocol").and_then(|v| v.as_str()).unwrap_or("tcp").to_string();
+    let host_port = body.get("host_port").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    if vm_port <= 0 || vm_port > 65535 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid vm_port"}))).into_response();
+    }
+    if protocol != "tcp" && protocol != "udp" {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid protocol"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    if status != "running" {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+    }
+
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forward/add/{}", ip, machine_name);
+
+    let req_body = json!({
+        "vm_port": vm_port,
+        "protocol": protocol,
+        "host_port": if host_port > 0 { host_port } else { 0 },
+    });
+
+    let resp = client
+        .post(&url)
+        .header("X-API-Key", &agent_key)
+        .json(&req_body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
+            // Save to database
+            let hp = data.get("host_port").and_then(|v| v.as_i64()).unwrap_or(host_port as i64) as i32;
+            let vip = data.get("vm_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            
+            sqlx::query(
+                "INSERT INTO port_forwards (machine_id, server_id, user_id, name, protocol, host_port, vm_port, vm_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(id)
+            .bind(server_id)
+            .bind(user_id)
+            .bind(&name)
+            .bind(&protocol)
+            .bind(hp)
+            .bind(vm_port)
+            .bind(&vip)
+            .execute(pool)
+            .await
+            .ok();
+
+            (StatusCode::OK, Json(data)).into_response()
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "add failed", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+// DELETE /api/v1/machines/:id/port-forwards/:host_port - Delete port forward
+async fn api_machine_port_forward_delete(
+    headers: HeaderMap,
+    Path((machine_id, host_port)): Path<(i64, i32)>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, _status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forward/{}/{}", ip, machine_name, host_port);
+
+    let resp = client
+        .delete(&url)
+        .header("X-API-Key", &agent_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            // Remove from database
+            sqlx::query("DELETE FROM port_forwards WHERE machine_id = ? AND host_port = ? AND user_id = ?")
+                .bind(id)
+                .bind(host_port)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .ok();
+            
+            let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
+            (StatusCode::OK, Json(data)).into_response()
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "delete failed", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
 // ==============================
 // Router builder
 // ==============================
@@ -2315,4 +2554,7 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/machines/:id/reinstall", post(api_machine_reinstall))
         .route("/v1/machines/:id/app-install", post(api_machine_app_install))
         .route("/v1/machines/:id/app-uninstall", post(api_machine_app_uninstall))
+        .route("/v1/machines/:id/port-forwards", get(api_machine_port_forwards_list))
+        .route("/v1/machines/:id/port-forwards", post(api_machine_port_forward_add))
+        .route("/v1/machines/:id/port-forwards/:host_port", delete(api_machine_port_forward_delete))
 }

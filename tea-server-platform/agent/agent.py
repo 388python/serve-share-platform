@@ -844,6 +844,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/console/"):
             name = path.split("/")[-1]
             self._handle_get_console(name)
+        elif path.startswith("/port-forwards/"):
+            name = path.split("/")[-1]
+            self._handle_list_port_forwards(name)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -872,6 +875,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/app-uninstall/"):
             name = path.split("/")[-1]
             self._handle_app_uninstall(name, body)
+        elif path.startswith("/port-forward/add/"):
+            name = path.split("/")[-1]
+            self._handle_add_port_forward(name, body)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -881,8 +887,21 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         path = urlparse(self.path).path
-        name = path.strip("/")
 
+        if path.startswith("/port-forward/"):
+            parts = path.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "port-forward":
+                name = parts[1]
+                try:
+                    host_port = int(parts[2])
+                    self._handle_delete_port_forward(name, host_port)
+                    return
+                except (ValueError, IndexError):
+                    pass
+            self._send_json({"error": "invalid request"}, 400)
+            return
+
+        name = path.strip("/")
         if not name:
             self._send_json({"error": "name required"}, 400)
             return
@@ -1077,6 +1096,157 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._send_json({"processes": processes})
         except Exception as e:
             self._send_json({"error": str(e), "processes": []})
+
+    def _get_machine_ip(self, name: str) -> Optional[str]:
+        """Get VM/container IP address"""
+        try:
+            virt = self._get_virt_type_from_name(name)
+            if virt == "lxd":
+                result = subprocess.run(
+                    ["lxc", "list", name, "--format", "csv", "-c", "4"],
+                    capture_output=True, text=True, timeout=10
+                )
+                ip = result.stdout.strip()
+                return ip if ip else None
+            else:
+                # KVM: get IP from DHCP leases or use network
+                result = subprocess.run(
+                    ["virsh", "domifaddr", name],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if "ipv4" in line:
+                        parts = line.split()
+                        for p in parts:
+                            if "/" in p and "." in p:
+                                return p.split("/")[0]
+                return None
+        except Exception:
+            return None
+
+    def _handle_list_port_forwards(self, name: str) -> None:
+        """List all port forwarding rules for a machine"""
+        try:
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"forwards": [], "error": "machine not found or no IP"})
+                return
+
+            # Get all iptables NAT rules for this VM
+            result = subprocess.run(
+                ["iptables", "-t", "nat", "-L", "PREROUTING", "-n", "--line-numbers"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            forwards = []
+            for line in result.stdout.strip().split("\n")[2:]:
+                parts = line.split()
+                if len(parts) >= 7 and "DNAT" in parts:
+                    proto = parts[3].lower() if parts[3] else "tcp"
+                    try:
+                        dport = int(parts[-2]) if parts[-2].isdigit() else 0
+                        to_parts = parts[-1].split(":")
+                        if len(to_parts) >= 2 and to_parts[0] == vm_ip:
+                            vm_port = int(to_parts[-1]) if to_parts[-1].isdigit() else 0
+                            forwards.append({
+                                "host_port": dport,
+                                "vm_port": vm_port,
+                                "protocol": proto,
+                                "vm_ip": to_parts[0],
+                            })
+                    except (ValueError, IndexError):
+                        continue
+
+            self._send_json({"forwards": forwards, "vm_ip": vm_ip})
+        except Exception as e:
+            self._send_json({"error": str(e), "forwards": []})
+
+    def _handle_add_port_forward(self, name: str, body: Dict[str, Any]) -> None:
+        """Add a port forwarding rule"""
+        try:
+            vm_port = int(body.get("vm_port", 0))
+            protocol = body.get("protocol", "tcp").lower()
+            host_port = int(body.get("host_port", 0)) if body.get("host_port") else 0
+
+            if vm_port <= 0 or vm_port > 65535:
+                self._send_json({"error": "invalid vm_port"}, 400)
+                return
+            if protocol not in ("tcp", "udp"):
+                self._send_json({"error": "invalid protocol, must be tcp or udp"}, 400)
+                return
+
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"error": "machine not found or no IP"}, 404)
+                return
+
+            # Allocate host port if not specified
+            if host_port == 0:
+                host_port = allocate_port()
+            else:
+                if host_port < 1 or host_port > 65535:
+                    self._send_json({"error": "invalid host_port"}, 400)
+                    return
+                # Check if port is already in use
+                result = subprocess.run(
+                    ["ss", "-tlnp"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if f":{host_port}" in result.stdout:
+                    self._send_json({"error": f"host port {host_port} already in use"}, 400)
+                    return
+                USED_PORTS.add(host_port)
+
+            setup_port_forwarding(host_port, vm_ip, vm_port, protocol)
+
+            self._send_json({
+                "status": "ok",
+                "host_port": host_port,
+                "vm_port": vm_port,
+                "protocol": protocol,
+                "vm_ip": vm_ip,
+            })
+        except ValueError:
+            self._send_json({"error": "invalid port number"}, 400)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_delete_port_forward(self, name: str, host_port: int) -> None:
+        """Delete a port forwarding rule"""
+        try:
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"error": "machine not found or no IP"}, 404)
+                return
+
+            # Find and remove both rules (PREROUTING and POSTROUTING)
+            for proto in ["tcp", "udp"]:
+                remove_port_forwarding(host_port, vm_ip, 0, proto)
+
+            # Also try with vm_port from existing rules
+            result = subprocess.run(
+                ["iptables", "-t", "nat", "-L", "PREROUTING", "-n", "--line-numbers"],
+                capture_output=True, text=True, timeout=10
+            )
+            for line in result.stdout.strip().split("\n")[2:]:
+                parts = line.split()
+                if len(parts) >= 7 and "DNAT" in parts:
+                    try:
+                        dport = int(parts[-2]) if parts[-2].isdigit() else 0
+                        if dport == host_port:
+                            to_parts = parts[-1].split(":")
+                            if len(to_parts) >= 2 and to_parts[0] == vm_ip:
+                                vm_port = int(to_parts[-1]) if to_parts[-1].isdigit() else 0
+                                proto = parts[3].lower() if parts[3] else "tcp"
+                                remove_port_forwarding(host_port, vm_ip, vm_port, proto)
+                    except (ValueError, IndexError):
+                        continue
+
+            release_port(host_port)
+
+            self._send_json({"status": "ok", "host_port": host_port})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
 
     def _handle_get_traffic(self, machine_id: str) -> None:
         container_name = f"machine-{machine_id}"
