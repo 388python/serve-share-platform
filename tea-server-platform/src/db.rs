@@ -726,11 +726,17 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
 
 pub async fn get_config(key: &str) -> Option<String> {
     let pool = get_db();
-    sqlx::query_scalar::<_, String>("SELECT value FROM site_config WHERE key = ?")
+    match sqlx::query_scalar::<_, String>("SELECT value FROM site_config WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
         .await
-        .unwrap_or(None)
+    {
+        Ok(val) => val,
+        Err(e) => {
+            tracing::error!("get_config failed for key '{}': {}", key, e);
+            None
+        }
+    }
 }
 
 pub async fn set_config(key: &str, value: &str) -> anyhow::Result<()> {
