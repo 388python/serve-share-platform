@@ -84,6 +84,8 @@
                     <tr><td class="text-muted ps-4"><i class="bi bi-box me-2"></i>应用镜像</td><td class="pe-4">{{ machine.app_image | default(value="<span class='text-muted'>无</span>") | safe }}</td></tr>
                     <tr><td class="text-muted ps-4"><i class="bi bi-calendar me-2"></i>创建时间</td><td class="pe-4">{{ machine.created_at }}</td></tr>
                     <tr><td class="text-muted ps-4"><i class="bi bi-clock me-2"></i>过期时间</td><td class="pe-4">{{ machine.expires_at }}</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-graph-up me-2"></i>核时费率</td><td class="pe-4 fw-semibold text-primary">{{ "%.4f"|format(machine.core_hours_per_hour) }} 核时/小时</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-piggy-bank me-2"></i>已用核时</td><td class="pe-4">普通: <span class="fw-semibold">{{ "%.2f"|format(machine.regular_core_hours_used) }}</span><br>赠额: <span class="fw-semibold text-success">{{ "%.2f"|format(machine.bonus_core_hours_used) }}</span></td></tr>
                 </table>
             </div>
         </div>
@@ -398,6 +400,60 @@
             </div>
         </div>
         {% endif %}
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-gradient-info text-white border-0 py-3 d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-diagram-3 me-2"></i>端口映射</h5>
+                {% if machine.status == "running" %}
+                <button class="btn btn-sm btn-light" onclick="showAddPortForward()">
+                    <i class="bi bi-plus-lg me-1"></i>添加映射
+                </button>
+                {% endif %}
+            </div>
+            <div class="card-body p-4">
+                {% if machine.status == "running" %}
+                <div id="add-port-forward-form" style="display:none;" class="mb-4 p-3 bg-light rounded-3">
+                    <h6 class="fw-semibold mb-3"><i class="bi bi-plus-circle text-info me-1"></i>添加端口映射</h6>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label fw-medium">协议</label>
+                            <select class="form-select" id="pf-protocol">
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-medium">内部端口 (VM)</label>
+                            <input type="number" class="form-control" id="pf-vm-port" placeholder="如: 8080" min="1" max="65535">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-medium">外部端口 (主机)</label>
+                            <input type="number" class="form-control" id="pf-host-port" placeholder="留空自动分配" min="0" max="65535">
+                            <small class="text-muted">留空自动分配</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label fw-medium">备注名称</label>
+                            <input type="text" class="form-control" id="pf-name" placeholder="如: Web服务">
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-info" onclick="addPortForward()">
+                            <i class="bi bi-check-lg me-1"></i>确认添加
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="hideAddPortForward()">
+                            取消
+                        </button>
+                    </div>
+                </div>
+                {% endif %}
+                
+                <div id="port-forwards-list">
+                    <div class="text-center py-4 text-muted">
+                        <i class="bi bi-arrow-repeat spinning-icon me-2"></i>加载中...
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-gradient-warning text-white border-0 py-3">
@@ -926,5 +982,145 @@ async function uninstallApp() {
         alert('❌ 卸载失败: ' + err.message);
     }
 }
+
+// ===== 端口映射功能 =====
+
+function showAddPortForward() {
+    document.getElementById('add-port-forward-form').style.display = 'block';
+}
+
+function hideAddPortForward() {
+    document.getElementById('add-port-forward-form').style.display = 'none';
+    document.getElementById('pf-vm-port').value = '';
+    document.getElementById('pf-host-port').value = '';
+    document.getElementById('pf-name').value = '';
+}
+
+async function loadPortForwards() {
+    const container = document.getElementById('port-forwards-list');
+    if ('{{ machine.status }}' !== 'running') {
+        container.innerHTML = '<div class="text-center py-4 text-muted"><i class="bi bi-info-circle me-2"></i>机器未运行，无法管理端口映射</div>';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/port-forwards`, {
+            headers: { 'Authorization': `Bearer ${API_KEY}` }
+        });
+        const data = await resp.json();
+        
+        if (data.forwards && Array.isArray(data.forwards) && data.forwards.length > 0) {
+            let html = '<div class="table-responsive"><table class="table table-hover mb-0"><thead><tr><th>协议</th><th>外部端口</th><th>内部端口</th><th>操作</th></tr></thead><tbody>';
+            data.forwards.forEach(f => {
+                html += `
+                    <tr>
+                        <td><span class="badge bg-secondary">${f.protocol || 'tcp'}</span></td>
+                        <td><code>${f.host_port}</code></td>
+                        <td><code>${f.vm_port}</code></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-danger" onclick="deletePortForward(${f.host_port})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table></div>';
+            html += `<div class="mt-2"><small class="text-muted"><i class="bi bi-info-circle me-1"></i>服务器 IP: ${SERVER_IP}，外部端口即映射到该 IP 的端口</small></div>`;
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = `
+                <div class="text-center py-4 text-muted">
+                    <i class="bi bi-diagram-3 fs-3 d-block mb-2"></i>
+                    暂无端口映射
+                    <div class="small mt-1">点击右上角「添加映射」创建端口转发规则</div>
+                </div>
+            `;
+        }
+    } catch (err) {
+        container.innerHTML = `<div class="alert alert-warning mb-0"><i class="bi bi-exclamation-triangle me-2"></i>加载失败: ${err.message}</div>`;
+    }
+}
+
+async function addPortForward() {
+    const vmPort = parseInt(document.getElementById('pf-vm-port').value);
+    const protocol = document.getElementById('pf-protocol').value;
+    const hostPort = parseInt(document.getElementById('pf-host-port').value) || 0;
+    const name = document.getElementById('pf-name').value;
+
+    if (!vmPort || vmPort < 1 || vmPort > 65535) {
+        alert('请输入有效的内部端口 (1-65535)');
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/port-forwards`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({
+                vm_port: vmPort,
+                protocol: protocol,
+                host_port: hostPort,
+                name: name
+            })
+        });
+        const data = await resp.json();
+        
+        if (resp.ok && (data.status === 'ok' || data.host_port)) {
+            let msg = `✅ 端口映射添加成功！\n外部端口: ${data.host_port || hostPort}`;
+            if (data.total_charged && data.total_charged > 0) {
+                msg += `\n\n扣费明细:`;
+                if (data.bonus_charged > 0) msg += `\n  赠额核时: -${data.bonus_charged.toFixed(4)}`;
+                if (data.regular_charged > 0) msg += `\n  普通核时: -${data.regular_charged.toFixed(4)}`;
+                msg += `\n  合计: -${data.total_charged.toFixed(4)} 核时`;
+            }
+            alert(msg);
+            hideAddPortForward();
+            loadPortForwards();
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ 添加失败: ' + (data.error || data.detail || '未知错误'));
+        }
+    } catch (err) {
+        alert('❌ 添加失败: ' + err.message);
+    }
+}
+
+async function deletePortForward(hostPort) {
+    if (!confirm(`确定要删除端口映射 ${hostPort} 吗？`)) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/machines/${MACHINE_ID}/port-forwards/${hostPort}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${API_KEY}` }
+        });
+        const data = await resp.json();
+        
+        if (resp.ok) {
+            let msg = '✅ 端口映射已删除';
+            if (data.total_refunded && data.total_refunded > 0) {
+                msg += `\n\n退款明细:`;
+                if (data.bonus_refunded > 0) msg += `\n  赠额核时: +${data.bonus_refunded.toFixed(4)}`;
+                if (data.regular_refunded > 0) msg += `\n  普通核时: +${data.regular_refunded.toFixed(4)}`;
+                msg += `\n  合计: +${data.total_refunded.toFixed(4)} 核时`;
+            }
+            alert(msg);
+            loadPortForwards();
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert('❌ 删除失败: ' + (data.error || data.detail || '未知错误'));
+        }
+    } catch (err) {
+        alert('❌ 删除失败: ' + err.message);
+    }
+}
+
+// 页面加载完成后加载端口映射
+document.addEventListener('DOMContentLoaded', () => {
+    loadPortForwards();
+});
 </script>
 {% endblock scripts %}

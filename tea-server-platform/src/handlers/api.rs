@@ -686,7 +686,7 @@ async fn api_machines_create(
     let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
-        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, ssh_port, used_hours, root_password, image, app_image, app_secrets, free_nat_hours, regular_core_hours_used, bonus_core_hours_used) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(form.server_id)
@@ -703,6 +703,8 @@ async fn api_machines_create(
     .bind(&app_image)
     .bind(&app_secrets)
     .bind(free_nat_hours)
+    .bind(regular_used)
+    .bind(bonus_used)
     .execute(&mut *tx)
     .await;
 
@@ -720,6 +722,28 @@ async fn api_machines_create(
     };
 
     let machine_id = result.last_insert_rowid();
+
+    // Log owner income for freeze period tracking
+    if bonus_used > 0.0 || regular_used > 0.0 {
+        let log_result = sqlx::query(
+            "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'machine_create', ?)"
+        )
+        .bind(server.owner_id)
+        .bind(regular_used)
+        .bind(bonus_used)
+        .bind(machine_id)
+        .execute(&mut *tx)
+        .await;
+        if let Err(e) = log_result {
+            tracing::error!("failed to log owner income: {}", e);
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "db_error", "message": "Failed to log owner income" })),
+            )
+                .into_response();
+        }
+    }
 
     if let Err(err) = tx.commit().await {
         tracing::error!("failed to commit machine create transaction: {}", err);
@@ -746,6 +770,7 @@ async fn api_machines_create(
         services::machine_lifecycle::MachineProvisioningJob {
             machine_id,
             user_id,
+            server_owner_id: server.owner_id,
             server_ip,
             machine_name,
             virt_type,
@@ -1062,7 +1087,7 @@ async fn api_packages(_headers: HeaderMap) -> impl IntoResponse {
 pub struct AdminUpdateUser {
     pub is_banned: Option<bool>,
     pub core_hours: Option<f64>,
-    pub ldc_balance: Option<f64>,
+    pub bonus_core_hours: Option<f64>,
     pub is_admin: Option<bool>,
 }
 
@@ -1145,9 +1170,9 @@ async fn api_admin_user_update(
             .execute(pool)
             .await;
     }
-    if let Some(ldc) = form.ldc_balance {
-        let _ = sqlx::query("UPDATE users SET ldc_balance = ? WHERE id = ?")
-            .bind(ldc)
+    if let Some(bonus) = form.bonus_core_hours {
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = ? WHERE id = ?")
+            .bind(bonus)
             .bind(id)
             .execute(pool)
             .await;
@@ -1734,15 +1759,45 @@ async fn api_balance_to_code(
     let total_deduct = req.amount + fee;
     let is_bonus = req.use_bonus.unwrap_or(false);
 
+    // Check 14-day freeze period for owner earnings
+    let freeze_days: i64 = db::get_config("owner_income_freeze_days").await
+        .unwrap_or_else(|| "14".to_string()).parse().unwrap_or(14);
+
+    let total_owner_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ?"
+    ).bind(user_id).fetch_optional(pool).await.unwrap_or(None);
+    let (total_regular_income, total_bonus_income) = total_owner_income.unwrap_or((0.0, 0.0));
+
+    let freeze_threshold = chrono::Utc::now() - chrono::Duration::days(freeze_days);
+    let withdrawable_income: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT COALESCE(SUM(regular_amount), 0), COALESCE(SUM(bonus_amount), 0) FROM owner_income_logs WHERE user_id = ? AND created_at <= ?"
+    ).bind(user_id).bind(freeze_threshold).fetch_optional(pool).await.unwrap_or(None);
+    let (withdrawable_regular, withdrawable_bonus) = withdrawable_income.unwrap_or((0.0, 0.0));
+
+    let frozen_regular = (total_regular_income - withdrawable_regular).max(0.0);
+    let frozen_bonus = (total_bonus_income - withdrawable_bonus).max(0.0);
+
     if is_bonus {
-        if user.bonus_core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_bonus"}))).into_response();
+        let available = (user.bonus_core_hours - frozen_bonus).max(0.0);
+        if total_deduct > available {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": "frozen_balance",
+                "message": format!("赠额核时中有 {:.4} 处于{}天冻结期内，暂不可提现。可用额度: {:.4}", frozen_bonus, freeze_days, available),
+                "frozen": frozen_bonus,
+                "available": available
+            }))).into_response();
         }
         let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ?")
             .bind(total_deduct).bind(user_id).execute(pool).await;
     } else {
-        if user.core_hours < total_deduct {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error":"insufficient_balance"}))).into_response();
+        let available = (user.core_hours - frozen_regular).max(0.0);
+        if total_deduct > available {
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": "frozen_balance",
+                "message": format!("普通核时中有 {:.4} 处于{}天冻结期内，暂不可提现。可用额度: {:.4}", frozen_regular, freeze_days, available),
+                "frozen": frozen_regular,
+                "available": available
+            }))).into_response();
         }
         let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
             .bind(total_deduct).bind(user_id).execute(pool).await;
@@ -1800,16 +1855,16 @@ async fn api_buy_premium(
         None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
     };
 
-    if user.ldc_balance < cost {
-        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"}))).into_response();
+    if user.core_hours < cost {
+        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_balance","message":"核时余额不足"}))).into_response();
     }
 
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
         .bind(cost).bind(user_id).execute(pool).await;
     let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
         .bind(server_id).execute(pool).await;
 
-    ok_response(json!({"server_id": server_id, "is_premium": true, "cost_ldc": cost})).into_response()
+    ok_response(json!({"server_id": server_id, "is_premium": true, "cost": cost})).into_response()
 }
 
 // ==============================
@@ -2252,6 +2307,276 @@ async fn api_machine_app_uninstall(
     }
 }
 
+// GET /api/v1/machines/:id/port-forwards - List port forwards
+async fn api_machine_port_forwards_list(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, _status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    // Get server info
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forwards/{}", ip, machine_name);
+
+    let resp = client
+        .get(&url)
+        .header("X-API-Key", &agent_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let data: Value = r.json().await.unwrap_or(json!({"forwards": []}));
+            (StatusCode::OK, Json(data)).into_response()
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "failed to list", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+// POST /api/v1/machines/:id/port-forwards - Add port forward
+async fn api_machine_port_forward_add(
+    headers: HeaderMap,
+    Path(machine_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let vm_port = body.get("vm_port").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let protocol = body.get("protocol").and_then(|v| v.as_str()).unwrap_or("tcp").to_string();
+    let host_port = body.get("host_port").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    if vm_port <= 0 || vm_port > 65535 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid vm_port"}))).into_response();
+    }
+    if protocol != "tcp" && protocol != "udp" {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid protocol"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    if status != "running" {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "machine not running"}))).into_response();
+    }
+
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forward/add/{}", ip, machine_name);
+
+    let req_body = json!({
+        "vm_port": vm_port,
+        "protocol": protocol,
+        "host_port": if host_port > 0 { host_port } else { 0 },
+    });
+
+    let resp = client
+        .post(&url)
+        .header("X-API-Key", &agent_key)
+        .json(&req_body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
+            let hp = data.get("host_port").and_then(|v| v.as_i64()).unwrap_or(host_port as i64) as i32;
+            let vip = data.get("vm_ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            
+            sqlx::query(
+                "INSERT INTO port_forwards (machine_id, server_id, user_id, name, protocol, host_port, vm_port, vm_ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(id)
+            .bind(server_id)
+            .bind(user_id)
+            .bind(&name)
+            .bind(&protocol)
+            .bind(hp)
+            .bind(vm_port)
+            .bind(&vip)
+            .execute(pool)
+            .await
+            .ok();
+
+            match crate::services::machine_lifecycle::charge_nat_port_add(id, 1).await {
+                Ok((regular, bonus)) => {
+                    let mut result = data.clone();
+                    result["regular_charged"] = json!(regular);
+                    result["bonus_charged"] = json!(bonus);
+                    result["total_charged"] = json!(regular + bonus);
+                    (StatusCode::OK, Json(result)).into_response()
+                }
+                Err(e) => {
+                    tracing::warn!(machine_id = id, error = %e, "failed to charge for NAT port, rolling back db record");
+                    let _ = sqlx::query("DELETE FROM port_forwards WHERE machine_id = ? AND host_port = ? AND user_id = ?")
+                        .bind(id)
+                        .bind(hp)
+                        .bind(user_id)
+                        .execute(pool)
+                        .await;
+                    (StatusCode::PAYMENT_REQUIRED, Json(json!({"error": "insufficient balance", "detail": e.to_string()}))).into_response()
+                }
+            }
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "add failed", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+// DELETE /api/v1/machines/:id/port-forwards/:host_port - Delete port forward
+async fn api_machine_port_forward_delete(
+    headers: HeaderMap,
+    Path((machine_id, host_port)): Path<(i64, i32)>,
+) -> impl IntoResponse {
+    let user_id = match authenticate_user(&headers).await {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, server_id, status FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (id, server_id, _status) = match machine {
+        Some(m) => m,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "machine not found"}))).into_response(),
+    };
+
+    let server: Option<(String, String)> = sqlx::query_as(
+        "SELECT ip, agent_key FROM servers WHERE id = ?"
+    )
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (ip, agent_key) = match server {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "server not found"}))).into_response(),
+    };
+
+    let machine_name = format!("machine-{}", id);
+    let client = reqwest::Client::new();
+    let url = format!("http://{}:19527/port-forward/{}/{}", ip, machine_name, host_port);
+
+    let resp = client
+        .delete(&url)
+        .header("X-API-Key", &agent_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            sqlx::query("DELETE FROM port_forwards WHERE machine_id = ? AND host_port = ? AND user_id = ?")
+                .bind(id)
+                .bind(host_port)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .ok();
+            
+            let refund_result = crate::services::machine_lifecycle::refund_nat_port_remove(id, 1).await;
+            let data: Value = r.json().await.unwrap_or(json!({"status": "ok"}));
+            let mut result = data.clone();
+            
+            match refund_result {
+                Ok((regular, bonus)) => {
+                    result["regular_refunded"] = json!(regular);
+                    result["bonus_refunded"] = json!(bonus);
+                    result["total_refunded"] = json!(regular + bonus);
+                }
+                Err(e) => {
+                    tracing::warn!(machine_id = id, error = %e, "failed to refund for NAT port removal");
+                    result["refund_warning"] = json!(e.to_string());
+                }
+            }
+            
+            (StatusCode::OK, Json(result)).into_response()
+        },
+        Ok(r) => {
+            let msg = r.text().await.unwrap_or_default();
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "delete failed", "detail": msg}))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
 // ==============================
 // Router builder
 // ==============================
@@ -2312,4 +2637,7 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/machines/:id/reinstall", post(api_machine_reinstall))
         .route("/v1/machines/:id/app-install", post(api_machine_app_install))
         .route("/v1/machines/:id/app-uninstall", post(api_machine_app_uninstall))
+        .route("/v1/machines/:id/port-forwards", get(api_machine_port_forwards_list))
+        .route("/v1/machines/:id/port-forwards", post(api_machine_port_forward_add))
+        .route("/v1/machines/:id/port-forwards/:host_port", delete(api_machine_port_forward_delete))
 }

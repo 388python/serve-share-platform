@@ -1,9 +1,10 @@
 use crate::config::AppConfig;
 use crate::db;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
@@ -219,5 +220,94 @@ pub async fn distribute_ldc(
         Ok(json["code"] == 1)
     } else {
         Ok(false)
+    }
+}
+
+// Verify callback signature (MD5 mode - EPay compatible)
+pub fn verify_callback_md5(params: &HashMap<String, String>, secret: &str) -> bool {
+    let sign = match params.get("sign") {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+
+    let mut sorted_keys: Vec<&String> = params.keys().filter(|k| *k != "sign" && *k != "sign_type").collect();
+    sorted_keys.sort();
+
+    let payload: String = sorted_keys
+        .iter()
+        .map(|k| format!("{}={}", k, params.get(*k).unwrap_or(&String::new())))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let sign_str = format!("{}{}", payload, secret);
+    let computed = format!("{:x}", md5::compute(sign_str.as_bytes()));
+
+    computed.to_lowercase() == sign.to_lowercase()
+}
+
+// Verify callback signature (Ed25519 mode - official LDC)
+pub fn verify_callback_ed25519(params: &HashMap<String, String>, public_key_b64: &str) -> bool {
+    let sign = match params.get("sign") {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+
+    let mut sorted_keys: Vec<&String> = params.keys().filter(|k| *k != "sign").collect();
+    sorted_keys.sort();
+
+    let payload: String = sorted_keys
+        .iter()
+        .map(|k| format!("{}={}", k, params.get(*k).unwrap_or(&String::new())))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    let key_bytes = match BASE64.decode(public_key_b64) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let key_array: [u8; 32] = match key_bytes.try_into() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let verifying_key = match VerifyingKey::from_bytes(&key_array) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+
+    let sig_bytes = match BASE64.decode(&sign) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let sig_array: [u8; 64] = match sig_bytes.try_into() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+
+    verifying_key.verify(payload.as_bytes(), &signature).is_ok()
+}
+
+// Verify callback with auto-detection of sign mode
+pub async fn verify_callback(params: &HashMap<String, String>) -> bool {
+    let payment_mode = db::get_config("payment_mode")
+        .await
+        .unwrap_or_else(|| "epay".to_string());
+
+    if payment_mode == "ldcpay" {
+        let public_key = db::get_config("ldc_ed25519_public_key")
+            .await
+            .unwrap_or_default();
+        if public_key.is_empty() {
+            return false;
+        }
+        verify_callback_ed25519(params, &public_key)
+    } else {
+        let secret = db::get_config("ldc_client_secret")
+            .await
+            .unwrap_or_default();
+        if secret.is_empty() {
+            return false;
+        }
+        verify_callback_md5(params, &secret)
     }
 }

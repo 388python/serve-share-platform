@@ -9,7 +9,6 @@ pub struct User {
     pub linuxdo_id: i64,
     pub username: String,
     pub email: String,
-    pub ldc_balance: f64,
     pub core_hours: f64,
     pub bonus_core_hours: f64,
     pub bonus_expires_at: Option<DateTime<Utc>>,
@@ -87,6 +86,23 @@ pub struct Machine {
     pub ip_address: Option<String>,    // 机器 IP 地址
     pub app_secrets: Option<String>,   // 应用密钥（JSON 格式）
     pub free_nat_hours: Option<f64>,   // 该机器的免费 NAT 额度（小时）
+}
+
+// Table: port_forwards
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct PortForward {
+    pub id: i64,
+    pub machine_id: i64,
+    pub server_id: i64,
+    pub user_id: i64,
+    pub name: String,
+    pub protocol: String,
+    pub host_port: i32,
+    pub vm_port: i32,
+    pub vm_ip: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 // 应用镜像定义
@@ -194,6 +210,19 @@ pub struct UserPackage {
     pub core_hours: f64,
     pub expires_at: Option<DateTime<Utc>>,
     pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+// Table: owner_income_logs
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct OwnerIncomeLog {
+    pub id: i64,
+    pub user_id: i64,
+    pub regular_amount: f64,
+    pub bonus_amount: f64,
+    pub source_type: String,
+    pub source_id: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 

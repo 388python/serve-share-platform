@@ -27,7 +27,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             linuxdo_id INTEGER NOT NULL UNIQUE,
             username TEXT NOT NULL,
             email TEXT NOT NULL DEFAULT '',
-            ldc_balance REAL NOT NULL DEFAULT 0,
             core_hours REAL NOT NULL DEFAULT 0,
             total_usage_hours REAL NOT NULL DEFAULT 0,
             is_admin INTEGER NOT NULL DEFAULT 0,
@@ -365,7 +364,49 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             fee REAL NOT NULL DEFAULT 0,
             is_bonus INTEGER NOT NULL DEFAULT 0,
             code TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            redeemed_by INTEGER,
+            redeemed_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create owner_income_logs table for tracking merchant earnings freeze period
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS owner_income_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            regular_amount REAL NOT NULL DEFAULT 0,
+            bonus_amount REAL NOT NULL DEFAULT 0,
+            source_type TEXT NOT NULL DEFAULT '',
+            source_id INTEGER,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create withdraw_orders table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS withdraw_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            out_trade_no TEXT NOT NULL UNIQUE,
+            amount REAL NOT NULL,
+            fee REAL NOT NULL DEFAULT 0,
+            actual_amount REAL NOT NULL,
+            withdraw_address TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            trade_no TEXT,
+            fail_reason TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     "#,
     )
@@ -676,6 +717,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("balance_to_code_fee", "0.05"),
         ("balance_to_code_daily_limit", "5"),
         ("balance_to_code_enabled", "true"),
+        ("owner_income_freeze_days", "14"),
         ("premium_enabled", "false"),
         ("premium_ldc_cost", "100"),
         ("opengfw_enabled", "false"),
@@ -697,16 +739,43 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             .await?;
     }
 
+    // Create port_forwards table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS port_forwards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            server_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            protocol TEXT NOT NULL DEFAULT 'tcp',
+            host_port INTEGER NOT NULL,
+            vm_port INTEGER NOT NULL,
+            vm_ip TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
 pub async fn get_config(key: &str) -> Option<String> {
     let pool = get_db();
-    sqlx::query_scalar::<_, String>("SELECT value FROM site_config WHERE key = ?")
+    match sqlx::query_scalar::<_, String>("SELECT value FROM site_config WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
         .await
-        .unwrap_or(None)
+    {
+        Ok(val) => val,
+        Err(e) => {
+            tracing::error!("get_config failed for key '{}': {}", key, e);
+            None
+        }
+    }
 }
 
 pub async fn set_config(key: &str, value: &str) -> anyhow::Result<()> {

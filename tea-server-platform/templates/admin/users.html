@@ -21,8 +21,8 @@
                                 <th>ID</th>
                                 <th>用户名</th>
                                 <th>邮箱</th>
-                                <th>LDC 余额</th>
                                 <th>核时</th>
+                                <th>赠额</th>
                                 <th>使用时长</th>
                                 <th>管理员</th>
                                 <th>已封禁</th>
@@ -36,8 +36,8 @@
                                 <td>{{ u.id }}</td>
                                 <td>{{ u.username }}</td>
                                 <td>{{ u.email }}</td>
-                                <td>{{ u.ldc_balance }}</td>
                                 <td>{{ u.core_hours }}</td>
+                                <td>{{ u.bonus_core_hours }}</td>
                                 <td>{{ u.total_usage_hours }}</td>
                                 <td>
                                     {% if u.is_admin %}
@@ -77,8 +77,8 @@
                                                     <input type="number" class="form-control" name="core_hours" value="{{ u.core_hours }}" step="0.1">
                                                 </div>
                                                 <div class="mb-3">
-                                                    <label class="form-label">LDC 余额</label>
-                                                    <input type="number" class="form-control" name="ldc_balance" value="{{ u.ldc_balance }}" step="0.1">
+                                                    <label class="form-label">赠额核时</label>
+                                                    <input type="number" class="form-control" name="bonus_core_hours" value="{{ u.bonus_core_hours }}" step="0.1">
                                                 </div>
                                                 <div class="form-check mb-3">
                                                     <input type="checkbox" class="form-check-input" id="is_banned{{ u.id }}" name="is_banned" {% if u.is_banned %}checked{% endif %}>

@@ -19,7 +19,6 @@ pub struct UserSession {
     pub username: String,
     pub is_admin: bool,
     pub core_hours: f64,
-    pub ldc_balance: f64,
 }
 
 /// 会话有效期（秒）—— 即使 cookie 未过期，超过此时间的会话也将失效
@@ -75,12 +74,11 @@ fn compute_signature(data: &str, secret: &[u8]) -> String {
 /// Serialize and sign a session. Format: `base64(data)|signature`
 pub fn encode_session(session: &UserSession) -> String {
     let data = format!(
-        "user_id={}|username={}|is_admin={}|core_hours={}|ldc_balance={}|ts={}",
+        "user_id={}|username={}|is_admin={}|core_hours={}|ts={}",
         session.user_id,
         session.username,
         session.is_admin,
         session.core_hours,
-        session.ldc_balance,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -139,17 +137,12 @@ pub fn decode_session(value: &str) -> Option<UserSession> {
         .get("core_hours")
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.0);
-    let ldc_balance = map
-        .get("ldc_balance")
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0);
 
     Some(UserSession {
         user_id,
         username,
         is_admin,
         core_hours,
-        ldc_balance,
     })
 }
 

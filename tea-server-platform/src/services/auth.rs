@@ -48,8 +48,14 @@ fn hmac_key() -> Vec<u8> {
 
 /// HMAC-SHA256 签名，返回 hex 字符串
 fn hmac_hex(payload: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(&hmac_key())
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
+    let key = hmac_key();
+    let mut mac = match HmacSha256::new_from_slice(&key) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("HMAC init failed: {}", e);
+            return String::new();
+        }
+    };
     mac.update(payload);
     let result = mac.finalize().into_bytes();
     let mut hex = String::with_capacity(result.len() * 2);
@@ -69,8 +75,14 @@ fn hmac_verify(payload: &[u8], expected_hex: &str) -> bool {
     if expected.is_empty() {
         return false;
     }
-    let mut mac = HmacSha256::new_from_slice(&hmac_key())
-        .unwrap_or_else(|_| HmacSha256::new_from_slice(b"default").expect("HMAC init"));
+    let key = hmac_key();
+    let mut mac = match HmacSha256::new_from_slice(&key) {
+        Ok(m) => m,
+        Err(_) => {
+            tracing::error!("HMAC verify init failed");
+            return false;
+        }
+    };
     mac.update(payload);
     mac.verify_slice(&expected).is_ok()
 }

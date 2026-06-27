@@ -42,9 +42,25 @@ AGENT_PORT = 19527
 STATS_REPORT_INTERVAL = 60
 
 USED_PORTS: set = set()
+USED_PORTS_LOCK = threading.Lock()
 
 VIRTIO_ISO_PATH = "/var/lib/libvirt/images/virtio-win.iso"
 WINDOWS_AUTOUNATTEND_PATH = "/var/lib/libvirt/images/autounattend.xml"
+
+
+def escape_shell_arg(s: str) -> str:
+    """Escape a string for safe use in shell commands.
+    Returns the string wrapped in single quotes with internal single quotes escaped."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def escape_xml_attr(s: str) -> str:
+    """Escape a string for safe use in XML attribute values."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&apos;"))
 
 SYSTEM_IMAGES: Dict[str, Dict[str, Any]] = {
     "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2", "type": "linux", "ssh": True},
@@ -226,26 +242,28 @@ def platform_request(endpoint: str, method: str = "GET", data: Optional[Dict[str
 # =============================================================================
 
 def allocate_port() -> int:
-    """Allocate an available port from the port range"""
-    for port in range(PORT_RANGE_START, PORT_RANGE_END):
-        if port in USED_PORTS:
-            continue
+    """Allocate an available port from the port range (thread-safe)"""
+    with USED_PORTS_LOCK:
+        for port in range(PORT_RANGE_START, PORT_RANGE_END):
+            if port in USED_PORTS:
+                continue
 
-        result = subprocess.run(
-            ["ss", "-tlnp"],
-            capture_output=True, text=True, timeout=5
-        )
-        if f":{port}" not in result.stdout:
-            USED_PORTS.add(port)
-            return port
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True, timeout=5
+            )
+            if f":{port}" not in result.stdout:
+                USED_PORTS.add(port)
+                return port
 
-    raise RuntimeError("No available ports in range")
+        raise RuntimeError("No available ports in range")
 
 
 def release_port(port: Optional[int]) -> None:
-    """Release an allocated port"""
+    """Release an allocated port (thread-safe)"""
     if port is not None:
-        USED_PORTS.discard(port)
+        with USED_PORTS_LOCK:
+            USED_PORTS.discard(port)
 
 
 def setup_port_forwarding(host_port: int, vm_ip: str, vm_port: int, protocol: str = "tcp") -> None:
@@ -303,6 +321,314 @@ def inject_ssh_key(name: str, public_key: str, virt: str = "lxd") -> None:
         lxc_exec(name, "chmod 600 /root/.ssh/authorized_keys && chown -R root:root /root/.ssh", timeout=10)
         lxc_exec(name, "which sshd || (apt-get update && apt-get install -y openssh-server)", timeout=120)
         lxc_exec(name, "mkdir -p /run/sshd && /usr/sbin/sshd || service ssh start || systemctl start sshd 2>/dev/null || true", timeout=20)
+
+
+def inject_ssh_key_kvm(disk_path: str, public_key: str, user: str = "root") -> bool:
+    """Inject SSH public key into KVM VM disk image using virt-customize.
+    Returns True on success, False on failure."""
+    if not public_key:
+        return True
+
+    # 输入校验
+    if not disk_path or not os.path.exists(disk_path):
+        logger.warning("inject_ssh_key_kvm: invalid disk path: %s", disk_path)
+        return False
+
+    # 验证用户名只包含安全字符
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_-]*$', user):
+        logger.warning("inject_ssh_key_kvm: invalid username: %s", user)
+        return False
+
+    tmp_key_file = f"/tmp/ssh_key_{os.getpid()}_{int(time.time())}.pub"
+    try:
+        with open(tmp_key_file, "w") as f:
+            f.write(public_key.strip() + "\n")
+
+        home_dir = "/root" if user == "root" else f"/home/{user}"
+        ssh_dir = f"{home_dir}/.ssh"
+        auth_keys = f"{ssh_dir}/authorized_keys"
+
+        cmd = [
+            "virt-customize", "-a", disk_path,
+            "--mkdir", ssh_dir,
+            "--upload", f"{tmp_key_file}:{auth_keys}",
+            "--run-command", f"chmod 700 {escape_shell_arg(ssh_dir)}",
+            "--run-command", f"chmod 600 {escape_shell_arg(auth_keys)}",
+            "--run-command", f"chown -R {escape_shell_arg(user)}:{escape_shell_arg(user)} {escape_shell_arg(ssh_dir)}",
+        ]
+
+        # 确保 SSH 服务已安装并启用
+        cmd.extend([
+            "--run-command", "which sshd || which ssh || (apt-get update && apt-get install -y openssh-server && systemctl enable ssh && systemctl start ssh) || (yum install -y openssh-server && systemctl enable sshd && systemctl start sshd) || true",
+        ])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if result.returncode == 0:
+            logger.info("SSH key injected into KVM disk: %s", disk_path)
+            return True
+        else:
+            logger.warning("virt-customize SSH injection failed: %s", result.stderr)
+            return False
+    except subprocess.TimeoutExpired:
+        logger.warning("virt-customize SSH injection timed out")
+        return False
+    except Exception as e:
+        logger.warning("inject_ssh_key_kvm error: %s", e)
+        return False
+    finally:
+        if os.path.exists(tmp_key_file):
+            try:
+                os.remove(tmp_key_file)
+            except OSError:
+                pass
+
+
+def generate_windows_autounattend(
+    admin_password: str,
+    computer_name: str = "WIN-VM",
+    enable_rdp: bool = True,
+    enable_openssh: bool = True,
+    ssh_public_key: str = ""
+) -> str:
+    """Generate Windows autounattend.xml for unattended installation/setup.
+    Returns the path to the generated XML file."""
+    xml_content = f'''<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <UserAccounts>
+                <AdministratorPassword>
+                    <Value>{admin_password}</Value>
+                    <PlainText>true</PlainText>
+                </AdministratorPassword>
+            </UserAccounts>
+            <AutoLogon>
+                <Password>
+                    <Value>{admin_password}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <Username>Administrator</Username>
+                <Enabled>true</Enabled>
+                <LogonCount>1</LogonCount>
+            </AutoLogon>
+            <ComputerName>{computer_name}</ComputerName>
+            <TimeZone>China Standard Time</TimeZone>
+        </component>
+    </settings>
+    <settings pass="specialize">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <ComputerName>{computer_name}</ComputerName>
+            <ProductKey></ProductKey>
+        </component>
+        <component name="Microsoft-Windows-TerminalServices-LocalSessionManager" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <fDenyTSConnections>{'false' if enable_rdp else 'true'}</fDenyTSConnections>
+        </component>
+    </settings>
+</unattend>'''
+
+    xml_path = f"/tmp/autounattend_{os.getpid()}_{int(time.time())}.xml"
+    with open(xml_path, "w", encoding="utf-8") as f:
+        f.write(xml_content)
+    return xml_path
+
+
+def create_windows_setup_complete_script(
+    admin_password: str,
+    enable_rdp: bool = True,
+    enable_openssh: bool = True,
+    ssh_public_key: str = ""
+) -> str:
+    """Create SetupComplete.cmd script for Windows first boot initialization.
+    Returns the path to the script file."""
+    rdp_commands = ""
+    if enable_rdp:
+        rdp_commands = '''
+:: Enable RDP
+reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+:: Allow RDP through firewall
+netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+'''
+
+    openssh_commands = ""
+    ssh_key_commands = ""
+    if enable_openssh:
+        openssh_commands = '''
+:: Install OpenSSH Server
+powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
+:: Set SSH service to automatic startup
+powershell -Command "Set-Service -Name sshd -StartupType 'Automatic'"
+:: Start SSH service
+powershell -Command "Start-Service sshd"
+:: Allow SSH through firewall
+netsh advfirewall firewall add rule name="OpenSSH SSH Server" dir=in action=allow protocol=TCP localport=22
+'''
+        if ssh_public_key:
+            ssh_key_commands = f'''
+:: Add SSH public key for Administrator
+mkdir "C:\\ProgramData\\ssh"
+echo {ssh_public_key} > "C:\\ProgramData\\ssh\\administrators_authorized_keys"
+icacls "C:\\ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+'''
+
+    script_content = f'''@echo off
+:: Windows SetupComplete.cmd - First boot initialization
+echo Running setup complete script... > C:\\setup_complete.log
+date /t >> C:\\setup_complete.log
+time /t >> C:\\setup_complete.log
+
+{rdp_commands}
+{openssh_commands}
+{ssh_key_commands}
+
+:: Allow ICMP (ping) through firewall
+netsh advfirewall firewall add rule name="ICMP Allow incoming V4 echo request" protocol=icmpv4:8,any dir=in action=allow
+
+:: Disable Windows Defender real-time protection (optional, for performance)
+:: powershell -Command "Set-MpPreference -DisableRealtimeMonitoring $true"
+
+echo Setup complete. >> C:\\setup_complete.log
+date /t >> C:\\setup_complete.log
+time /t >> C:\\setup_complete.log
+'''
+
+    script_path = f"/tmp/SetupComplete_{os.getpid()}_{int(time.time())}.cmd"
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(script_content)
+    return script_path
+
+
+def create_floppy_image(files: List[Tuple[str, str]], output_path: str) -> bool:
+    """Create a floppy disk image with the given files.
+    files: list of (local_path, floppy_path) tuples
+    Returns True on success."""
+    try:
+        # Create blank floppy image
+        result = subprocess.run(
+            ["dd", "if=/dev/zero", f"of={output_path}", "bs=1440k", "count=1"],
+            capture_output=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning("Failed to create floppy image: %s", result.stderr)
+            return False
+
+        # Format as FAT
+        result = subprocess.run(
+            ["mkfs.fat", output_path],
+            capture_output=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning("Failed to format floppy: %s", result.stderr)
+            return False
+
+        # Copy files using mtools
+        for local_path, floppy_path in files:
+            result = subprocess.run(
+                ["mcopy", "-i", output_path, local_path, f"::{floppy_path}"],
+                capture_output=True, timeout=30
+            )
+            if result.returncode != 0:
+                logger.warning("Failed to copy %s to floppy: %s", local_path, result.stderr)
+                return False
+
+        logger.info("Floppy image created: %s", output_path)
+        return True
+    except Exception as e:
+        logger.warning("create_floppy_image error: %s", e)
+        return False
+
+
+def prepare_windows_kvm_disk(
+    disk_path: str,
+    admin_password: str,
+    ssh_public_key: str = "",
+    enable_rdp: bool = True,
+    enable_openssh: bool = True
+) -> bool:
+    """Prepare Windows KVM disk image using virt-customize:
+    - Set administrator password
+    - Enable RDP
+    - Install/Enable OpenSSH
+    - Inject SSH public key
+    Returns True on success."""
+    # 输入校验
+    if not disk_path or not os.path.exists(disk_path):
+        logger.warning("prepare_windows_kvm_disk: invalid disk path: %s", disk_path)
+        return False
+
+    if not admin_password:
+        logger.warning("prepare_windows_kvm_disk: empty password")
+        return False
+
+    tmp_key = ""
+    try:
+        cmd = ["virt-customize", "-a", disk_path]
+
+        # 安全设置密码（使用 virt-customize 的标准方式）
+        cmd.extend(["--root-password", f"password:{admin_password}"])
+
+        if enable_rdp:
+            cmd.extend([
+                "--run-command",
+                'reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f',
+            ])
+            cmd.extend([
+                "--run-command",
+                'netsh advfirewall firewall set rule group="remote desktop" new enable=Yes',
+            ])
+
+        if enable_openssh:
+            cmd.extend([
+                "--run-command",
+                'powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"',
+            ])
+            cmd.extend([
+                "--run-command",
+                'powershell -Command "Set-Service -Name sshd -StartupType Automatic"',
+            ])
+            cmd.extend([
+                "--run-command",
+                'netsh advfirewall firewall add rule name="OpenSSH SSH Server" dir=in action=allow protocol=TCP localport=22',
+            ])
+
+            if ssh_public_key:
+                tmp_key = f"/tmp/win_ssh_key_{os.getpid()}_{int(time.time())}.pub"
+                with open(tmp_key, "w") as f:
+                    f.write(ssh_public_key.strip() + "\n")
+
+                cmd.extend([
+                    "--mkdir", "C:/ProgramData/ssh",
+                    "--upload", f"{tmp_key}:C:/ProgramData/ssh/administrators_authorized_keys",
+                    "--run-command",
+                    'icacls "C:\\ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"',
+                ])
+
+        cmd.extend([
+            "--run-command",
+            'netsh advfirewall firewall add rule name="ICMP Allow" protocol=icmpv4:8,any dir=in action=allow',
+        ])
+
+        logger.info("Running virt-customize on Windows image...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+
+        if result.returncode == 0:
+            logger.info("Windows disk prepared successfully")
+            return True
+        else:
+            logger.warning("virt-customize failed: %s", result.stderr)
+            return False
+    except subprocess.TimeoutExpired:
+        logger.warning("virt-customize timed out")
+        return False
+    except Exception as e:
+        logger.warning("prepare_windows_kvm_disk error: %s", e)
+        return False
+    finally:
+        if tmp_key and os.path.exists(tmp_key):
+            try:
+                os.remove(tmp_key)
+            except OSError:
+                pass
 
 
 def ensure_docker_in_lxd(name: str) -> None:
@@ -518,6 +844,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/console/"):
             name = path.split("/")[-1]
             self._handle_get_console(name)
+        elif path.startswith("/port-forwards/"):
+            name = path.split("/")[-1]
+            self._handle_list_port_forwards(name)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -546,6 +875,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         elif path.startswith("/app-uninstall/"):
             name = path.split("/")[-1]
             self._handle_app_uninstall(name, body)
+        elif path.startswith("/port-forward/add/"):
+            name = path.split("/")[-1]
+            self._handle_add_port_forward(name, body)
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -555,8 +887,21 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         path = urlparse(self.path).path
-        name = path.strip("/")
 
+        if path.startswith("/port-forward/"):
+            parts = path.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "port-forward":
+                name = parts[1]
+                try:
+                    host_port = int(parts[2])
+                    self._handle_delete_port_forward(name, host_port)
+                    return
+                except (ValueError, IndexError):
+                    pass
+            self._send_json({"error": "invalid request"}, 400)
+            return
+
+        name = path.strip("/")
         if not name:
             self._send_json({"error": "name required"}, 400)
             return
@@ -752,6 +1097,157 @@ class AgentHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e), "processes": []})
 
+    def _get_machine_ip(self, name: str) -> Optional[str]:
+        """Get VM/container IP address"""
+        try:
+            virt = self._get_virt_type_from_name(name)
+            if virt == "lxd":
+                result = subprocess.run(
+                    ["lxc", "list", name, "--format", "csv", "-c", "4"],
+                    capture_output=True, text=True, timeout=10
+                )
+                ip = result.stdout.strip()
+                return ip if ip else None
+            else:
+                # KVM: get IP from DHCP leases or use network
+                result = subprocess.run(
+                    ["virsh", "domifaddr", name],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if "ipv4" in line:
+                        parts = line.split()
+                        for p in parts:
+                            if "/" in p and "." in p:
+                                return p.split("/")[0]
+                return None
+        except Exception:
+            return None
+
+    def _handle_list_port_forwards(self, name: str) -> None:
+        """List all port forwarding rules for a machine"""
+        try:
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"forwards": [], "error": "machine not found or no IP"})
+                return
+
+            # Get all iptables NAT rules for this VM
+            result = subprocess.run(
+                ["iptables", "-t", "nat", "-L", "PREROUTING", "-n", "--line-numbers"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            forwards = []
+            for line in result.stdout.strip().split("\n")[2:]:
+                parts = line.split()
+                if len(parts) >= 7 and "DNAT" in parts:
+                    proto = parts[3].lower() if parts[3] else "tcp"
+                    try:
+                        dport = int(parts[-2]) if parts[-2].isdigit() else 0
+                        to_parts = parts[-1].split(":")
+                        if len(to_parts) >= 2 and to_parts[0] == vm_ip:
+                            vm_port = int(to_parts[-1]) if to_parts[-1].isdigit() else 0
+                            forwards.append({
+                                "host_port": dport,
+                                "vm_port": vm_port,
+                                "protocol": proto,
+                                "vm_ip": to_parts[0],
+                            })
+                    except (ValueError, IndexError):
+                        continue
+
+            self._send_json({"forwards": forwards, "vm_ip": vm_ip})
+        except Exception as e:
+            self._send_json({"error": str(e), "forwards": []})
+
+    def _handle_add_port_forward(self, name: str, body: Dict[str, Any]) -> None:
+        """Add a port forwarding rule"""
+        try:
+            vm_port = int(body.get("vm_port", 0))
+            protocol = body.get("protocol", "tcp").lower()
+            host_port = int(body.get("host_port", 0)) if body.get("host_port") else 0
+
+            if vm_port <= 0 or vm_port > 65535:
+                self._send_json({"error": "invalid vm_port"}, 400)
+                return
+            if protocol not in ("tcp", "udp"):
+                self._send_json({"error": "invalid protocol, must be tcp or udp"}, 400)
+                return
+
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"error": "machine not found or no IP"}, 404)
+                return
+
+            # Allocate host port if not specified
+            if host_port == 0:
+                host_port = allocate_port()
+            else:
+                if host_port < 1 or host_port > 65535:
+                    self._send_json({"error": "invalid host_port"}, 400)
+                    return
+                # Check if port is already in use
+                result = subprocess.run(
+                    ["ss", "-tlnp"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if f":{host_port}" in result.stdout:
+                    self._send_json({"error": f"host port {host_port} already in use"}, 400)
+                    return
+                USED_PORTS.add(host_port)
+
+            setup_port_forwarding(host_port, vm_ip, vm_port, protocol)
+
+            self._send_json({
+                "status": "ok",
+                "host_port": host_port,
+                "vm_port": vm_port,
+                "protocol": protocol,
+                "vm_ip": vm_ip,
+            })
+        except ValueError:
+            self._send_json({"error": "invalid port number"}, 400)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_delete_port_forward(self, name: str, host_port: int) -> None:
+        """Delete a port forwarding rule"""
+        try:
+            vm_ip = self._get_machine_ip(name)
+            if not vm_ip:
+                self._send_json({"error": "machine not found or no IP"}, 404)
+                return
+
+            # Find and remove both rules (PREROUTING and POSTROUTING)
+            for proto in ["tcp", "udp"]:
+                remove_port_forwarding(host_port, vm_ip, 0, proto)
+
+            # Also try with vm_port from existing rules
+            result = subprocess.run(
+                ["iptables", "-t", "nat", "-L", "PREROUTING", "-n", "--line-numbers"],
+                capture_output=True, text=True, timeout=10
+            )
+            for line in result.stdout.strip().split("\n")[2:]:
+                parts = line.split()
+                if len(parts) >= 7 and "DNAT" in parts:
+                    try:
+                        dport = int(parts[-2]) if parts[-2].isdigit() else 0
+                        if dport == host_port:
+                            to_parts = parts[-1].split(":")
+                            if len(to_parts) >= 2 and to_parts[0] == vm_ip:
+                                vm_port = int(to_parts[-1]) if to_parts[-1].isdigit() else 0
+                                proto = parts[3].lower() if parts[3] else "tcp"
+                                remove_port_forwarding(host_port, vm_ip, vm_port, proto)
+                    except (ValueError, IndexError):
+                        continue
+
+            release_port(host_port)
+
+            self._send_json({"status": "ok", "host_port": host_port})
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
     def _handle_get_traffic(self, machine_id: str) -> None:
         container_name = f"machine-{machine_id}"
         try:
@@ -911,6 +1407,26 @@ class AgentHandler(BaseHTTPRequestHandler):
             capture_output=True, timeout=30
         )
 
+        # 在启动前预处理磁盘
+        prep_failed = False
+        if is_windows:
+            # Windows: 设置密码、启用RDP、安装OpenSSH、注入SSH密钥
+            logger.info("Preparing Windows disk image...")
+            if not prepare_windows_kvm_disk(
+                disk_path,
+                root_password,
+                ssh_public_key if supports_ssh else "",
+                supports_rdp,
+                supports_ssh
+            ):
+                logger.warning("Windows disk preparation failed, VM may not be fully configured")
+                prep_failed = True
+        elif supports_ssh and ssh_public_key:
+            # Linux: 注入 SSH 密钥
+            logger.info("Injecting SSH key into Linux KVM disk...")
+            if not inject_ssh_key_kvm(disk_path, ssh_public_key, "root"):
+                logger.warning("SSH key injection failed")
+
         ssh_external_port = allocate_port() if supports_ssh else None
         rdp_external_port = allocate_port() if supports_rdp else None
         vnc_external_port = allocate_port()
@@ -924,6 +1440,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             release_port(rdp_external_port)
             release_port(vnc_external_port)
             release_port(novnc_external_port)
+            # 清理已创建的磁盘镜像
+            if os.path.exists(disk_path):
+                try:
+                    os.remove(disk_path)
+                except OSError:
+                    pass
             self._send_json({"status": "error", "error": result.stderr})
             return
 

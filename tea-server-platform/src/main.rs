@@ -50,28 +50,44 @@ async fn main() -> anyhow::Result<()> {
             let now = chrono::Utc::now();
 
             // Get expired machines
-            let expired: Vec<(i64, i64)> = sqlx::query_as(
+            let expired: Vec<(i64, i64)> = match sqlx::query_as(
                 "SELECT id, server_id FROM machines WHERE status = 'running' AND expires_at < ?",
             )
             .bind(now)
             .fetch_all(pool)
             .await
-            .unwrap_or_default();
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Failed to query expired machines: {}", e);
+                    continue;
+                }
+            };
 
             for (machine_id, server_id) in &expired {
-                let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
+                if let Err(e) = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
                     .bind(machine_id)
                     .execute(pool)
-                    .await;
+                    .await
+                {
+                    tracing::error!("Failed to stop expired machine {}: {}", machine_id, e);
+                    continue;
+                }
 
                 // Call agent to stop VM
-                let server: Option<(String,)> = sqlx::query_as(
+                let server: Option<(String,)> = match sqlx::query_as(
                     "SELECT ip FROM servers WHERE id = ?",
                 )
                 .bind(server_id)
                 .fetch_optional(pool)
                 .await
-                .unwrap_or(None);
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("Failed to query server {}: {}", server_id, e);
+                        continue;
+                    }
+                };
 
                 if let Some((ip,)) = server {
                     let machine_name = format!("machine-{}", machine_id);
@@ -143,29 +159,41 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
             let pool = db::get_db();
-            let machines: Vec<(i64, String)> = sqlx::query_as(
+            let machines: Vec<(i64, String)> = match sqlx::query_as(
                 "SELECT m.id, s.ip FROM machines m JOIN servers s ON m.server_id = s.id WHERE m.status = 'running'"
             )
             .fetch_all(pool)
             .await
-            .unwrap_or_default();
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Failed to query running machines for traffic monitor: {}", e);
+                    continue;
+                }
+            };
             
             for (machine_id, server_ip) in &machines {
                 let alerts = services::traffic_monitor::scan_machine_traffic(*machine_id, server_ip).await;
                 for alert_msg in &alerts {
                     tracing::warn!("Traffic alert for machine {}: {}", machine_id, alert_msg);
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         "INSERT INTO traffic_alerts (machine_id, alert_type, message) VALUES (?, 'traffic_violation', ?)"
                     )
                     .bind(machine_id)
                     .bind(alert_msg)
                     .execute(pool)
-                    .await;
+                    .await
+                    {
+                        tracing::error!("Failed to insert traffic alert for machine {}: {}", machine_id, e);
+                    }
                     // Stop the machine
-                    let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
+                    if let Err(e) = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ?")
                         .bind(machine_id)
                         .execute(pool)
-                        .await;
+                        .await
+                    {
+                        tracing::error!("Failed to stop machine {} due to traffic alert: {}", machine_id, e);
+                    }
                 }
             }
         }
@@ -183,22 +211,34 @@ async fn main() -> anyhow::Result<()> {
             let threshold = threshold_pct / 100.0;
 
             // Find stopped/deleted machines that haven't been settled
-            let machines: Vec<(i64, i64, f64, f64)> = sqlx::query_as(
+            let machines: Vec<(i64, i64, f64, f64)> = match sqlx::query_as(
                 "SELECT m.id, m.server_id, m.core_hours_per_hour, m.used_hours FROM machines m WHERE m.status IN ('stopped','deleted') AND m.settled = 0"
             )
             .fetch_all(pool)
             .await
-            .unwrap_or_default();
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Failed to query unsettled machines: {}", e);
+                    continue;
+                }
+            };
 
             for (machine_id, server_id, ch_per_hour, used_hours) in &machines {
                 // Get server expiry
-                let server_expiry: Option<(String,)> = sqlx::query_as(
+                let server_expiry: Option<(String,)> = match sqlx::query_as(
                     "SELECT expires_at FROM servers WHERE id = ?"
                 )
                 .bind(server_id)
                 .fetch_optional(pool)
                 .await
-                .unwrap_or(None);
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("Failed to query server expiry for settlement: {}", e);
+                        continue;
+                    }
+                };
 
                 if let Some((expires_at_str,)) = server_expiry {
                     if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
@@ -206,17 +246,24 @@ async fn main() -> anyhow::Result<()> {
                         if max_hours > 0.0 && used_hours / max_hours >= threshold {
                             // Settle: credit core hours to server owner
                             let total_ch = ch_per_hour * used_hours;
-                            let _ = sqlx::query(
+                            if let Err(e) = sqlx::query(
                                 "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
                             )
                             .bind(total_ch)
                             .bind(server_id)
                             .execute(pool)
-                            .await;
-                            let _ = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
+                            .await
+                            {
+                                tracing::error!("Failed to credit settlement for machine {}: {}", machine_id, e);
+                                continue;
+                            }
+                            if let Err(e) = sqlx::query("UPDATE machines SET settled = 1 WHERE id = ?")
                                 .bind(machine_id)
                                 .execute(pool)
-                                .await;
+                                .await
+                            {
+                                tracing::error!("Failed to mark machine {} as settled: {}", machine_id, e);
+                            }
                         }
                     }
                 }
@@ -230,12 +277,16 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             let pool = db::get_db();
             let now = chrono::Utc::now();
-            let _ = sqlx::query(
+            match sqlx::query(
                 "UPDATE disputes SET status = 'platform' WHERE status = 'pending' AND auto_resolve_at <= ?"
             )
             .bind(now)
             .execute(pool)
-            .await;
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => tracing::error!("Failed to auto-resolve disputes: {}", e),
+            }
         }
     });
 
@@ -245,12 +296,16 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             let pool = db::get_db();
             let now = chrono::Utc::now();
-            let _ = sqlx::query(
+            match sqlx::query(
                 "UPDATE users SET bonus_core_hours = 0, bonus_expires_at = NULL WHERE bonus_expires_at IS NOT NULL AND bonus_expires_at <= ?"
             )
             .bind(now)
             .execute(pool)
-            .await;
+            .await
+            {
+                Ok(_) => {}
+                Err(e) => tracing::error!("Failed to clean expired bonus: {}", e),
+            }
         }
     });
 
@@ -297,6 +352,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/free-plan", post(handlers::free_plan))
         // Balance to code
         .route("/balance-to-code", post(handlers::balance_to_code))
+        // Redeem code
+        .route("/redeem", get(handlers::redeem_page))
+        .route("/redeem", post(handlers::redeem_submit))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
@@ -344,10 +402,6 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
             ctx.insert(
                 "user_balance",
                 &session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string()),
-            );
-            ctx.insert(
-                "user_ldc",
-                &session.get("ldc_balance").cloned().unwrap_or_else(|| "0".to_string()),
             );
             ctx.insert(
                 "is_admin",
@@ -576,8 +630,8 @@ async fn auth_callback(
 
     // Upsert user in database
     let pool = db::get_db();
-    let existing: Option<(i64, bool, f64, f64)> = sqlx::query_as(
-        "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
+    let existing: Option<(i64, bool, f64)> = sqlx::query_as(
+        "SELECT id, is_admin, core_hours FROM users WHERE linuxdo_id = ?",
     )
     .bind(user_info.id)
     .fetch_optional(pool)
@@ -587,13 +641,11 @@ async fn auth_callback(
     let user_id: i64;
     let is_admin: bool;
     let core_hours: f64;
-    let ldc_balance: f64;
 
-    if let Some((uid, admin, ch, ldc)) = existing {
+    if let Some((uid, admin, ch)) = existing {
         user_id = uid;
         is_admin = admin;
         core_hours = ch;
-        ldc_balance = ldc;
     } else {
         // Check registration enabled
         let reg_enabled = db::get_config("registration_enabled").await
@@ -668,7 +720,7 @@ async fn auth_callback(
         }
 
         sqlx::query(
-            "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
+            "INSERT INTO users (linuxdo_id, username, email, core_hours, is_admin) VALUES (?, ?, ?, ?, 0)",
         )
         .bind(user_info.id)
         .bind(user_info.effective_name())
@@ -679,13 +731,13 @@ async fn auth_callback(
         .map_err(|e| tracing::error!("Failed to create user: {}", e))
         .ok();
 
-        let new_user: (i64, bool, f64, f64) = sqlx::query_as(
-            "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
+        let new_user: (i64, bool, f64) = sqlx::query_as(
+            "SELECT id, is_admin, core_hours FROM users WHERE linuxdo_id = ?",
         )
         .bind(user_info.id)
         .fetch_one(pool)
         .await
-        .unwrap_or((0, false, 0.0, 0.0));
+        .unwrap_or((0, false, 0.0));
 
         // 如果有待处理的邀请码，现在回填使用人
         if let Some(invite_id) = pending_invite_id {
@@ -699,7 +751,6 @@ async fn auth_callback(
         user_id = new_user.0;
         is_admin = new_user.1;
         core_hours = new_user.2;
-        ldc_balance = new_user.3;
     }
 
     handlers::set_session_cookie_wrapper(
@@ -708,7 +759,6 @@ async fn auth_callback(
         &user_info.effective_name(),
         is_admin,
         core_hours,
-        ldc_balance,
     );
 
     // 清除 state 和 invite_code cookie

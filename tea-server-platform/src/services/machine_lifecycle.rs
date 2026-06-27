@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::db;
@@ -5,6 +6,7 @@ use crate::db;
 pub struct MachineProvisioningJob {
     pub machine_id: i64,
     pub user_id: i64,
+    pub server_owner_id: i64,
     pub server_ip: String,
     pub machine_name: String,
     pub virt_type: String,
@@ -178,12 +180,20 @@ async fn mark_machine_running(
         .map(|v| v.to_string())
         .unwrap_or_default();
 
+    // 提取端口信息
+    let ssh_port = create_data.get("ssh_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let vnc_port = create_data.get("vnc_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let web_port = create_data.get("novnc_port").and_then(|v| v.as_i64()).map(|v| v as i32);
+
     let updated = sqlx::query(
-        "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ? WHERE id = ? AND status = 'pending'",
+        "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ?, ssh_port = ?, vnc_port = ?, web_port = ? WHERE id = ? AND status = 'pending'",
     )
     .bind(root_password)
     .bind(ip)
     .bind(app_secrets)
+    .bind(ssh_port)
+    .bind(vnc_port)
+    .bind(web_port)
     .bind(machine_id)
     .execute(&mut *tx)
     .await?;
@@ -265,14 +275,448 @@ async fn fail_machine_and_refund(job: &MachineProvisioningJob) -> anyhow::Result
             .await?;
 
     if updated.rows_affected() > 0 {
+        // 退还给用户
         sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ?, core_hours = core_hours + ? WHERE id = ?")
             .bind(job.bonus_used)
             .bind(job.regular_used)
             .bind(job.user_id)
             .execute(&mut *tx)
             .await?;
+
+        // 从机主扣回（bonus扣bonus，regular扣regular）
+        if job.bonus_used > 0.0 {
+            sqlx::query(
+                "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+            )
+            .bind(job.bonus_used)
+            .bind(job.server_owner_id)
+            .bind(job.bonus_used)
+            .execute(&mut *tx)
+            .await?;
+        }
+        if job.regular_used > 0.0 {
+            sqlx::query(
+                "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+            )
+            .bind(job.regular_used)
+            .bind(job.server_owner_id)
+            .bind(job.regular_used)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     tx.commit().await?;
     Ok(())
+}
+
+/// 机器删除/到期时按剩余时间比例退款
+pub async fn refund_machine_remaining(machine_id: i64) -> anyhow::Result<(f64, f64)> {
+    let pool = db::get_db();
+    let mut tx = pool.begin().await?;
+
+    // 查询机器信息
+    let machine: Option<(i64, i64, f64, f64, DateTime<Utc>, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT user_id, server_id, regular_core_hours_used, bonus_core_hours_used, created_at, expires_at, status FROM machines WHERE id = ?",
+    )
+    .bind(machine_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (user_id, server_id, regular_used, bonus_used, created_at, expires_at, status) = match machine {
+        Some(m) => m,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    // 只对running/stopped状态的机器退款（pending/failed/deleted/expired不处理）
+    if status != "running" && status != "stopped" {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    // 查询机主ID
+    let server_owner_id: Option<i64> = sqlx::query_scalar(
+        "SELECT owner_id FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let server_owner_id = match server_owner_id {
+        Some(id) => id,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    // 计算剩余时间比例
+    let now = Utc::now();
+    let total_duration = expires_at.signed_duration_since(created_at).num_seconds() as f64;
+    let elapsed = now.signed_duration_since(created_at).num_seconds() as f64;
+
+    if total_duration <= 0.0 || elapsed >= total_duration {
+        // 已经过期或时间异常，不退款
+        return Ok((0.0, 0.0));
+    }
+
+    let remaining_ratio = 1.0 - (elapsed / total_duration);
+    if remaining_ratio <= 0.0 {
+        return Ok((0.0, 0.0));
+    }
+
+    let regular_refund = regular_used * remaining_ratio;
+    let bonus_refund = bonus_used * remaining_ratio;
+
+    // 更新机器状态为deleted
+    let updated = sqlx::query(
+        "UPDATE machines SET status = 'deleted' WHERE id = ? AND status IN ('running', 'stopped')",
+    )
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Ok((0.0, 0.0));
+    }
+
+    // 退给用户（bonus退bonus，regular退regular）
+    if bonus_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?"
+        )
+        .bind(bonus_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if regular_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET core_hours = core_hours + ? WHERE id = ?"
+        )
+        .bind(regular_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // 从机主扣回（bonus扣bonus，regular扣regular）
+    if bonus_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+        )
+        .bind(bonus_refund)
+        .bind(server_owner_id)
+        .bind(bonus_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+    if regular_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+        )
+        .bind(regular_refund)
+        .bind(server_owner_id)
+        .bind(regular_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+
+    tx.commit().await?;
+    Ok((regular_refund, bonus_refund))
+}
+
+/// 添加NAT端口映射时实时扣费
+pub async fn charge_nat_port_add(machine_id: i64, port_count: i32) -> anyhow::Result<(f64, f64)> {
+    let pool = crate::db::get_db();
+    let mut tx = pool.begin().await?;
+
+    let machine: Option<(i64, i64, f64, f64, f64, DateTime<Utc>, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT user_id, server_id, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, created_at, expires_at, status FROM machines WHERE id = ?",
+    )
+    .bind(machine_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (user_id, server_id, old_per_hour, regular_used, bonus_used, _created_at, expires_at, status) = match machine {
+        Some(m) => m,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    if status != "running" && status != "stopped" {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let now = Utc::now();
+    if now >= expires_at {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let remaining_hours = (expires_at - now).num_seconds() as f64 / 3600.0;
+    if remaining_hours <= 0.0 {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let server: Option<(i64, f64)> = sqlx::query_as(
+        "SELECT owner_id, nat_multiplier FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (server_owner_id, nat_multiplier) = match server {
+        Some(s) => s,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    let nat_cost_per_port = crate::services::core_hours::calculate_nat_cost_per_port_per_hour(nat_multiplier).await;
+    let total_additional_per_hour = port_count as f64 * nat_cost_per_port;
+    let total_cost = total_additional_per_hour * remaining_hours;
+
+    if total_cost <= 0.0 {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let user_balance: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT bonus_core_hours, core_hours FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (user_bonus, user_regular) = user_balance.unwrap_or((0.0, 0.0));
+
+    let bonus_to_charge = total_cost.min(user_bonus);
+    let regular_to_charge = total_cost - bonus_to_charge;
+
+    if regular_to_charge > user_regular {
+        let _ = tx.rollback().await;
+        anyhow::bail!("insufficient balance");
+    }
+
+    if bonus_to_charge > 0.0 {
+        sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+        )
+        .bind(bonus_to_charge)
+        .bind(user_id)
+        .bind(bonus_to_charge)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if regular_to_charge > 0.0 {
+        sqlx::query(
+            "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+        )
+        .bind(regular_to_charge)
+        .bind(user_id)
+        .bind(regular_to_charge)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if bonus_to_charge > 0.0 {
+        sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?"
+        )
+        .bind(bonus_to_charge)
+        .bind(server_owner_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if regular_to_charge > 0.0 {
+        sqlx::query(
+            "UPDATE users SET core_hours = core_hours + ? WHERE id = ?"
+        )
+        .bind(regular_to_charge)
+        .bind(server_owner_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Log owner income for freeze period tracking
+    sqlx::query(
+        "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'nat_port', ?)"
+    )
+    .bind(server_owner_id)
+    .bind(regular_to_charge)
+    .bind(bonus_to_charge)
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let new_per_hour = old_per_hour + total_additional_per_hour;
+    let new_regular_used = regular_used + regular_to_charge;
+    let new_bonus_used = bonus_used + bonus_to_charge;
+
+    sqlx::query(
+        "UPDATE machines SET core_hours_per_hour = ?, regular_core_hours_used = ?, bonus_core_hours_used = ? WHERE id = ?"
+    )
+    .bind(new_per_hour)
+    .bind(new_regular_used)
+    .bind(new_bonus_used)
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok((regular_to_charge, bonus_to_charge))
+}
+
+/// 删除NAT端口映射时实时退款
+pub async fn refund_nat_port_remove(machine_id: i64, port_count: i32) -> anyhow::Result<(f64, f64)> {
+    let pool = crate::db::get_db();
+    let mut tx = pool.begin().await?;
+
+    let machine: Option<(i64, i64, f64, f64, f64, DateTime<Utc>, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT user_id, server_id, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, created_at, expires_at, status FROM machines WHERE id = ?",
+    )
+    .bind(machine_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (user_id, server_id, old_per_hour, regular_used, bonus_used, _created_at, expires_at, status) = match machine {
+        Some(m) => m,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    if status != "running" && status != "stopped" {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let now = Utc::now();
+    if now >= expires_at {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let remaining_hours = (expires_at - now).num_seconds() as f64 / 3600.0;
+    if remaining_hours <= 0.0 {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let total_used = regular_used + bonus_used;
+    if total_used <= 0.0 {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let server: Option<(i64, f64)> = sqlx::query_as(
+        "SELECT owner_id, nat_multiplier FROM servers WHERE id = ?",
+    )
+    .bind(server_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (server_owner_id, nat_multiplier) = match server {
+        Some(s) => s,
+        None => {
+            let _ = tx.rollback().await;
+            return Ok((0.0, 0.0));
+        }
+    };
+
+    let nat_cost_per_port = crate::services::core_hours::calculate_nat_cost_per_port_per_hour(nat_multiplier).await;
+    let remove_per_hour = port_count as f64 * nat_cost_per_port;
+    let total_refund = remove_per_hour * remaining_hours;
+
+    if total_refund <= 0.0 {
+        let _ = tx.rollback().await;
+        return Ok((0.0, 0.0));
+    }
+
+    let bonus_ratio = if total_used > 0.0 { bonus_used / total_used } else { 0.0 };
+    let bonus_refund = total_refund * bonus_ratio;
+    let regular_refund = total_refund - bonus_refund;
+
+    let actual_bonus_refund = bonus_refund.min(bonus_used);
+    let actual_regular_refund = regular_refund.min(regular_used);
+
+    if actual_bonus_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?"
+        )
+        .bind(actual_bonus_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if actual_regular_refund > 0.0 {
+        sqlx::query(
+            "UPDATE users SET core_hours = core_hours + ? WHERE id = ?"
+        )
+        .bind(actual_regular_refund)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if actual_bonus_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET bonus_core_hours = bonus_core_hours - ? WHERE id = ? AND bonus_core_hours >= ?"
+        )
+        .bind(actual_bonus_refund)
+        .bind(server_owner_id)
+        .bind(actual_bonus_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+    if actual_regular_refund > 0.0 {
+        let _ = sqlx::query(
+            "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?"
+        )
+        .bind(actual_regular_refund)
+        .bind(server_owner_id)
+        .bind(actual_regular_refund)
+        .execute(&mut *tx)
+        .await;
+    }
+
+    // Log negative owner income for refund tracking
+    if actual_bonus_refund > 0.0 || actual_regular_refund > 0.0 {
+        sqlx::query(
+            "INSERT INTO owner_income_logs (user_id, regular_amount, bonus_amount, source_type, source_id) VALUES (?, ?, ?, 'nat_port_refund', ?)"
+        )
+        .bind(server_owner_id)
+        .bind(-actual_regular_refund)
+        .bind(-actual_bonus_refund)
+        .bind(machine_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let new_per_hour = (old_per_hour - remove_per_hour).max(0.0);
+    let new_regular_used = (regular_used - actual_regular_refund).max(0.0);
+    let new_bonus_used = (bonus_used - actual_bonus_refund).max(0.0);
+
+    sqlx::query(
+        "UPDATE machines SET core_hours_per_hour = ?, regular_core_hours_used = ?, bonus_core_hours_used = ? WHERE id = ?"
+    )
+    .bind(new_per_hour)
+    .bind(new_regular_used)
+    .bind(new_bonus_used)
+    .bind(machine_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok((actual_regular_refund, actual_bonus_refund))
 }
