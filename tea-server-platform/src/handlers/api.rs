@@ -1063,7 +1063,7 @@ async fn api_packages(_headers: HeaderMap) -> impl IntoResponse {
 pub struct AdminUpdateUser {
     pub is_banned: Option<bool>,
     pub core_hours: Option<f64>,
-    pub ldc_balance: Option<f64>,
+    pub bonus_core_hours: Option<f64>,
     pub is_admin: Option<bool>,
 }
 
@@ -1146,9 +1146,9 @@ async fn api_admin_user_update(
             .execute(pool)
             .await;
     }
-    if let Some(ldc) = form.ldc_balance {
-        let _ = sqlx::query("UPDATE users SET ldc_balance = ? WHERE id = ?")
-            .bind(ldc)
+    if let Some(bonus) = form.bonus_core_hours {
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = ? WHERE id = ?")
+            .bind(bonus)
             .bind(id)
             .execute(pool)
             .await;
@@ -1801,16 +1801,16 @@ async fn api_buy_premium(
         None => return (StatusCode::NOT_FOUND, Json(json!({"error":"user_not_found"}))).into_response(),
     };
 
-    if user.ldc_balance < cost {
-        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_ldc","message":"LDC 余额不足"}))).into_response();
+    if user.core_hours < cost {
+        return (StatusCode::PAYMENT_REQUIRED, Json(json!({"error":"insufficient_balance","message":"核时余额不足"}))).into_response();
     }
 
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
         .bind(cost).bind(user_id).execute(pool).await;
     let _ = sqlx::query("UPDATE servers SET is_premium = 1 WHERE id = ?")
         .bind(server_id).execute(pool).await;
 
-    ok_response(json!({"server_id": server_id, "is_premium": true, "cost_ldc": cost})).into_response()
+    ok_response(json!({"server_id": server_id, "is_premium": true, "cost": cost})).into_response()
 }
 
 // ==============================

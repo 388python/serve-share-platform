@@ -346,10 +346,6 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
                 &session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string()),
             );
             ctx.insert(
-                "user_ldc",
-                &session.get("ldc_balance").cloned().unwrap_or_else(|| "0".to_string()),
-            );
-            ctx.insert(
                 "is_admin",
                 &session.get("is_admin").cloned().unwrap_or_else(|| "false".to_string()),
             );
@@ -576,8 +572,8 @@ async fn auth_callback(
 
     // Upsert user in database
     let pool = db::get_db();
-    let existing: Option<(i64, bool, f64, f64)> = sqlx::query_as(
-        "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
+    let existing: Option<(i64, bool, f64)> = sqlx::query_as(
+        "SELECT id, is_admin, core_hours FROM users WHERE linuxdo_id = ?",
     )
     .bind(user_info.id)
     .fetch_optional(pool)
@@ -587,13 +583,11 @@ async fn auth_callback(
     let user_id: i64;
     let is_admin: bool;
     let core_hours: f64;
-    let ldc_balance: f64;
 
-    if let Some((uid, admin, ch, ldc)) = existing {
+    if let Some((uid, admin, ch)) = existing {
         user_id = uid;
         is_admin = admin;
         core_hours = ch;
-        ldc_balance = ldc;
     } else {
         // Check registration enabled
         let reg_enabled = db::get_config("registration_enabled").await
@@ -668,7 +662,7 @@ async fn auth_callback(
         }
 
         sqlx::query(
-            "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (?, ?, ?, 0, ?, 0)",
+            "INSERT INTO users (linuxdo_id, username, email, core_hours, is_admin) VALUES (?, ?, ?, ?, 0)",
         )
         .bind(user_info.id)
         .bind(user_info.effective_name())
@@ -679,13 +673,13 @@ async fn auth_callback(
         .map_err(|e| tracing::error!("Failed to create user: {}", e))
         .ok();
 
-        let new_user: (i64, bool, f64, f64) = sqlx::query_as(
-            "SELECT id, is_admin, core_hours, ldc_balance FROM users WHERE linuxdo_id = ?",
+        let new_user: (i64, bool, f64) = sqlx::query_as(
+            "SELECT id, is_admin, core_hours FROM users WHERE linuxdo_id = ?",
         )
         .bind(user_info.id)
         .fetch_one(pool)
         .await
-        .unwrap_or((0, false, 0.0, 0.0));
+        .unwrap_or((0, false, 0.0));
 
         // 如果有待处理的邀请码，现在回填使用人
         if let Some(invite_id) = pending_invite_id {
@@ -699,7 +693,6 @@ async fn auth_callback(
         user_id = new_user.0;
         is_admin = new_user.1;
         core_hours = new_user.2;
-        ldc_balance = new_user.3;
     }
 
     handlers::set_session_cookie_wrapper(
@@ -708,7 +701,6 @@ async fn auth_callback(
         &user_info.effective_name(),
         is_admin,
         core_hours,
-        ldc_balance,
     );
 
     // 清除 state 和 invite_code cookie

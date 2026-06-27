@@ -9,7 +9,6 @@ pub struct User {
     pub linuxdo_id: i64,
     pub username: String,
     pub email: String,
-    pub ldc_balance: f64,
     pub core_hours: f64,
     pub bonus_core_hours: f64,
     pub bonus_expires_at: Option<DateTime<Utc>>,

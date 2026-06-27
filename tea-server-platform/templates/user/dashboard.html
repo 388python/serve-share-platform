@@ -16,21 +16,10 @@
 </div>
 
 <div class="row mb-4">
-    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-1">
+    <div class="col-md-4 mb-3 animate-fade-in-up animate-delay-1">
         <div class="stat-card-gradient stat-card-primary h-100">
             <div class="stat-icon">
-                <i class="bi bi-coin"></i>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value">{{ user_ldc | default(value="0") }}</div>
-                <div class="stat-label">LDC 余额</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-2">
-        <div class="stat-card-gradient stat-card-success h-100">
-            <div class="stat-icon">
-                <i class="bi bi-stopwatch-fill"></i>
+                <i class="bi bi-clock"></i>
             </div>
             <div class="stat-content">
                 <div class="stat-value">{{ user_balance | default(value="0") }}</div>
@@ -38,7 +27,18 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3 mb-3 animate-fade-in-up animate-delay-3">
+    <div class="col-md-4 mb-3 animate-fade-in-up animate-delay-2">
+        <div class="stat-card-gradient stat-card-success h-100">
+            <div class="stat-icon">
+                <i class="bi bi-gift"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">{{ bonus_hours | default(value="0") }}</div>
+                <div class="stat-label">赠额核时</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 mb-3 animate-fade-in-up animate-delay-3">
         <div class="stat-card-gradient stat-card-info h-100">
             <div class="stat-icon">
                 <i class="bi bi-clock-history"></i>

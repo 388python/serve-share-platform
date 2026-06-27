@@ -27,7 +27,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             linuxdo_id INTEGER NOT NULL UNIQUE,
             username TEXT NOT NULL,
             email TEXT NOT NULL DEFAULT '',
-            ldc_balance REAL NOT NULL DEFAULT 0,
             core_hours REAL NOT NULL DEFAULT 0,
             total_usage_hours REAL NOT NULL DEFAULT 0,
             is_admin INTEGER NOT NULL DEFAULT 0,

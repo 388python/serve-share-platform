@@ -65,20 +65,18 @@ pub struct SessionPayload {
     pub username: String,
     pub is_admin: bool,
     pub core_hours: f64,
-    pub ldc_balance: f64,
     pub iat: i64,   // issued at (unix timestamp)
     pub exp: i64,   // expires
 }
 
 impl SessionPayload {
-    pub fn new(user_id: i64, username: &str, is_admin: bool, core_hours: f64, ldc_balance: f64) -> Self {
+    pub fn new(user_id: i64, username: &str, is_admin: bool, core_hours: f64) -> Self {
         let now = Utc::now().timestamp();
         Self {
             user_id,
             username: username.to_string(),
             is_admin,
             core_hours,
-            ldc_balance,
             iat: now,
             exp: now + SESSION_TTL_SECS,
         }
@@ -153,7 +151,6 @@ fn build_base_context(cookies: &Cookies, ctx: &mut Context) {
         if let Some(session) = decode_session(session_cookie.value()) {
             ctx.insert("user_name", &session.username);
             ctx.insert("user_balance", &format!("{:.2}", session.core_hours));
-            ctx.insert("user_ldc", &format!("{:.2}", session.ldc_balance));
             ctx.insert("is_admin", &session.is_admin.to_string());
         }
     }
@@ -165,9 +162,8 @@ fn set_session_cookie(
     username: &str,
     is_admin: bool,
     core_hours: f64,
-    ldc_balance: f64,
 ) {
-    let payload = SessionPayload::new(user_id, username, is_admin, core_hours, ldc_balance);
+    let payload = SessionPayload::new(user_id, username, is_admin, core_hours);
     let cookie_value = encode_session(&payload);
 
     let mut cookie = Cookie::new("session", cookie_value);
@@ -187,7 +183,6 @@ pub fn parse_signed_session_wrapper(
     map.insert("username".to_string(), session.username);
     map.insert("user_id".to_string(), session.user_id.to_string());
     map.insert("core_hours".to_string(), format!("{:.2}", session.core_hours));
-    map.insert("ldc_balance".to_string(), format!("{:.2}", session.ldc_balance));
     map.insert("is_admin".to_string(), session.is_admin.to_string());
     Some(map)
 }
@@ -199,9 +194,8 @@ pub fn set_session_cookie_wrapper(
     username: &str,
     is_admin: bool,
     core_hours: f64,
-    ldc_balance: f64,
 ) {
-    set_session_cookie(cookies, user_id, username, is_admin, core_hours, ldc_balance)
+    set_session_cookie(cookies, user_id, username, is_admin, core_hours)
 }
 
 // ---- Password Comparison (Constant-Time) ----
@@ -246,42 +240,42 @@ pub async fn admin_login(
     }
 
     let pool = db::get_db();
-    let user: Option<(i64, f64, f64)> = sqlx::query_as(
-        "SELECT id, core_hours, ldc_balance FROM users WHERE username = ?",
+    let user: Option<(i64, f64)> = sqlx::query_as(
+        "SELECT id, core_hours FROM users WHERE username = ?",
     )
     .bind(&params.username)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (user_id, core_hours, ldc_balance) = match user {
-        Some((uid, ch, ldc)) => {
+    let (user_id, core_hours) = match user {
+        Some((uid, ch)) => {
             let _ = sqlx::query("UPDATE users SET is_admin = 1 WHERE id = ?")
                 .bind(uid)
                 .execute(pool)
                 .await;
-            (uid, ch, ldc)
+            (uid, ch)
         }
         None => {
             let _ = sqlx::query(
-                "INSERT INTO users (linuxdo_id, username, email, ldc_balance, core_hours, is_admin) VALUES (-1, ?, ?, 0, 0, 1)",
+                "INSERT INTO users (linuxdo_id, username, email, core_hours, is_admin) VALUES (-1, ?, ?, 0, 1)",
             )
             .bind(&params.username)
             .bind(format!("{}@admin.local", params.username))
             .execute(pool)
             .await;
 
-            sqlx::query_as::<_, (i64, f64, f64)>(
-                "SELECT id, core_hours, ldc_balance FROM users WHERE username = ?",
+            sqlx::query_as::<_, (i64, f64)>(
+                "SELECT id, core_hours FROM users WHERE username = ?",
             )
             .bind(&params.username)
             .fetch_one(pool)
             .await
-            .unwrap_or((0, 0.0, 0.0))
+            .unwrap_or((0, 0.0))
         }
     };
 
-    set_session_cookie(&cookies, user_id, &params.username, true, core_hours, ldc_balance);
+    set_session_cookie(&cookies, user_id, &params.username, true, core_hours);
     Redirect::to("/admin").into_response()
 }
 
@@ -320,7 +314,7 @@ pub async fn user_dashboard(
     let pool = db::get_db();
 
     let user: (f64, f64) = sqlx::query_as(
-        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
+        "SELECT core_hours, bonus_core_hours FROM users WHERE id = ?",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -353,7 +347,7 @@ pub async fn user_dashboard(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
     ctx.insert("user_hours", &format!("{:.2}", user.0));
-    ctx.insert("user_ldc", &format!("{:.2}", user.1));
+    ctx.insert("bonus_hours", &format!("{:.2}", user.1));
     ctx.insert("api_key", &api_key.unwrap_or_default());
     ctx.insert("machines", &machines);
     ctx.insert("packages", &packages);
@@ -556,19 +550,19 @@ pub async fn buy_premium(
         return Redirect::to("/servers/contribute").into_response();
     }
 
-    let ldc_cost = 10.0;
-    let current_ldc: f64 = sqlx::query_scalar("SELECT ldc_balance FROM users WHERE id = ?")
+    let hours_cost = 10.0;
+    let current_hours: f64 = sqlx::query_scalar("SELECT core_hours FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_one(pool)
         .await
         .unwrap_or(0.0);
 
-    if current_ldc < ldc_cost {
-        return Redirect::to("/servers/contribute?error=insufficient_ldc").into_response();
+    if current_hours < hours_cost {
+        return Redirect::to("/servers/contribute?error=insufficient_balance").into_response();
     }
 
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(ldc_cost)
+    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+        .bind(hours_cost)
         .bind(user_id)
         .execute(pool)
         .await;
@@ -1193,13 +1187,13 @@ pub async fn withdraw_page(
     build_base_context(&cookies, &mut ctx);
 
     let pool = db::get_db();
-    let user: (f64, f64) = sqlx::query_as(
-        "SELECT core_hours, ldc_balance FROM users WHERE id = ?",
+    let user: (f64,) = sqlx::query_as(
+        "SELECT core_hours FROM users WHERE id = ?",
     )
     .bind(user_id)
     .fetch_one(pool)
     .await
-    .unwrap_or((0.0, 0.0));
+    .unwrap_or((0.0,));
 
     let fee_rate: f64 = db::get_config("withdraw_fee")
         .await
@@ -1207,7 +1201,6 @@ pub async fn withdraw_page(
         .unwrap_or(0.0);
 
     ctx.insert("user_hours", &format!("{:.2}", user.0));
-    ctx.insert("user_ldc", &format!("{:.2}", user.1));
     ctx.insert("withdraw_fee", &fee_rate);
 
     let rendered = state
@@ -1259,7 +1252,7 @@ pub async fn withdraw_submit(
 
     // 原子扣减余额（用 WHERE 条件确保不会扣成负数）
     let deduct_result = sqlx::query(
-        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+        "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?",
     )
     .bind(total_deduct)
     .bind(user_id)
@@ -1316,7 +1309,7 @@ pub async fn withdraw_submit(
                 .await;
                 // 退款
                 let _ = sqlx::query(
-                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
+                    "UPDATE users SET core_hours = core_hours + ? WHERE id = ?",
                 )
                 .bind(amount + fee)
                 .bind(user_id)
@@ -1334,7 +1327,7 @@ pub async fn withdraw_submit(
                 .await;
                 // 退款
                 let _ = sqlx::query(
-                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
+                    "UPDATE users SET core_hours = core_hours + ? WHERE id = ?",
                 )
                 .bind(amount + fee)
                 .bind(user_id)
@@ -1528,16 +1521,16 @@ pub async fn admin_user_edit(
 
     let pool = db::get_db();
 
-    if let Some(ldc) = form.get("ldc_balance").and_then(|v| v.parse::<f64>().ok()) {
-        let _ = sqlx::query("UPDATE users SET ldc_balance = ? WHERE id = ?")
-            .bind(ldc)
+    if let Some(hours) = form.get("core_hours").and_then(|v| v.parse::<f64>().ok()) {
+        let _ = sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
+            .bind(hours)
             .bind(id)
             .execute(pool)
             .await;
     }
-    if let Some(hours) = form.get("core_hours").and_then(|v| v.parse::<f64>().ok()) {
-        let _ = sqlx::query("UPDATE users SET core_hours = ? WHERE id = ?")
-            .bind(hours)
+    if let Some(bonus) = form.get("bonus_core_hours").and_then(|v| v.parse::<f64>().ok()) {
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = ? WHERE id = ?")
+            .bind(bonus)
             .bind(id)
             .execute(pool)
             .await;
@@ -1725,7 +1718,7 @@ pub async fn balance_to_code(
 
     // 原子扣减（WHERE条件确保不会负数）
     let deduct_result = sqlx::query(
-        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+        "UPDATE users SET core_hours = core_hours - ? WHERE id = ? AND core_hours >= ?",
     )
     .bind(total_deduct)
     .bind(user_id)
