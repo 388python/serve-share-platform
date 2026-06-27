@@ -42,9 +42,25 @@ AGENT_PORT = 19527
 STATS_REPORT_INTERVAL = 60
 
 USED_PORTS: set = set()
+USED_PORTS_LOCK = threading.Lock()
 
 VIRTIO_ISO_PATH = "/var/lib/libvirt/images/virtio-win.iso"
 WINDOWS_AUTOUNATTEND_PATH = "/var/lib/libvirt/images/autounattend.xml"
+
+
+def escape_shell_arg(s: str) -> str:
+    """Escape a string for safe use in shell commands.
+    Returns the string wrapped in single quotes with internal single quotes escaped."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def escape_xml_attr(s: str) -> str:
+    """Escape a string for safe use in XML attribute values."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&apos;"))
 
 SYSTEM_IMAGES: Dict[str, Dict[str, Any]] = {
     "ubuntu:22.04": {"lxd": "ubuntu:22.04", "kvm": "/var/lib/libvirt/images/base-ubuntu-22.04.qcow2", "type": "linux", "ssh": True},
@@ -226,26 +242,28 @@ def platform_request(endpoint: str, method: str = "GET", data: Optional[Dict[str
 # =============================================================================
 
 def allocate_port() -> int:
-    """Allocate an available port from the port range"""
-    for port in range(PORT_RANGE_START, PORT_RANGE_END):
-        if port in USED_PORTS:
-            continue
+    """Allocate an available port from the port range (thread-safe)"""
+    with USED_PORTS_LOCK:
+        for port in range(PORT_RANGE_START, PORT_RANGE_END):
+            if port in USED_PORTS:
+                continue
 
-        result = subprocess.run(
-            ["ss", "-tlnp"],
-            capture_output=True, text=True, timeout=5
-        )
-        if f":{port}" not in result.stdout:
-            USED_PORTS.add(port)
-            return port
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True, timeout=5
+            )
+            if f":{port}" not in result.stdout:
+                USED_PORTS.add(port)
+                return port
 
-    raise RuntimeError("No available ports in range")
+        raise RuntimeError("No available ports in range")
 
 
 def release_port(port: Optional[int]) -> None:
-    """Release an allocated port"""
+    """Release an allocated port (thread-safe)"""
     if port is not None:
-        USED_PORTS.discard(port)
+        with USED_PORTS_LOCK:
+            USED_PORTS.discard(port)
 
 
 def setup_port_forwarding(host_port: int, vm_ip: str, vm_port: int, protocol: str = "tcp") -> None:
@@ -311,18 +329,32 @@ def inject_ssh_key_kvm(disk_path: str, public_key: str, user: str = "root") -> b
     if not public_key:
         return True
 
+    # 输入校验
+    if not disk_path or not os.path.exists(disk_path):
+        logger.warning("inject_ssh_key_kvm: invalid disk path: %s", disk_path)
+        return False
+
+    # 验证用户名只包含安全字符
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_-]*$', user):
+        logger.warning("inject_ssh_key_kvm: invalid username: %s", user)
+        return False
+
     tmp_key_file = f"/tmp/ssh_key_{os.getpid()}_{int(time.time())}.pub"
     try:
         with open(tmp_key_file, "w") as f:
-            f.write(public_key + "\n")
+            f.write(public_key.strip() + "\n")
+
+        home_dir = "/root" if user == "root" else f"/home/{user}"
+        ssh_dir = f"{home_dir}/.ssh"
+        auth_keys = f"{ssh_dir}/authorized_keys"
 
         cmd = [
             "virt-customize", "-a", disk_path,
-            "--mkdir", f"/home/{user}/.ssh" if user != "root" else "/root/.ssh",
-            "--upload", f"{tmp_key_file}:/{'root' if user == 'root' else 'home/' + user}/.ssh/authorized_keys",
-            "--run-command", f"chmod 700 /{'root' if user == 'root' else 'home/' + user}/.ssh",
-            "--run-command", f"chmod 600 /{'root' if user == 'root' else 'home/' + user}/.ssh/authorized_keys",
-            "--run-command", f"chown -R {user}:{user} /{'root' if user == 'root' else 'home/' + user}/.ssh",
+            "--mkdir", ssh_dir,
+            "--upload", f"{tmp_key_file}:{auth_keys}",
+            "--run-command", f"chmod 700 {escape_shell_arg(ssh_dir)}",
+            "--run-command", f"chmod 600 {escape_shell_arg(auth_keys)}",
+            "--run-command", f"chown -R {escape_shell_arg(user)}:{escape_shell_arg(user)} {escape_shell_arg(ssh_dir)}",
         ]
 
         # 确保 SSH 服务已安装并启用
@@ -330,19 +362,25 @@ def inject_ssh_key_kvm(disk_path: str, public_key: str, user: str = "root") -> b
             "--run-command", "which sshd || which ssh || (apt-get update && apt-get install -y openssh-server && systemctl enable ssh && systemctl start ssh) || (yum install -y openssh-server && systemctl enable sshd && systemctl start sshd) || true",
         ])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if result.returncode == 0:
             logger.info("SSH key injected into KVM disk: %s", disk_path)
             return True
         else:
             logger.warning("virt-customize SSH injection failed: %s", result.stderr)
             return False
+    except subprocess.TimeoutExpired:
+        logger.warning("virt-customize SSH injection timed out")
+        return False
     except Exception as e:
         logger.warning("inject_ssh_key_kvm error: %s", e)
         return False
     finally:
         if os.path.exists(tmp_key_file):
-            os.remove(tmp_key_file)
+            try:
+                os.remove(tmp_key_file)
+            except OSError:
+                pass
 
 
 def generate_windows_autounattend(
@@ -513,38 +551,61 @@ def prepare_windows_kvm_disk(
     - Install/Enable OpenSSH
     - Inject SSH public key
     Returns True on success."""
+    # 输入校验
+    if not disk_path or not os.path.exists(disk_path):
+        logger.warning("prepare_windows_kvm_disk: invalid disk path: %s", disk_path)
+        return False
+
+    if not admin_password:
+        logger.warning("prepare_windows_kvm_disk: empty password")
+        return False
+
     tmp_key = ""
     try:
         cmd = ["virt-customize", "-a", disk_path]
 
+        # 安全设置密码（使用 virt-customize 的标准方式）
         cmd.extend(["--root-password", f"password:{admin_password}"])
 
         if enable_rdp:
             cmd.extend([
-                "--run-command", 'reg add "HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f',
-                "--run-command", 'netsh advfirewall firewall set rule group="remote desktop" new enable=Yes',
+                "--run-command",
+                'reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f',
+            ])
+            cmd.extend([
+                "--run-command",
+                'netsh advfirewall firewall set rule group="remote desktop" new enable=Yes',
             ])
 
         if enable_openssh:
             cmd.extend([
-                "--run-command", "powershell -Command \"Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0\"",
-                "--run-command", "powershell -Command \"Set-Service -Name sshd -StartupType 'Automatic'\"",
-                "--run-command", "netsh advfirewall firewall add rule name='OpenSSH SSH Server' dir=in action=allow protocol=TCP localport=22",
+                "--run-command",
+                'powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"',
+            ])
+            cmd.extend([
+                "--run-command",
+                'powershell -Command "Set-Service -Name sshd -StartupType Automatic"',
+            ])
+            cmd.extend([
+                "--run-command",
+                'netsh advfirewall firewall add rule name="OpenSSH SSH Server" dir=in action=allow protocol=TCP localport=22',
             ])
 
             if ssh_public_key:
                 tmp_key = f"/tmp/win_ssh_key_{os.getpid()}_{int(time.time())}.pub"
                 with open(tmp_key, "w") as f:
-                    f.write(ssh_public_key + "\n")
+                    f.write(ssh_public_key.strip() + "\n")
 
                 cmd.extend([
                     "--mkdir", "C:/ProgramData/ssh",
                     "--upload", f"{tmp_key}:C:/ProgramData/ssh/administrators_authorized_keys",
-                    "--run-command", 'icacls "C:\\\\ProgramData\\\\ssh\\\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"',
+                    "--run-command",
+                    'icacls "C:\\ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"',
                 ])
 
         cmd.extend([
-            "--run-command", 'netsh advfirewall firewall add rule name="ICMP Allow" protocol=icmpv4:8,any dir=in action=allow',
+            "--run-command",
+            'netsh advfirewall firewall add rule name="ICMP Allow" protocol=icmpv4:8,any dir=in action=allow',
         ])
 
         logger.info("Running virt-customize on Windows image...")
@@ -556,6 +617,9 @@ def prepare_windows_kvm_disk(
         else:
             logger.warning("virt-customize failed: %s", result.stderr)
             return False
+    except subprocess.TimeoutExpired:
+        logger.warning("virt-customize timed out")
+        return False
     except Exception as e:
         logger.warning("prepare_windows_kvm_disk error: %s", e)
         return False
@@ -1174,6 +1238,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         )
 
         # 在启动前预处理磁盘
+        prep_failed = False
         if is_windows:
             # Windows: 设置密码、启用RDP、安装OpenSSH、注入SSH密钥
             logger.info("Preparing Windows disk image...")
@@ -1184,11 +1249,13 @@ class AgentHandler(BaseHTTPRequestHandler):
                 supports_rdp,
                 supports_ssh
             ):
-                logger.warning("Windows disk preparation partially failed, continuing anyway")
+                logger.warning("Windows disk preparation failed, VM may not be fully configured")
+                prep_failed = True
         elif supports_ssh and ssh_public_key:
             # Linux: 注入 SSH 密钥
             logger.info("Injecting SSH key into Linux KVM disk...")
-            inject_ssh_key_kvm(disk_path, ssh_public_key, "root")
+            if not inject_ssh_key_kvm(disk_path, ssh_public_key, "root"):
+                logger.warning("SSH key injection failed")
 
         ssh_external_port = allocate_port() if supports_ssh else None
         rdp_external_port = allocate_port() if supports_rdp else None
@@ -1203,6 +1270,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             release_port(rdp_external_port)
             release_port(vnc_external_port)
             release_port(novnc_external_port)
+            # 清理已创建的磁盘镜像
+            if os.path.exists(disk_path):
+                try:
+                    os.remove(disk_path)
+                except OSError:
+                    pass
             self._send_json({"status": "error", "error": result.stderr})
             return
 
