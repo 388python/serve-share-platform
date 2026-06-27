@@ -305,6 +305,268 @@ def inject_ssh_key(name: str, public_key: str, virt: str = "lxd") -> None:
         lxc_exec(name, "mkdir -p /run/sshd && /usr/sbin/sshd || service ssh start || systemctl start sshd 2>/dev/null || true", timeout=20)
 
 
+def inject_ssh_key_kvm(disk_path: str, public_key: str, user: str = "root") -> bool:
+    """Inject SSH public key into KVM VM disk image using virt-customize.
+    Returns True on success, False on failure."""
+    if not public_key:
+        return True
+
+    tmp_key_file = f"/tmp/ssh_key_{os.getpid()}_{int(time.time())}.pub"
+    try:
+        with open(tmp_key_file, "w") as f:
+            f.write(public_key + "\n")
+
+        cmd = [
+            "virt-customize", "-a", disk_path,
+            "--mkdir", f"/home/{user}/.ssh" if user != "root" else "/root/.ssh",
+            "--upload", f"{tmp_key_file}:/{'root' if user == 'root' else 'home/' + user}/.ssh/authorized_keys",
+            "--run-command", f"chmod 700 /{'root' if user == 'root' else 'home/' + user}/.ssh",
+            "--run-command", f"chmod 600 /{'root' if user == 'root' else 'home/' + user}/.ssh/authorized_keys",
+            "--run-command", f"chown -R {user}:{user} /{'root' if user == 'root' else 'home/' + user}/.ssh",
+        ]
+
+        # 确保 SSH 服务已安装并启用
+        cmd.extend([
+            "--run-command", "which sshd || which ssh || (apt-get update && apt-get install -y openssh-server && systemctl enable ssh && systemctl start ssh) || (yum install -y openssh-server && systemctl enable sshd && systemctl start sshd) || true",
+        ])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode == 0:
+            logger.info("SSH key injected into KVM disk: %s", disk_path)
+            return True
+        else:
+            logger.warning("virt-customize SSH injection failed: %s", result.stderr)
+            return False
+    except Exception as e:
+        logger.warning("inject_ssh_key_kvm error: %s", e)
+        return False
+    finally:
+        if os.path.exists(tmp_key_file):
+            os.remove(tmp_key_file)
+
+
+def generate_windows_autounattend(
+    admin_password: str,
+    computer_name: str = "WIN-VM",
+    enable_rdp: bool = True,
+    enable_openssh: bool = True,
+    ssh_public_key: str = ""
+) -> str:
+    """Generate Windows autounattend.xml for unattended installation/setup.
+    Returns the path to the generated XML file."""
+    xml_content = f'''<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <UserAccounts>
+                <AdministratorPassword>
+                    <Value>{admin_password}</Value>
+                    <PlainText>true</PlainText>
+                </AdministratorPassword>
+            </UserAccounts>
+            <AutoLogon>
+                <Password>
+                    <Value>{admin_password}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <Username>Administrator</Username>
+                <Enabled>true</Enabled>
+                <LogonCount>1</LogonCount>
+            </AutoLogon>
+            <ComputerName>{computer_name}</ComputerName>
+            <TimeZone>China Standard Time</TimeZone>
+        </component>
+    </settings>
+    <settings pass="specialize">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <ComputerName>{computer_name}</ComputerName>
+            <ProductKey></ProductKey>
+        </component>
+        <component name="Microsoft-Windows-TerminalServices-LocalSessionManager" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <fDenyTSConnections>{'false' if enable_rdp else 'true'}</fDenyTSConnections>
+        </component>
+    </settings>
+</unattend>'''
+
+    xml_path = f"/tmp/autounattend_{os.getpid()}_{int(time.time())}.xml"
+    with open(xml_path, "w", encoding="utf-8") as f:
+        f.write(xml_content)
+    return xml_path
+
+
+def create_windows_setup_complete_script(
+    admin_password: str,
+    enable_rdp: bool = True,
+    enable_openssh: bool = True,
+    ssh_public_key: str = ""
+) -> str:
+    """Create SetupComplete.cmd script for Windows first boot initialization.
+    Returns the path to the script file."""
+    rdp_commands = ""
+    if enable_rdp:
+        rdp_commands = '''
+:: Enable RDP
+reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+reg add "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+:: Allow RDP through firewall
+netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+'''
+
+    openssh_commands = ""
+    ssh_key_commands = ""
+    if enable_openssh:
+        openssh_commands = '''
+:: Install OpenSSH Server
+powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
+:: Set SSH service to automatic startup
+powershell -Command "Set-Service -Name sshd -StartupType 'Automatic'"
+:: Start SSH service
+powershell -Command "Start-Service sshd"
+:: Allow SSH through firewall
+netsh advfirewall firewall add rule name="OpenSSH SSH Server" dir=in action=allow protocol=TCP localport=22
+'''
+        if ssh_public_key:
+            ssh_key_commands = f'''
+:: Add SSH public key for Administrator
+mkdir "C:\\ProgramData\\ssh"
+echo {ssh_public_key} > "C:\\ProgramData\\ssh\\administrators_authorized_keys"
+icacls "C:\\ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+'''
+
+    script_content = f'''@echo off
+:: Windows SetupComplete.cmd - First boot initialization
+echo Running setup complete script... > C:\\setup_complete.log
+date /t >> C:\\setup_complete.log
+time /t >> C:\\setup_complete.log
+
+{rdp_commands}
+{openssh_commands}
+{ssh_key_commands}
+
+:: Allow ICMP (ping) through firewall
+netsh advfirewall firewall add rule name="ICMP Allow incoming V4 echo request" protocol=icmpv4:8,any dir=in action=allow
+
+:: Disable Windows Defender real-time protection (optional, for performance)
+:: powershell -Command "Set-MpPreference -DisableRealtimeMonitoring $true"
+
+echo Setup complete. >> C:\\setup_complete.log
+date /t >> C:\\setup_complete.log
+time /t >> C:\\setup_complete.log
+'''
+
+    script_path = f"/tmp/SetupComplete_{os.getpid()}_{int(time.time())}.cmd"
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(script_content)
+    return script_path
+
+
+def create_floppy_image(files: List[Tuple[str, str]], output_path: str) -> bool:
+    """Create a floppy disk image with the given files.
+    files: list of (local_path, floppy_path) tuples
+    Returns True on success."""
+    try:
+        # Create blank floppy image
+        result = subprocess.run(
+            ["dd", "if=/dev/zero", f"of={output_path}", "bs=1440k", "count=1"],
+            capture_output=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning("Failed to create floppy image: %s", result.stderr)
+            return False
+
+        # Format as FAT
+        result = subprocess.run(
+            ["mkfs.fat", output_path],
+            capture_output=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning("Failed to format floppy: %s", result.stderr)
+            return False
+
+        # Copy files using mtools
+        for local_path, floppy_path in files:
+            result = subprocess.run(
+                ["mcopy", "-i", output_path, local_path, f"::{floppy_path}"],
+                capture_output=True, timeout=30
+            )
+            if result.returncode != 0:
+                logger.warning("Failed to copy %s to floppy: %s", local_path, result.stderr)
+                return False
+
+        logger.info("Floppy image created: %s", output_path)
+        return True
+    except Exception as e:
+        logger.warning("create_floppy_image error: %s", e)
+        return False
+
+
+def prepare_windows_kvm_disk(
+    disk_path: str,
+    admin_password: str,
+    ssh_public_key: str = "",
+    enable_rdp: bool = True,
+    enable_openssh: bool = True
+) -> bool:
+    """Prepare Windows KVM disk image using virt-customize:
+    - Set administrator password
+    - Enable RDP
+    - Install/Enable OpenSSH
+    - Inject SSH public key
+    Returns True on success."""
+    tmp_key = ""
+    try:
+        cmd = ["virt-customize", "-a", disk_path]
+
+        cmd.extend(["--root-password", f"password:{admin_password}"])
+
+        if enable_rdp:
+            cmd.extend([
+                "--run-command", 'reg add "HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f',
+                "--run-command", 'netsh advfirewall firewall set rule group="remote desktop" new enable=Yes',
+            ])
+
+        if enable_openssh:
+            cmd.extend([
+                "--run-command", "powershell -Command \"Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0\"",
+                "--run-command", "powershell -Command \"Set-Service -Name sshd -StartupType 'Automatic'\"",
+                "--run-command", "netsh advfirewall firewall add rule name='OpenSSH SSH Server' dir=in action=allow protocol=TCP localport=22",
+            ])
+
+            if ssh_public_key:
+                tmp_key = f"/tmp/win_ssh_key_{os.getpid()}_{int(time.time())}.pub"
+                with open(tmp_key, "w") as f:
+                    f.write(ssh_public_key + "\n")
+
+                cmd.extend([
+                    "--mkdir", "C:/ProgramData/ssh",
+                    "--upload", f"{tmp_key}:C:/ProgramData/ssh/administrators_authorized_keys",
+                    "--run-command", 'icacls "C:\\\\ProgramData\\\\ssh\\\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"',
+                ])
+
+        cmd.extend([
+            "--run-command", 'netsh advfirewall firewall add rule name="ICMP Allow" protocol=icmpv4:8,any dir=in action=allow',
+        ])
+
+        logger.info("Running virt-customize on Windows image...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+
+        if result.returncode == 0:
+            logger.info("Windows disk prepared successfully")
+            return True
+        else:
+            logger.warning("virt-customize failed: %s", result.stderr)
+            return False
+    except Exception as e:
+        logger.warning("prepare_windows_kvm_disk error: %s", e)
+        return False
+    finally:
+        if tmp_key and os.path.exists(tmp_key):
+            try:
+                os.remove(tmp_key)
+            except OSError:
+                pass
+
+
 def ensure_docker_in_lxd(name: str) -> None:
     """Ensure Docker is installed and running in LXD container"""
     lxc_exec(
@@ -910,6 +1172,23 @@ class AgentHandler(BaseHTTPRequestHandler):
             ["qemu-img", "create", "-f", "qcow2", "-b", kvm_base, "-F", "qcow2", disk_path, f"{disk}G"],
             capture_output=True, timeout=30
         )
+
+        # 在启动前预处理磁盘
+        if is_windows:
+            # Windows: 设置密码、启用RDP、安装OpenSSH、注入SSH密钥
+            logger.info("Preparing Windows disk image...")
+            if not prepare_windows_kvm_disk(
+                disk_path,
+                root_password,
+                ssh_public_key if supports_ssh else "",
+                supports_rdp,
+                supports_ssh
+            ):
+                logger.warning("Windows disk preparation partially failed, continuing anyway")
+        elif supports_ssh and ssh_public_key:
+            # Linux: 注入 SSH 密钥
+            logger.info("Injecting SSH key into Linux KVM disk...")
+            inject_ssh_key_kvm(disk_path, ssh_public_key, "root")
 
         ssh_external_port = allocate_port() if supports_ssh else None
         rdp_external_port = allocate_port() if supports_rdp else None
