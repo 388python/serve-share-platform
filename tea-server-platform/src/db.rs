@@ -365,7 +365,32 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             fee REAL NOT NULL DEFAULT 0,
             is_bonus INTEGER NOT NULL DEFAULT 0,
             code TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active',
+            redeemed_by INTEGER,
+            redeemed_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create withdraw_orders table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS withdraw_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            out_trade_no TEXT NOT NULL UNIQUE,
+            amount REAL NOT NULL,
+            fee REAL NOT NULL DEFAULT 0,
+            actual_amount REAL NOT NULL,
+            withdraw_address TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            trade_no TEXT,
+            fail_reason TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     "#,
     )

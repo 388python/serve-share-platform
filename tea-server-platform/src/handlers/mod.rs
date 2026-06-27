@@ -1045,40 +1045,129 @@ pub async fn checkin(
 // ---- Recharge / Withdraw ----
 
 pub async fn recharge_callback(
-    cookies: Cookies,
+    State(_state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (user_id, _username, _is_admin) = match require_auth(&cookies) {
-        Ok(v) => v,
-        Err(redirect) => return redirect.into_response(),
-    };
+    let pool = db::get_db();
 
-    let amount: f64 = params
-        .get("amount")
+    tracing::info!(?params, "recharge callback received");
+
+    // 1. 验证签名
+    if !crate::services::ldc_payment::verify_callback(&params).await {
+        tracing::warn!("recharge callback signature verification failed");
+        return "fail";
+    }
+
+    // 2. 获取订单号和金额
+    let out_trade_no = match params.get("out_trade_no") {
+        Some(v) => v.clone(),
+        None => {
+            tracing::warn!("recharge callback missing out_trade_no");
+            return "fail";
+        }
+    };
+    let trade_status = params
+        .get("trade_status")
+        .or_else(|| params.get("status"))
+        .cloned()
+        .unwrap_or_default();
+    let total_fee: f64 = params
+        .get("total_fee")
+        .or_else(|| params.get("money"))
+        .or_else(|| params.get("amount"))
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
 
-    if amount > 0.0 {
-        let pool = db::get_db();
-        let out_trade_no = format!("recharge_{}", Uuid::new_v4());
-        let _ = sqlx::query(
-            "INSERT INTO orders (user_id, out_trade_no, money, ldc_amount, order_name, status) VALUES (?, ?, ?, ?, 'recharge', 'completed')",
-        )
-        .bind(user_id)
-        .bind(&out_trade_no)
-        .bind(amount)
-        .bind(amount)
-        .execute(pool)
-        .await;
-
-        let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?")
-            .bind(amount)
-            .bind(user_id)
-            .execute(pool)
-            .await;
+    // 3. 只处理成功的支付
+    let success_statuses = ["TRADE_SUCCESS", "success", "1", "paid"];
+    if !success_statuses.iter().any(|s| s.eq_ignore_ascii_case(&trade_status)) {
+        tracing::info!(%out_trade_no, %trade_status, "recharge callback: not success status, ignoring");
+        return "success";
     }
 
-    Redirect::to("/dashboard").into_response()
+    if total_fee <= 0.0 {
+        tracing::warn!(%out_trade_no, %total_fee, "recharge callback: invalid amount");
+        return "fail";
+    }
+
+    // 4. 查询订单，检查是否已处理（幂等性）
+    let order: Option<(i64, i64, f64, String)> = sqlx::query_as(
+        "SELECT id, user_id, ldc_amount, status FROM orders WHERE out_trade_no = ?",
+    )
+    .bind(&out_trade_no)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (order_id, user_id, _ldc_amount, status) = match order {
+        Some(o) => o,
+        None => {
+            tracing::warn!(%out_trade_no, "recharge callback: order not found");
+            return "fail";
+        }
+    };
+
+    // 已处理过的订单直接返回成功
+    if status == "completed" {
+        tracing::info!(%out_trade_no, "recharge callback: order already completed");
+        return "success";
+    }
+
+    // 5. 计算到账金额（考虑充值倍率）
+    let multiplier: f64 = db::get_config("recharge_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let fee: f64 = db::get_config("recharge_fee")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let actual_add = (total_fee * multiplier) * (1.0 - fee);
+
+    // 6. 原子更新订单状态 + 增加用户余额（使用事务保证一致性）
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(%e, "failed to begin transaction for recharge");
+            return "fail";
+        }
+    };
+
+    // 标记订单为已完成
+    let update_result = sqlx::query(
+        "UPDATE orders SET status = 'completed', trade_no = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+    )
+    .bind(params.get("trade_no").unwrap_or(&String::new()))
+    .bind(order_id)
+    .execute(&mut *tx)
+    .await;
+
+    if update_result.is_err() || update_result.unwrap().rows_affected() == 0 {
+        let _ = tx.rollback().await;
+        tracing::warn!(%out_trade_no, "recharge callback: order already processed or update failed");
+        return "success";
+    }
+
+    // 增加用户余额
+    let add_result = sqlx::query("UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?")
+        .bind(actual_add)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await;
+
+    if add_result.is_err() {
+        let _ = tx.rollback().await;
+        tracing::error!("recharge callback: failed to add user balance");
+        return "fail";
+    }
+
+    if tx.commit().await.is_err() {
+        tracing::error!("recharge callback: failed to commit transaction");
+        return "fail";
+    }
+
+    tracing::info!(%out_trade_no, %user_id, %total_fee, %actual_add, "recharge callback: success");
+    "success"
 }
 
 pub async fn withdraw_page(
@@ -1098,8 +1187,14 @@ pub async fn withdraw_page(
     .await
     .unwrap_or((0.0, 0.0));
 
+    let fee_rate: f64 = db::get_config("withdraw_fee")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+
     ctx.insert("user_hours", &format!("{:.2}", user.0));
     ctx.insert("user_ldc", &format!("{:.2}", user.1));
+    ctx.insert("withdraw_fee", &fee_rate);
 
     let rendered = state
         .templates
@@ -1109,14 +1204,133 @@ pub async fn withdraw_page(
 }
 
 pub async fn withdraw_submit(
+    State(_state): State<AppState>,
     cookies: Cookies,
-    Form(_form): Form<HashMap<String, String>>,
+    Form(form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (_user_id, _username, _is_admin) = match require_auth(&cookies) {
+    let (user_id, username, _is_admin) = match require_auth(&cookies) {
         Ok(v) => v,
         Err(redirect) => return redirect.into_response(),
     };
-    // 占位：实际提现流程需接入支付系统
+
+    let amount: f64 = form
+        .get("amount")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+
+    if amount <= 0.0 {
+        return Redirect::to("/withdraw?error=invalid_amount").into_response();
+    }
+
+    let pool = db::get_db();
+
+    // 最小提现额
+    if amount < 1.0 {
+        return Redirect::to("/withdraw?error=min_withdraw").into_response();
+    }
+
+    // 计算手续费
+    let fee_rate: f64 = db::get_config("withdraw_fee")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    let fee = amount * fee_rate;
+    let total_deduct = amount + fee;
+
+    // 事务：冻结余额 + 创建提现订单
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return Redirect::to("/withdraw?error=system_error").into_response(),
+    };
+
+    // 原子扣减余额（用 WHERE 条件确保不会扣成负数）
+    let deduct_result = sqlx::query(
+        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+    )
+    .bind(total_deduct)
+    .bind(user_id)
+    .bind(total_deduct)
+    .execute(&mut *tx)
+    .await;
+
+    if deduct_result.is_err() || deduct_result.unwrap().rows_affected() == 0 {
+        let _ = tx.rollback().await;
+        return Redirect::to("/withdraw?error=insufficient_balance").into_response();
+    }
+
+    // 创建提现订单
+    let out_trade_no = format!("withdraw_{}", Uuid::new_v4().to_string().replace('-', ""));
+    let insert_result = sqlx::query(
+        "INSERT INTO withdraw_orders (user_id, out_trade_no, amount, fee, actual_amount, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+    )
+    .bind(user_id)
+    .bind(&out_trade_no)
+    .bind(amount)
+    .bind(fee)
+    .bind(amount)
+    .execute(&mut *tx)
+    .await;
+
+    if insert_result.is_err() {
+        let _ = tx.rollback().await;
+        return Redirect::to("/withdraw?error=system_error").into_response();
+    }
+
+    if tx.commit().await.is_err() {
+        return Redirect::to("/withdraw?error=system_error").into_response();
+    }
+
+    // 异步调用 LDC 分发接口（后台处理）
+    tokio::spawn(async move {
+        let cfg = crate::config::AppConfig::get();
+        match crate::services::ldc_payment::distribute_ldc(cfg, user_id, &username, amount, &out_trade_no).await {
+            Ok(true) => {
+                let _ = sqlx::query(
+                    "UPDATE withdraw_orders SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE out_trade_no = ?",
+                )
+                .bind(&out_trade_no)
+                .execute(db::get_db())
+                .await;
+                tracing::info!(%out_trade_no, %user_id, %amount, "withdraw completed");
+            }
+            Ok(false) => {
+                let _ = sqlx::query(
+                    "UPDATE withdraw_orders SET status = 'failed', fail_reason = 'distribute failed', updated_at = CURRENT_TIMESTAMP WHERE out_trade_no = ?",
+                )
+                .bind(&out_trade_no)
+                .execute(db::get_db())
+                .await;
+                // 退款
+                let _ = sqlx::query(
+                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
+                )
+                .bind(amount + fee)
+                .bind(user_id)
+                .execute(db::get_db())
+                .await;
+                tracing::warn!(%out_trade_no, %user_id, "withdraw distribute failed, refunded");
+            }
+            Err(e) => {
+                let _ = sqlx::query(
+                    "UPDATE withdraw_orders SET status = 'failed', fail_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE out_trade_no = ?",
+                )
+                .bind(format!("{}", e))
+                .bind(&out_trade_no)
+                .execute(db::get_db())
+                .await;
+                // 退款
+                let _ = sqlx::query(
+                    "UPDATE users SET ldc_balance = ldc_balance + ? WHERE id = ?",
+                )
+                .bind(amount + fee)
+                .bind(user_id)
+                .execute(db::get_db())
+                .await;
+                tracing::error!(%e, %out_trade_no, %user_id, "withdraw distribute error, refunded");
+            }
+        }
+    });
+
     Redirect::to("/dashboard?msg=withdraw_submitted").into_response()
 }
 
@@ -1448,33 +1662,88 @@ pub async fn balance_to_code(
     }
 
     let pool = db::get_db();
-    let current_ldc: f64 = sqlx::query_scalar("SELECT ldc_balance FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0.0);
 
-    if current_ldc < amount {
+    // 1. 检查功能是否启用
+    let enabled: String = db::get_config("balance_to_code_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string());
+    if enabled != "true" {
+        return Redirect::to("/dashboard?error=feature_disabled").into_response();
+    }
+
+    // 2. 最小金额
+    if amount < 1.0 {
+        return Redirect::to("/dashboard?error=min_amount").into_response();
+    }
+
+    // 3. 计算手续费
+    let fee_rate: f64 = db::get_config("balance_to_code_fee")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.05);
+    let fee = amount * fee_rate;
+    let total_deduct = amount + fee;
+
+    // 4. 检查每日限额
+    let daily_limit: f64 = db::get_config("balance_to_code_daily_limit")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5.0);
+
+    let used_today: Option<f64> = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM balance_to_code_logs WHERE user_id = ? AND DATE(created_at) = DATE('now')",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let used_today = used_today.unwrap_or(0.0);
+
+    if used_today + amount > daily_limit {
+        return Redirect::to("/dashboard?error=daily_limit").into_response();
+    }
+
+    // 5. 事务：原子扣减余额 + 生成兑换码
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return Redirect::to("/dashboard?error=system_error").into_response(),
+    };
+
+    // 原子扣减（WHERE条件确保不会负数）
+    let deduct_result = sqlx::query(
+        "UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ? AND ldc_balance >= ?",
+    )
+    .bind(total_deduct)
+    .bind(user_id)
+    .bind(total_deduct)
+    .execute(&mut *tx)
+    .await;
+
+    if deduct_result.is_err() || deduct_result.unwrap().rows_affected() == 0 {
+        let _ = tx.rollback().await;
         return Redirect::to("/dashboard?error=insufficient_funds").into_response();
     }
 
-    // 扣除余额
-    let _ = sqlx::query("UPDATE users SET ldc_balance = ldc_balance - ? WHERE id = ?")
-        .bind(amount)
-        .bind(user_id)
-        .execute(pool)
-        .await;
-
     // 生成兑换码
-    let code = format!("LDC{}", Uuid::new_v4().to_string().replace('-', "").to_uppercase());
-    let _ = sqlx::query(
-        "INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code) VALUES (?, ?, 0, 0, ?)",
+    let code = format!("LDC{}", Uuid::new_v4().simple().to_string().to_uppercase());
+    let insert_result = sqlx::query(
+        "INSERT INTO balance_to_code_logs (user_id, amount, fee, is_bonus, code, status) VALUES (?, ?, ?, 0, ?, 'active')",
     )
     .bind(user_id)
     .bind(amount)
+    .bind(fee)
     .bind(&code)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
+
+    if insert_result.is_err() {
+        let _ = tx.rollback().await;
+        return Redirect::to("/dashboard?error=system_error").into_response();
+    }
+
+    if tx.commit().await.is_err() {
+        return Redirect::to("/dashboard?error=system_error").into_response();
+    }
 
     Redirect::to(&format!("/dashboard?code={}", code)).into_response()
 }
