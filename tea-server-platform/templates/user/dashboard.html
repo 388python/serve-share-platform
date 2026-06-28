@@ -26,9 +26,9 @@
                 <div class="stat-label">核时余额</div>
                 {% if is_owner %}
                 <div class="mt-1 small">
-                    <span class="text-white-50">可用: {{ "%.2f"|format(available_regular) }}</span>
+                    <span class="text-white-50">可用: {{ format(value=available_regular, format="{:.2}") }}</span>
                     {% if frozen_regular > 0 %}
-                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ "%.2f"|format(frozen_regular) }}</span>
+                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ format(value=frozen_regular, format="{:.2}") }}</span>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -45,9 +45,9 @@
                 <div class="stat-label">赠额核时</div>
                 {% if is_owner %}
                 <div class="mt-1 small">
-                    <span class="text-white-50">可用: {{ "%.2f"|format(available_bonus) }}</span>
+                    <span class="text-white-50">可用: {{ format(value=available_bonus, format="{:.2}") }}</span>
                     {% if frozen_bonus > 0 %}
-                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ "%.2f"|format(frozen_bonus) }}</span>
+                    <span class="text-warning ms-1" title="机主收入到账后{{ freeze_days }}天才能提现"><i class="bi bi-lock-fill"></i>冻结: {{ format(value=frozen_bonus, format="{:.2}") }}</span>
                     {% endif %}
                 </div>
                 {% endif %}

@@ -84,8 +84,8 @@
                     <tr><td class="text-muted ps-4"><i class="bi bi-box me-2"></i>应用镜像</td><td class="pe-4">{{ machine.app_image | default(value="<span class='text-muted'>无</span>") | safe }}</td></tr>
                     <tr><td class="text-muted ps-4"><i class="bi bi-calendar me-2"></i>创建时间</td><td class="pe-4">{{ machine.created_at }}</td></tr>
                     <tr><td class="text-muted ps-4"><i class="bi bi-clock me-2"></i>过期时间</td><td class="pe-4">{{ machine.expires_at }}</td></tr>
-                    <tr><td class="text-muted ps-4"><i class="bi bi-graph-up me-2"></i>核时费率</td><td class="pe-4 fw-semibold text-primary">{{ "%.4f"|format(machine.core_hours_per_hour) }} 核时/小时</td></tr>
-                    <tr><td class="text-muted ps-4"><i class="bi bi-piggy-bank me-2"></i>已用核时</td><td class="pe-4">普通: <span class="fw-semibold">{{ "%.2f"|format(machine.regular_core_hours_used) }}</span><br>赠额: <span class="fw-semibold text-success">{{ "%.2f"|format(machine.bonus_core_hours_used) }}</span></td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-graph-up me-2"></i>核时费率</td><td class="pe-4 fw-semibold text-primary">{{ format(value=machine.core_hours_per_hour, format="{:.4}") }} 核时/小时</td></tr>
+                    <tr><td class="text-muted ps-4"><i class="bi bi-piggy-bank me-2"></i>已用核时</td><td class="pe-4">普通: <span class="fw-semibold">{{ format(value=machine.regular_core_hours_used, format="{:.2}") }}</span><br>赠额: <span class="fw-semibold text-success">{{ format(value=machine.bonus_core_hours_used, format="{:.2}") }}</span></td></tr>
                 </table>
             </div>
         </div>
