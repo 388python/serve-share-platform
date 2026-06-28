@@ -24,11 +24,11 @@ RUN cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 sqlite3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/tea-server-platform /app/
 COPY --from=builder /app/templates/ /app/templates/
 COPY --from=builder /app/static/ /app/static/
-COPY --from=builder /app/.env* /app/
 EXPOSE 3000
+ENV RUST_LOG=info
 CMD ["/app/tea-server-platform"]
