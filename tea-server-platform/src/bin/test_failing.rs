@@ -31,6 +31,7 @@ fn main() {
         "user/contribute.html",
         "user/dispute.html",
         "user/error.html",
+        "servers.html",
         "warning_letters.html",
         "warning_letter_detail.html",
         "admin/dashboard.html",

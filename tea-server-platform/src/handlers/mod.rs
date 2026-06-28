@@ -696,6 +696,29 @@ pub async fn buy_premium(
     Redirect::to("/servers/contribute").into_response()
 }
 
+pub async fn servers_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> impl IntoResponse {
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let servers: Vec<Server> = sqlx::query_as(
+        "SELECT * FROM servers WHERE is_active = 1 ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("servers", &servers);
+
+    let rendered = state
+        .templates
+        .render("servers.html", &ctx)
+        .unwrap_or_default();
+    Html(rendered)
+}
+
 pub async fn machine_market(
     State(state): State<AppState>,
     cookies: Cookies,
