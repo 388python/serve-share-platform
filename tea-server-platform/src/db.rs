@@ -83,6 +83,8 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             money REAL NOT NULL,
             ldc_amount REAL NOT NULL,
             order_name TEXT NOT NULL,
+            order_type TEXT NOT NULL DEFAULT 'recharge',
+            metadata TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
             trade_no TEXT,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -679,6 +681,18 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     // Orders update timestamp for payment callbacks
     let _ = sqlx::query(
         "ALTER TABLE orders ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    )
+    .execute(pool)
+    .await;
+
+    // Order type and metadata for different order types (recharge, premium, etc.)
+    let _ = sqlx::query(
+        "ALTER TABLE orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'recharge'",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "ALTER TABLE orders ADD COLUMN metadata TEXT NOT NULL DEFAULT ''",
     )
     .execute(pool)
     .await;

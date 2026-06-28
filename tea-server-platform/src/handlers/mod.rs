@@ -542,9 +542,11 @@ pub struct ContributeServerForm {
     pub nat_multiplier: Option<f64>,
     pub free_nat_hours: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub premium_days: Option<i32>,
 }
 
 pub async fn contribute_server_submit(
+    State(_state): State<AppState>,
     cookies: Cookies,
     Form(form): Form<ContributeServerForm>,
 ) -> impl IntoResponse {
@@ -580,8 +582,24 @@ pub async fn contribute_server_submit(
     let expires_days = form.expires_days.unwrap_or(30);
     let use_bonus = form.use_bonus.as_ref().map(|v| v == "on").unwrap_or(false);
 
+    // 优选套餐处理
+    let premium_days = form.premium_days.unwrap_or(0).max(0);
+    let premium_enabled = db::get_config("premium_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string())
+        == "true";
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10.0);
+    let premium_total_cost = if premium_enabled && premium_days > 0 {
+        premium_daily_cost * premium_days as f64
+    } else {
+        0.0
+    };
+
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', format('+{} days', ?)), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', '+' || ? || ' days'), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -607,17 +625,46 @@ pub async fn contribute_server_submit(
     .bind(free_nat_hours)
     .bind(form.linux_version.as_deref().unwrap_or(""))
     .bind(form.description.as_deref().unwrap_or(""))
-    .bind(form.provider.as_deref().unwrap_or(""))
-    .execute(pool)
-    .await;
+    .bind(form.provider.as_deref().unwrap_or(""));
 
-    match result {
-        Ok(_) => Redirect::to("/servers/contribute").into_response(),
+    let result = result.execute(pool).await;
+
+    let server_id = match result {
+        Ok(res) => res.last_insert_rowid(),
         Err(e) => {
             tracing::error!("Failed to add server: {}", e);
-            Redirect::to("/servers/contribute?error=db").into_response()
+            return Redirect::to("/servers/contribute?error=db").into_response();
+        }
+    };
+
+    // 如果用户选择了优选套餐，创建订单并跳转到支付
+    if premium_total_cost > 0.0 && server_id > 0 {
+        let cfg = crate::config::AppConfig::get();
+        let out_trade_no = format!("premium_{}_{}", server_id, chrono::Utc::now().timestamp_millis());
+        let metadata = serde_json::json!({
+            "server_id": server_id,
+            "days": premium_days,
+        }).to_string();
+
+        let _ = sqlx::query(
+            "INSERT INTO orders (user_id, out_trade_no, money, ldc_amount, order_name, order_type, metadata, status) VALUES (?, ?, ?, ?, ?, 'premium', ?, 'pending')",
+        )
+        .bind(user_id)
+        .bind(&out_trade_no)
+        .bind(premium_total_cost)
+        .bind(premium_total_cost)
+        .bind(format!("优选套餐 {} 天", premium_days))
+        .bind(&metadata)
+        .execute(pool)
+        .await;
+
+        match crate::services::ldc_payment::create_payment(cfg, &out_trade_no, premium_total_cost, &format!("优选套餐 {} 天", premium_days)).await {
+            Ok(pay_url) => return Redirect::to(&pay_url).into_response(),
+            Err(_) => return Redirect::to("/servers/contribute?error=pay_failed").into_response(),
         }
     }
+
+    Redirect::to("/servers/contribute").into_response()
 }
 
 pub async fn delete_server(
@@ -650,8 +697,10 @@ pub async fn delete_server(
 }
 
 pub async fn buy_premium(
+    State(_state): State<AppState>,
     cookies: Cookies,
     Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let (user_id, _username, _is_admin) = match require_auth(&cookies) {
         Ok(v) => v,
@@ -666,34 +715,45 @@ pub async fn buy_premium(
         .unwrap_or(None);
 
     if owner != Some(user_id) {
-        return Redirect::to("/servers/contribute").into_response();
+        return Redirect::to("/dashboard").into_response();
     }
 
-    let hours_cost = 10.0;
-    let current_hours: f64 = sqlx::query_scalar("SELECT core_hours FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
+    let days: i32 = form
+        .get("days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30)
+        .max(1);
+
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost")
         .await
-        .unwrap_or(0.0);
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10.0);
+    let total_cost = premium_daily_cost * days as f64;
 
-    if current_hours < hours_cost {
-        return Redirect::to("/servers/contribute?error=insufficient_balance").into_response();
-    }
+    let cfg = crate::config::AppConfig::get();
+    let out_trade_no = format!("premium_{}_{}", id, chrono::Utc::now().timestamp_millis());
 
-    let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
-        .bind(hours_cost)
-        .bind(user_id)
-        .execute(pool)
-        .await;
+    let metadata = serde_json::json!({
+        "server_id": id,
+        "days": days,
+    }).to_string();
 
     let _ = sqlx::query(
-        "UPDATE servers SET is_premium = 1, expires_at = DATETIME(expires_at, '+30 days') WHERE id = ?",
+        "INSERT INTO orders (user_id, out_trade_no, money, ldc_amount, order_name, order_type, metadata, status) VALUES (?, ?, ?, ?, ?, 'premium', ?, 'pending')",
     )
-    .bind(id)
+    .bind(user_id)
+    .bind(&out_trade_no)
+    .bind(total_cost)
+    .bind(total_cost)
+    .bind(format!("优选套餐 {} 天", days))
+    .bind(&metadata)
     .execute(pool)
     .await;
 
-    Redirect::to("/servers/contribute").into_response()
+    match crate::services::ldc_payment::create_payment(cfg, &out_trade_no, total_cost, &format!("优选套餐 {} 天", days)).await {
+        Ok(pay_url) => Redirect::to(&pay_url).into_response(),
+        Err(_) => Redirect::to("/dashboard?error=pay_failed").into_response(),
+    }
 }
 
 pub async fn servers_page(
@@ -1448,44 +1508,33 @@ pub async fn recharge_callback(
     }
 
     // 4. 查询订单，检查是否已处理（幂等性）
-    let order: Option<(i64, i64, f64, String)> = sqlx::query_as(
-        "SELECT id, user_id, ldc_amount, status FROM orders WHERE out_trade_no = ?",
+    let order: Option<(i64, i64, f64, String, String, String)> = sqlx::query_as(
+        "SELECT id, user_id, ldc_amount, status, order_type, metadata FROM orders WHERE out_trade_no = ?",
     )
     .bind(&out_trade_no)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
 
-    let (order_id, user_id, package_core_hours, status) = match order {
+    let (order_id, user_id, package_core_hours, status, order_type, metadata) = match order {
         Some(o) => o,
         None => {
-            tracing::warn!(%out_trade_no, "recharge callback: order not found");
+            tracing::warn!(%out_trade_no, "payment callback: order not found");
             return "fail";
         }
     };
 
     // 已处理过的订单直接返回成功
     if status == "completed" {
-        tracing::info!(%out_trade_no, "recharge callback: order already completed");
+        tracing::info!(%out_trade_no, %order_type, "payment callback: order already completed");
         return "success";
     }
 
-    // 5. 计算到账核时数（考虑充值倍率和手续费）
-    let multiplier: f64 = db::get_config("recharge_multiplier")
-        .await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0);
-    let fee: f64 = db::get_config("recharge_fee")
-        .await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.0);
-    let actual_core_hours = package_core_hours * multiplier * (1.0 - fee);
-
-    // 6. 原子更新订单状态 + 增加用户核时余额（使用事务保证一致性）
+    // 5. 原子更新订单状态 + 业务处理（使用事务保证一致性）
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
-            tracing::error!(%e, "failed to begin transaction for recharge");
+            tracing::error!(%e, "failed to begin transaction for payment callback");
             return "fail";
         }
     };
@@ -1501,29 +1550,62 @@ pub async fn recharge_callback(
 
     if update_result.is_err() || update_result.unwrap().rows_affected() == 0 {
         let _ = tx.rollback().await;
-        tracing::warn!(%out_trade_no, "recharge callback: order already processed or update failed");
+        tracing::warn!(%out_trade_no, %order_type, "payment callback: order already processed or update failed");
         return "success";
     }
 
-    // 增加用户核时余额（充值得到的是普通核时，不是赠额）
-    let add_result = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
-        .bind(actual_core_hours)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await;
+    // 根据订单类型处理
+    match order_type.as_str() {
+        "premium" => {
+            // 优选套餐：给服务器加优选天数
+            let meta: serde_json::Value = serde_json::from_str(&metadata).unwrap_or(serde_json::json!({}));
+            let server_id = meta["server_id"].as_i64().unwrap_or(0);
+            let days = meta["days"].as_i64().unwrap_or(0) as i32;
 
-    if add_result.is_err() {
-        let _ = tx.rollback().await;
-        tracing::error!("recharge callback: failed to add user core_hours");
-        return "fail";
+            if server_id > 0 && days > 0 {
+                let _ = sqlx::query(
+                    "UPDATE servers SET is_premium = 1, premium_expires_at = CASE WHEN premium_expires_at IS NULL OR premium_expires_at < CURRENT_TIMESTAMP THEN DATETIME('now', '+' || ? || ' days') ELSE DATETIME(premium_expires_at, '+' || ? || ' days') END WHERE id = ?",
+                )
+                .bind(days)
+                .bind(days)
+                .bind(server_id)
+                .execute(&mut *tx)
+                .await;
+            }
+            tracing::info!(%out_trade_no, %user_id, %server_id, %days, "premium callback: success");
+        }
+        _ => {
+            // 默认 recharge：增加用户核时余额
+            let multiplier: f64 = db::get_config("recharge_multiplier")
+                .await
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0);
+            let fee: f64 = db::get_config("recharge_fee")
+                .await
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let actual_core_hours = package_core_hours * multiplier * (1.0 - fee);
+
+            let add_result = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+                .bind(actual_core_hours)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await;
+
+            if add_result.is_err() {
+                let _ = tx.rollback().await;
+                tracing::error!("recharge callback: failed to add user core_hours");
+                return "fail";
+            }
+            tracing::info!(%out_trade_no, %user_id, %total_fee, %actual_core_hours, "recharge callback: success");
+        }
     }
 
     if tx.commit().await.is_err() {
-        tracing::error!("recharge callback: failed to commit transaction");
+        tracing::error!("payment callback: failed to commit transaction");
         return "fail";
     }
 
-    tracing::info!(%out_trade_no, %user_id, %total_fee, %actual_core_hours, "recharge callback: success");
     "success"
 }
 
@@ -1868,6 +1950,40 @@ pub async fn recharge_page(
         .render("user/recharge.html", &ctx)
         .unwrap_or_default();
     Ok(Html(rendered))
+}
+
+pub async fn recharge_submit(
+    State(_state): State<AppState>,
+    cookies: Cookies,
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<impl IntoResponse, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let money: f64 = form
+        .get("money")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0)
+        .max(0.01);
+
+    let pool = db::get_db();
+    let cfg = crate::config::AppConfig::get();
+    let out_trade_no = format!("recharge_{}_{}", user_id, chrono::Utc::now().timestamp_millis());
+
+    let _ = sqlx::query(
+        "INSERT INTO orders (user_id, out_trade_no, money, ldc_amount, order_name, order_type, status) VALUES (?, ?, ?, ?, ?, 'recharge', 'pending')",
+    )
+    .bind(user_id)
+    .bind(&out_trade_no)
+    .bind(money)
+    .bind(money)
+    .bind(format!("账户充值 {:.2} 元", money))
+    .execute(pool)
+    .await;
+
+    match crate::services::ldc_payment::create_payment(cfg, &out_trade_no, money, &format!("账户充值 {:.2} 元", money)).await {
+        Ok(pay_url) => Ok(Redirect::to(&pay_url).into_response()),
+        Err(_) => Ok(Redirect::to("/recharge?error=pay_failed").into_response()),
+    }
 }
 
 // ---- Balance to Code Page ----
