@@ -2,6 +2,9 @@
 FROM rust:bookworm AS builder
 WORKDIR /app
 
+# 安装编译依赖
+RUN apt-get update && apt-get install -y --no-install-recommends libssh2-1-dev && rm -rf /var/lib/apt/lists/*
+
 # 单线程编译，减少内存使用
 ENV CARGO_BUILD_JOBS=1
 
@@ -24,7 +27,7 @@ RUN cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 sqlite3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 sqlite3 libssh2-1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/tea-server-platform /app/
 COPY --from=builder /app/templates/ /app/templates/
