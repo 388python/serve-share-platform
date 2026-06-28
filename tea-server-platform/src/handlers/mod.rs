@@ -1634,6 +1634,335 @@ pub async fn withdraw_submit(
     Redirect::to("/dashboard?msg=withdraw_submitted").into_response()
 }
 
+// ---- User Center Page ----
+
+pub async fn user_center_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    if let Some(user) = sqlx::query_as::<_, (String, String, String, f64, f64, f64, String)>(
+        "SELECT username, email, api_key, core_hours, bonus_core_hours, total_usage_hours, created_at FROM users WHERE id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    {
+        let profile = serde_json::json!({
+            "username": user.0,
+            "email": user.1,
+            "api_key": user.2,
+            "core_hours": user.3,
+            "bonus_core_hours": user.4,
+            "total_usage_hours": user.5,
+            "created_at": user.6
+        });
+        ctx.insert("profile", &profile);
+        if !user.2.is_empty() {
+            ctx.insert("api_key", &user.2);
+        }
+    }
+
+    let active_machines: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM machines WHERE user_id = ? AND status = 'running'"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("active_machines", &(active_machines as i32));
+
+    let total_machines: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM machines WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("total_machines", &(total_machines as i32));
+
+    let total_servers: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM servers WHERE owner_id = ?"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("total_servers", &(total_servers as i32));
+
+    let total_orders: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM orders WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("total_orders", &(total_orders as i32));
+
+    let unread_warnings: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("unread_warnings", &(unread_warnings as i32));
+
+    let total_warnings: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM warning_letters WHERE user_id = ?"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("total_warnings", &(total_warnings as i32));
+
+    let rendered = state
+        .templates
+        .render("user/index.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Packages Page ----
+
+pub async fn packages_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> impl IntoResponse {
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let packages: Vec<RechargePackage> = sqlx::query_as(
+        "SELECT id, name, duration_days, core_hours, price_ldc, is_cumulative, cumulative_hours, is_active, created_at FROM recharge_packages WHERE is_active = 1 ORDER BY is_cumulative DESC, price_ldc ASC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("packages", &packages);
+
+    let rendered = state
+        .templates
+        .render("user/packages.html", &ctx)
+        .unwrap_or_default();
+    Html(rendered)
+}
+
+// ---- Recharge Page ----
+
+pub async fn recharge_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_auth(&cookies)?;
+
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let recharge_multiplier = db::get_config("recharge_multiplier")
+        .await
+        .unwrap_or_else(|| "1.0".to_string())
+        .parse::<f64>()
+        .unwrap_or(1.0);
+    ctx.insert("recharge_multiplier", &recharge_multiplier);
+
+    let recharge_fee = db::get_config("recharge_fee")
+        .await
+        .unwrap_or_else(|| "0.0".to_string())
+        .parse::<f64>()
+        .unwrap_or(0.0);
+    ctx.insert("recharge_fee", &recharge_fee);
+
+    let rendered = state
+        .templates
+        .render("user/recharge.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Balance to Code Page ----
+
+pub async fn balance_to_code_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let user: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT core_hours, bonus_core_hours FROM users WHERE id = ?"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if let Some((ch, bch)) = user {
+        ctx.insert("core_hours", &ch);
+        ctx.insert("bonus_core_hours", &bch);
+    }
+
+    let fee_pct = db::get_config("balance_to_code_fee")
+        .await
+        .unwrap_or_else(|| "0.05".to_string())
+        .parse::<f64>()
+        .unwrap_or(0.05)
+        * 100.0;
+    ctx.insert("fee_pct", &fee_pct);
+
+    let daily_limit = db::get_config("balance_to_code_daily_limit")
+        .await
+        .unwrap_or_else(|| "5".to_string())
+        .parse::<i64>()
+        .unwrap_or(5);
+    ctx.insert("daily_limit", &daily_limit);
+
+    let today_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND DATE(created_at) = DATE('now')"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("today_count", &today_count);
+    ctx.insert("can_convert", &(today_count < daily_limit));
+
+    let logs: Vec<BalanceToCodeLog> = sqlx::query_as(
+        "SELECT id, user_id, amount, fee, is_bonus, code, created_at FROM balance_to_code_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("logs", &logs);
+
+    let rendered = state
+        .templates
+        .render("user/balance_to_code.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Warning Letters Page ----
+
+pub async fn warning_letters_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let letters: Vec<WarningLetter> = sqlx::query_as(
+        "SELECT id, user_id, subject, content, warning_type, severity, is_read, requires_action, action_taken, action_note, action_at, sent_by, created_at, expires_at FROM warning_letters WHERE user_id = ? ORDER BY created_at DESC"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("letters", &letters);
+
+    let unread_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0"
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    ctx.insert("unread_count", &(unread_count as i32));
+
+    let rendered = state
+        .templates
+        .render("warning_letters.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Warning Letter Detail Page ----
+
+pub async fn warning_letter_detail(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    if let Some(letter) = sqlx::query_as::<_, WarningLetter>(
+        "SELECT id, user_id, subject, content, warning_type, severity, is_read, requires_action, action_taken, action_note, action_at, sent_by, created_at, expires_at FROM warning_letters WHERE id = ? AND user_id = ?"
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    {
+        ctx.insert("letter", &letter);
+
+        let _ = sqlx::query("UPDATE warning_letters SET is_read = 1 WHERE id = ? AND user_id = ?")
+            .bind(id)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+    }
+
+    let rendered = state
+        .templates
+        .render("warning_letter_detail.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Dispute Page ----
+
+pub async fn dispute_page(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let (user_id, _username, _is_admin) = require_auth(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let machine_id = params.get("machine_id").cloned().unwrap_or_default();
+    ctx.insert("machine_id", &machine_id);
+
+    let machine_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id.parse::<i64>().unwrap_or(0))
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    if machine_exists.is_none() {
+        return Err(Redirect::to("/machines"));
+    }
+
+    let rendered = state
+        .templates
+        .render("user/dispute.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
 // ---- Stats Page ----
 
 pub async fn stats_page(
@@ -1939,6 +2268,300 @@ pub async fn admin_oauth_apps_create(
     .await;
 
     Redirect::to("/admin/oauth-apps").into_response()
+}
+
+// ---- Admin Packages Page ----
+
+pub async fn admin_packages_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let packages: Vec<RechargePackage> = sqlx::query_as(
+        "SELECT id, name, duration_days, core_hours, price_ldc, is_cumulative, cumulative_hours, is_active, created_at FROM recharge_packages ORDER BY is_cumulative DESC, price_ldc ASC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("packages", &packages);
+
+    let rendered = state
+        .templates
+        .render("admin/packages.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Codes Page ----
+
+pub async fn admin_codes_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let codes: Vec<RedeemCode> = sqlx::query_as(
+        "SELECT id, code, code_type, package_id, core_hours, is_used, used_by, created_at, used_at FROM redeem_codes ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("codes", &codes);
+
+    let packages: Vec<(i64, String, f64)> = sqlx::query_as(
+        "SELECT id, name, price_ldc FROM recharge_packages WHERE is_active = 1"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("packages", &packages);
+
+    let rendered = state
+        .templates
+        .render("admin/codes.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Invites Page ----
+
+pub async fn admin_invites_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let invites: Vec<Invite> = sqlx::query_as(
+        "SELECT id, code, is_used, used_by, created_at, used_at, private_note, public_note FROM invites ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("invites", &invites);
+
+    let rendered = state
+        .templates
+        .render("admin/invites.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Orders Page ----
+
+pub async fn admin_orders_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let orders: Vec<Order> = sqlx::query_as(
+        "SELECT id, user_id, out_trade_no, money, ldc_amount, order_name, status, trade_no, created_at FROM orders ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("orders", &orders);
+
+    let rendered = state
+        .templates
+        .render("admin/orders.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Machines Page ----
+
+pub async fn admin_machines_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let machines: Vec<Machine> = sqlx::query_as(
+        "SELECT id, user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, regular_core_hours_used, bonus_core_hours_used, expires_at, ssh_port, created_at, settled, used_hours, image, app_image, web_port, vnc_port, root_password, ip_address, app_secrets, free_nat_hours FROM machines ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("machines", &machines);
+
+    let rendered = state
+        .templates
+        .render("admin/machines.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Machines Stats Page ----
+
+pub async fn admin_machines_stats_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let machine_stats: Vec<MachineStats> = sqlx::query_as(
+        "SELECT id, machine_id, cpu_usage_percent, memory_used_mb, memory_total_mb, disk_used_gb, disk_total_gb, bandwidth_rx_mbps, bandwidth_tx_mbps, uptime_seconds, process_count, last_updated FROM machine_stats ORDER BY last_updated DESC LIMIT 50"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("machine_stats", &machine_stats);
+
+    let rendered = state
+        .templates
+        .render("admin/machines_stats.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Traffic Alerts Page ----
+
+pub async fn admin_traffic_alerts_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let traffic_alerts: Vec<TrafficAlert> = sqlx::query_as(
+        "SELECT id, machine_id, server_id, alert_type, message, resolved, created_at FROM traffic_alerts ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("traffic_alerts", &traffic_alerts);
+
+    let rendered = state
+        .templates
+        .render("admin/traffic_alerts.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin OpenGFW Page ----
+
+pub async fn admin_opengfw_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let rules: Vec<OpenGFWRule> = sqlx::query_as(
+        "SELECT id, name, description, protocol, match_signature, action, is_active, created_at FROM opengfw_rules ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("rules", &rules);
+
+    let logs: Vec<OpenGFWLog> = sqlx::query_as(
+        "SELECT id, machine_id, server_id, protocol, src_ip, dst_ip, dst_port, blocked_at FROM opengfw_logs ORDER BY blocked_at DESC LIMIT 50"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("logs", &logs);
+
+    let rendered = state
+        .templates
+        .render("admin/opengfw.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Disputes Page ----
+
+pub async fn admin_disputes_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let disputes: Vec<Dispute> = sqlx::query_as(
+        "SELECT id, machine_id, user_id, server_id, reason, status, resolution, reply, amount_frozen, regular_amount_frozen, bonus_amount_frozen, created_at, resolved_at, auto_resolve_at FROM disputes ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("disputes", &disputes);
+
+    let rendered = state
+        .templates
+        .render("admin/disputes.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
+}
+
+// ---- Admin Warning Letters Page ----
+
+pub async fn admin_warning_letters_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+) -> Result<Html<String>, Redirect> {
+    let _ = require_admin(&cookies)?;
+
+    let pool = db::get_db();
+    let mut ctx = Context::new();
+    build_base_context(&cookies, &mut ctx);
+
+    let letters: Vec<WarningLetter> = sqlx::query_as(
+        "SELECT id, user_id, subject, content, warning_type, severity, is_read, requires_action, action_taken, action_note, action_at, sent_by, created_at, expires_at FROM warning_letters ORDER BY created_at DESC LIMIT 100"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("letters", &letters);
+
+    let users: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, username FROM users ORDER BY username ASC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    ctx.insert("users", &users);
+
+    let rendered = state
+        .templates
+        .render("admin/warning_letters.html", &ctx)
+        .unwrap_or_default();
+    Ok(Html(rendered))
 }
 
 // ---- Balance to Code ----
