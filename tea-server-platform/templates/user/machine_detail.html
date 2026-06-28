@@ -220,7 +220,7 @@
             </div>
         </div>
 
-        {% if machine.image and machine.image.startswith('windows:') %}
+        {% if machine.image and machine.image is starts_with("windows:") %}
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-gradient-primary text-white border-0 py-3">
                 <h5 class="mb-0 fw-semibold"><i class="bi bi-windows me-2"></i>Windows 连接信息</h5>
