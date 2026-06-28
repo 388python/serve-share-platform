@@ -23,24 +23,35 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!("[DEBUG] tea-server-platform starting...");
+    println!("[DEBUG] Initializing tracing subscriber...");
     tracing_subscriber::fmt::init();
+    tracing::info!("tracing subscriber initialized");
 
+    println!("[DEBUG] Loading config from environment...");
     // Load config
     config::AppConfig::from_env()?;
     let cfg = config::AppConfig::get();
+    tracing::info!("config loaded, database_url: {}", cfg.database_url);
+    tracing::info!("config loaded, bind_addr: {}", cfg.bind_addr);
 
+    println!("[DEBUG] Recording startup time...");
     // Record startup time for health endpoint
     handlers::api::set_startup_time(chrono::Utc::now());
 
+    println!("[DEBUG] Initializing database...");
     // Init database
     db::init_db(&cfg.database_url).await?;
+    tracing::info!("database initialized");
 
+    println!("[DEBUG] Initializing Tera templates...");
     // Init Tera templates
     let mut tera = Tera::new("templates/**/*")?;
     tera.autoescape_on(vec!["html", ".tera"]);
     let app_state = AppState {
         templates: Arc::new(tera),
     };
+    tracing::info!("Tera templates initialized");
 
     // Background task: stop expired machines every 60 seconds
     tokio::spawn(async {
@@ -377,8 +388,11 @@ async fn main() -> anyhow::Result<()> {
     // Start server
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
     tracing::info!("Server listening on {}", cfg.bind_addr);
+    println!("[DEBUG] Server started, listening on {}", cfg.bind_addr);
     axum::serve(listener, app).await?;
 
+    tracing::info!("Server shut down normally");
+    println!("[DEBUG] Server shut down normally");
     Ok(())
 }
 
