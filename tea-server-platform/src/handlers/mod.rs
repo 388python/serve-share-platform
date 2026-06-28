@@ -2259,7 +2259,7 @@ pub async fn admin_config_save(
         let allowed = [
             "site_name", "checkin_enabled", "free_plan_enabled", "registration_enabled",
             "require_invite", "checkin_reward", "payment_mode", "ldc_client_id", "ldc_client_secret",
-            "admin_api_key", "traffic_monitor_enabled", "traffic_bandwidth_threshold_mbps",
+            "admin_api_key", "agent_api_key", "traffic_monitor_enabled", "traffic_bandwidth_threshold_mbps",
             "premium_enabled", "premium_ldc_cost", "virt_type", "select_mode", "lock_bonus",
             "global_cpu_multiplier", "global_memory_multiplier", "global_bandwidth_multiplier",
             "global_disk_multiplier", "recharge_multiplier", "recharge_fee", "withdraw_fee",
@@ -2268,6 +2268,8 @@ pub async fn admin_config_save(
             "mail_enabled", "mail_smtp_host", "mail_smtp_port", "mail_username", "mail_password",
             "mail_from_name", "mail_from_email", "mail_plain_domains",
             "mail_notify_warning_letter", "mail_notify_ban", "mail_notify_machine_status", "mail_notify_dispute",
+            "new_user_core_hours", "owner_income_freeze_days", "global_nat_multiplier",
+            "dispute_auto_resolve_hours", "checkin_bonus_expiry_days",
         ];
         if allowed.iter().any(|k| k == key) {
             let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
