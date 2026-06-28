@@ -301,10 +301,14 @@
                             </small>
                         </div>
                         <div>
-                            {% if premium_enabled and not s.is_premium %}
-                            <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline">
+                            {% if premium_enabled %}
+                            <form method="post" action="/servers/{{ s.id }}/buy-premium" style="display:inline" class="d-flex gap-2 align-items-center">
+                                <div class="input-group input-group-sm" style="width:120px;">
+                                    <input type="number" class="form-control form-control-sm" name="days" value="30" min="1" step="1">
+                                    <span class="input-group-text">天</span>
+                                </div>
                                 <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    <i class="bi bi-star me-1"></i>购买优选 ({{ premium_ldc_cost }} LDC)
+                                    <i class="bi bi-star me-1"></i>{{ premium_ldc_cost }} 核时/天
                                 </button>
                             </form>
                             {% endif %}

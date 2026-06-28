@@ -542,6 +542,7 @@ pub struct ContributeServerForm {
     pub nat_multiplier: Option<f64>,
     pub free_nat_hours: Option<f64>,
     pub max_machine_hours: Option<f64>,
+    pub premium_days: Option<i32>,
 }
 
 pub async fn contribute_server_submit(
@@ -580,8 +581,53 @@ pub async fn contribute_server_submit(
     let expires_days = form.expires_days.unwrap_or(30);
     let use_bonus = form.use_bonus.as_ref().map(|v| v == "on").unwrap_or(false);
 
+    // 优选套餐处理
+    let premium_days = form.premium_days.unwrap_or(0).max(0);
+    let premium_enabled = db::get_config("premium_enabled")
+        .await
+        .unwrap_or_else(|| "false".to_string())
+        == "true";
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10.0);
+    let premium_total_cost = if premium_enabled && premium_days > 0 {
+        premium_daily_cost * premium_days as f64
+    } else {
+        0.0
+    };
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return Redirect::to("/servers/contribute?error=system_error").into_response(),
+    };
+
+    // 扣除优选费用
+    if premium_total_cost > 0.0 {
+        let user_balance: f64 = sqlx::query_scalar("SELECT core_hours FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap_or(0.0);
+        if user_balance < premium_total_cost {
+            let _ = tx.rollback().await;
+            return Redirect::to("/servers/contribute?error=insufficient_balance").into_response();
+        }
+        let res = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
+            .bind(premium_total_cost)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await;
+        if res.is_err() {
+            let _ = tx.rollback().await;
+            return Redirect::to("/servers/contribute?error=db").into_response();
+        }
+    }
+
+    let is_premium = premium_enabled && premium_days > 0;
+
     let result = sqlx::query(
-        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', format('+{} days', ?)), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO servers (owner_id, name, ip, ssh_port, ssh_key, cpu_cores, memory_gb, bandwidth_mbps, disk_gb, cpu_multiplier, memory_multiplier, bandwidth_multiplier, disk_multiplier, use_bonus, virt_type, is_active, expires_at, created_at, expose_ip, nat_port_start, nat_port_end, nat_multiplier, max_machine_hours, free_nat_hours, linux_version, description, provider, is_premium, premium_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, DATETIME('now', '+' || ? || ' days'), CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN DATETIME('now', '+' || ? || ' days') ELSE NULL END)",
     )
     .bind(user_id)
     .bind(&form.name)
@@ -608,13 +654,21 @@ pub async fn contribute_server_submit(
     .bind(form.linux_version.as_deref().unwrap_or(""))
     .bind(form.description.as_deref().unwrap_or(""))
     .bind(form.provider.as_deref().unwrap_or(""))
-    .execute(pool)
-    .await;
+    .bind(is_premium)
+    .bind(premium_days);
+
+    let result = result.execute(&mut *tx).await;
 
     match result {
-        Ok(_) => Redirect::to("/servers/contribute").into_response(),
+        Ok(_) => {
+            if tx.commit().await.is_err() {
+                return Redirect::to("/servers/contribute?error=db").into_response();
+            }
+            Redirect::to("/servers/contribute").into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to add server: {}", e);
+            let _ = tx.rollback().await;
             Redirect::to("/servers/contribute?error=db").into_response()
         }
     }
@@ -652,6 +706,7 @@ pub async fn delete_server(
 pub async fn buy_premium(
     cookies: Cookies,
     Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let (user_id, _username, _is_admin) = match require_auth(&cookies) {
         Ok(v) => v,
@@ -666,34 +721,55 @@ pub async fn buy_premium(
         .unwrap_or(None);
 
     if owner != Some(user_id) {
-        return Redirect::to("/servers/contribute").into_response();
+        return Redirect::to("/dashboard").into_response();
     }
 
-    let hours_cost = 10.0;
+    let days: i32 = form
+        .get("days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30)
+        .max(1);
+
+    let premium_daily_cost: f64 = db::get_config("premium_ldc_cost")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10.0);
+    let total_cost = premium_daily_cost * days as f64;
+
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(_) => return Redirect::to("/dashboard?error=system_error").into_response(),
+    };
+
     let current_hours: f64 = sqlx::query_scalar("SELECT core_hours FROM users WHERE id = ?")
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .unwrap_or(0.0);
 
-    if current_hours < hours_cost {
-        return Redirect::to("/servers/contribute?error=insufficient_balance").into_response();
+    if current_hours < total_cost {
+        let _ = tx.rollback().await;
+        return Redirect::to("/dashboard?error=insufficient_balance").into_response();
     }
 
     let _ = sqlx::query("UPDATE users SET core_hours = core_hours - ? WHERE id = ?")
-        .bind(hours_cost)
+        .bind(total_cost)
         .bind(user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await;
 
     let _ = sqlx::query(
-        "UPDATE servers SET is_premium = 1, expires_at = DATETIME(expires_at, '+30 days') WHERE id = ?",
+        "UPDATE servers SET is_premium = 1, premium_expires_at = CASE WHEN premium_expires_at IS NULL OR premium_expires_at < CURRENT_TIMESTAMP THEN DATETIME('now', '+' || ? || ' days') ELSE DATETIME(premium_expires_at, '+' || ? || ' days') END WHERE id = ?",
     )
+    .bind(days)
+    .bind(days)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await;
 
-    Redirect::to("/servers/contribute").into_response()
+    let _ = tx.commit().await;
+
+    Redirect::to("/dashboard").into_response()
 }
 
 pub async fn servers_page(
