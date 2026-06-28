@@ -132,9 +132,9 @@
                         </div>
                         <div class="flex-grow-1">
                             <small class="text-muted d-block">服务器 IP</small>
-                            <strong>{{ server.ip if server else 'N/A' }}</strong>
+                            <strong>{{ server.ip | default(value="N/A") }}</strong>
                         </div>
-                        <button class="btn btn-sm btn-outline-secondary copy-btn" onclick="copyText('{{ server.ip if server else 'N/A' }}')">
+                        <button class="btn btn-sm btn-outline-secondary copy-btn" onclick="copyText('{{ server.ip | default(value="N/A") }}')">
                             <i class="bi bi-copy"></i>
                         </button>
                     </div>
@@ -240,7 +240,7 @@
                         <div class="col-md-6">
                             <div class="input-group">
                                 <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
-                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" readonly>
+                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip | default(value="") }}" readonly>
                             </div>
                         </div>
                         <div class="col-md-3">
@@ -273,7 +273,7 @@
                         <div class="col-md-6">
                             <div class="input-group">
                                 <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
-                                <input type="text" class="form-control" id="rdp-host" value="{{ server.ip if server else '' }}" readonly>
+                                <input type="text" class="form-control" id="rdp-host" value="{{ server.ip | default(value="") }}" readonly>
                             </div>
                         </div>
                         <div class="col-md-3">
@@ -291,7 +291,7 @@
                     </div>
                     <div class="alert alert-warning py-2 mb-0">
                         <i class="bi bi-lightbulb-fill me-1"></i>
-                        使用 Windows 远程桌面连接 (mstsc)：<code class="user-select-all">mstsc /v:{{ server.ip if server else 'IP' }}:{{ machine.rdp_port | default(value='3389') }}</code>
+                        使用 Windows 远程桌面连接 (mstsc)：<code class="user-select-all">mstsc /v:{{ server.ip | default(value="IP") }}:{{ machine.rdp_port | default(value='3389') }}</code>
                     </div>
                 </div>
                 
@@ -301,7 +301,7 @@
                         <i class="bi bi-eye me-1"></i>VNC Web 访问
                     </h6>
                     <div class="d-flex align-items-center gap-2">
-                        <a href="http://{{ server.ip if server else 'localhost' }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
+                        <a href="http://{{ server.ip | default(value="localhost") }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
                             <i class="bi bi-external-link me-1"></i>打开 VNC
                         </a>
                         <span class="text-muted">端口: {{ machine.novnc_port }}</span>
@@ -336,7 +336,7 @@
                         <div class="col-md-6">
                             <div class="input-group">
                                 <span class="input-group-text bg-light"><i class="bi bi-globe"></i></span>
-                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip if server else '' }}" placeholder="主机地址" readonly>
+                                <input type="text" class="form-control" id="ssh-host" value="{{ server.ip | default(value="") }}" placeholder="主机地址" readonly>
                             </div>
                         </div>
                         <div class="col-md-3">
@@ -365,7 +365,7 @@
                     <div class="p-3 bg-light rounded-3 d-flex align-items-center justify-content-between">
                         <div>
                             <small class="text-muted d-block mb-1">SSH 命令</small>
-                            <code class="user-select-all fw-medium">ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip if server else '机器IP' }}</code>
+                            <code class="user-select-all fw-medium">ssh -p {{ machine.ssh_port | default(value="22") }} root@{{ server.ip | default(value="机器IP") }}</code>
                         </div>
                         <button class="btn btn-sm btn-outline-primary" onclick="copySSHCommand()">
                             <i class="bi bi-copy me-1"></i>复制
@@ -379,7 +379,7 @@
                         <i class="bi bi-display me-1"></i>VNC Web 访问
                     </h6>
                     <div class="d-flex align-items-center gap-2">
-                        <a href="http://{{ server.ip if server else 'localhost' }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
+                        <a href="http://{{ server.ip | default(value="localhost") }}:{{ machine.novnc_port }}" target="_blank" class="btn btn-info">
                             <i class="bi bi-external-link me-1"></i>打开 VNC
                         </a>
                         <span class="text-muted">Web 端口: {{ machine.novnc_port }} | VNC 端口: {{ machine.vnc_port }}</span>
@@ -567,7 +567,7 @@
 <script>
 const API_BASE = '/api/v1';
 const MACHINE_ID = {{ machine.id }};
-const SERVER_IP = "{{ server.ip if server else '' }}";
+const SERVER_IP = "{{ server.ip | default(value="") }}";
 const API_KEY = localStorage.getItem('api_key') || '';
 const MACHINE_IMAGE = "{{ machine.image | default(value='ubuntu:22.04') }}";
 const IS_WINDOWS = MACHINE_IMAGE.startsWith('windows:');
