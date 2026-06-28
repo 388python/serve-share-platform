@@ -1258,6 +1258,71 @@ async fn api_admin_server_toggle(headers: HeaderMap, Path(id): Path<i64>) -> imp
     }
 }
 
+// POST /api/v1/admin/servers/batch
+async fn api_admin_servers_batch(
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let ids = match body.get("ids").and_then(|v| v.as_array()) {
+        Some(arr) => arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<i64>>(),
+        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_ids"}))).into_response(),
+    };
+    let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty_ids"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+    let mut success = 0;
+    let mut failed: Vec<i64> = Vec::new();
+
+    match action {
+        "enable" => {
+            let query = format!("UPDATE servers SET is_active = 1 WHERE id IN ({})", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "disable" => {
+            let query = format!("UPDATE servers SET is_active = 0 WHERE id IN ({})", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "delete" => {
+            let query = format!("DELETE FROM servers WHERE id IN ({})", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_action"}))).into_response(),
+    }
+
+    ok_response(json!({
+        "success": success,
+        "failed": failed.len(),
+        "failed_ids": failed,
+        "action": action,
+    })).into_response()
+}
+
 // GET /api/v1/admin/machines
 async fn api_admin_machines(headers: HeaderMap) -> impl IntoResponse {
     match authenticate_admin(&headers).await {
@@ -1273,6 +1338,75 @@ async fn api_admin_machines(headers: HeaderMap) -> impl IntoResponse {
             .unwrap_or_default();
 
     ok_response(machines).into_response()
+}
+
+// POST /api/v1/admin/machines/batch
+async fn api_admin_machines_batch(
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let ids = match body.get("ids").and_then(|v| v.as_array()) {
+        Some(arr) => arr.iter().filter_map(|v| v.as_i64()).collect::<Vec<i64>>(),
+        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_ids"}))).into_response(),
+    };
+    let action = body.get("action").and_then(|v| v.as_str()).unwrap_or("");
+
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty_ids"}))).into_response();
+    }
+
+    let pool = db::get_db();
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+    let mut success_count = 0;
+    let mut failed: Vec<i64> = Vec::new();
+
+    match action {
+        "stop" => {
+            let query = format!("UPDATE machines SET status = 'stopped' WHERE id IN ({}) AND status = 'running'", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success_count = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "start" => {
+            let query = format!("UPDATE machines SET status = 'running' WHERE id IN ({}) AND status = 'stopped'", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success_count = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "delete" => {
+            for id in &ids {
+                match crate::services::machine_lifecycle::refund_machine_remaining(*id).await {
+                    Ok(_) => {
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        tracing::error!(machine_id = id, error = %e, "admin batch delete machine failed");
+                        failed.push(*id);
+                    }
+                }
+            }
+        }
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_action"}))).into_response(),
+    }
+
+    ok_response(json!({
+        "success": success_count,
+        "failed": failed.len(),
+        "failed_ids": failed,
+        "action": action,
+    })).into_response()
 }
 
 // GET /api/v1/admin/config
@@ -2607,7 +2741,9 @@ pub fn router(_state: AppState) -> Router<AppState> {
             "/v1/admin/servers/:id/toggle",
             post(api_admin_server_toggle),
         )
+        .route("/v1/admin/servers/batch", post(api_admin_servers_batch))
         .route("/v1/admin/machines", get(api_admin_machines))
+        .route("/v1/admin/machines/batch", post(api_admin_machines_batch))
         .route(
             "/v1/admin/config",
             get(api_admin_config).put(api_admin_config_save),
