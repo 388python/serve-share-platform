@@ -361,6 +361,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/disputes/create", post(handlers::dispute_create))
         // Recharge
         .route("/recharge", get(handlers::recharge_page))
+        .route("/recharge", post(handlers::recharge_submit))
         .route("/recharge/callback", get(handlers::recharge_callback))
         // Withdraw
         .route("/withdraw", get(handlers::withdraw_page))
