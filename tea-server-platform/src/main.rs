@@ -406,21 +406,108 @@ async fn index_page(State(state): State<AppState>, cookies: Cookies) -> impl Int
 
     let mut ctx = Context::new();
     ctx.insert("site_name", &site_name);
+    ctx.insert("bonus_hours", &"0");
 
     if let Some(session_cookie) = cookies.get("session") {
         if let Some(session) = handlers::parse_signed_session_wrapper(session_cookie.value()) {
-            ctx.insert(
-                "user_name",
-                &session.get("username").cloned().unwrap_or_default(),
-            );
-            ctx.insert(
-                "user_balance",
-                &session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string()),
-            );
-            ctx.insert(
-                "is_admin",
-                &session.get("is_admin").cloned().unwrap_or_else(|| "false".to_string()),
-            );
+            let user_name = session.get("username").cloned().unwrap_or_default();
+            let user_id_str = session.get("user_id").cloned().unwrap_or_default();
+            let is_admin = session.get("is_admin").cloned().unwrap_or_else(|| "false".to_string());
+            let core_hours = session.get("core_hours").cloned().unwrap_or_else(|| "0".to_string());
+            let bonus_hours = session.get("bonus_core_hours").cloned().unwrap_or_else(|| "0".to_string());
+
+            ctx.insert("user_name", &user_name);
+            ctx.insert("user_balance", &core_hours);
+            ctx.insert("is_admin", &is_admin);
+            ctx.insert("bonus_hours", &bonus_hours);
+
+            // Fetch user profile from database
+            if let Ok(user_id) = user_id_str.parse::<i64>() {
+                let pool = db::get_db();
+                
+                // Get user details
+                if let Some(user) = sqlx::query_as::<_, (String, String, String, f64, f64, f64, String)>(
+                    "SELECT username, email, api_key, core_hours, bonus_core_hours, total_usage_hours, created_at FROM users WHERE id = ?"
+                )
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+                {
+                    let profile = serde_json::json!({
+                        "username": user.0,
+                        "email": user.1,
+                        "api_key": user.2,
+                        "core_hours": user.3,
+                        "bonus_core_hours": user.4,
+                        "total_usage_hours": user.5,
+                        "created_at": user.6
+                    });
+                    ctx.insert("profile", &profile);
+                    if !user.2.is_empty() {
+                        ctx.insert("api_key", &user.2);
+                    }
+                }
+
+                // Count user's machines
+                let active_machines: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM machines WHERE user_id = ? AND status = 'running'"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("active_machines", &(active_machines as i32));
+
+                let total_machines: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM machines WHERE user_id = ?"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("total_machines", &(total_machines as i32));
+
+                // Count user's servers
+                let total_servers: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM servers WHERE owner_id = ?"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("total_servers", &(total_servers as i32));
+
+                // Count user's orders
+                let total_orders: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM orders WHERE user_id = ?"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("total_orders", &(total_orders as i32));
+
+                // Count warning letters
+                let unread_warnings: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM warning_letters WHERE user_id = ? AND is_read = 0"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("unread_warnings", &(unread_warnings as i32));
+
+                let total_warnings: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM warning_letters WHERE user_id = ?"
+                )
+                .bind(user_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+                ctx.insert("total_warnings", &(total_warnings as i32));
+            }
         }
     }
 

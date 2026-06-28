@@ -135,6 +135,19 @@ fn main() {
     ctx.insert("total_core_hours", &100);
     ctx.insert("total_usage_hours", &10);
     ctx.insert("active_machines", &1);
+    ctx.insert("total_machines", &1);
+    ctx.insert("total_servers", &0);
+    ctx.insert("total_orders", &0);
+    ctx.insert("unread_warnings", &0);
+    ctx.insert("total_warnings", &0);
+    ctx.insert("profile", &json!({
+        "username": "testuser",
+        "email": "test@test.com",
+        "created_at": "2025-01-01",
+        "core_hours": 100,
+        "bonus_core_hours": 10,
+        "total_usage_hours": 10
+    }));
 
     // Recharge/withdraw
     ctx.insert("recharge_multiplier", &1.0);
