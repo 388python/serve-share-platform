@@ -350,6 +350,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines", get(handlers::my_machines))
         .route("/machines/:id", get(handlers::machine_detail))
         .route("/machines/:id/stop", post(handlers::stop_machine))
+        .route("/machines/:id/suspend", post(handlers::suspend_machine))
+        .route("/machines/:id/unsuspend", post(handlers::unsuspend_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
         // WebSocket SSH

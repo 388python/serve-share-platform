@@ -20,7 +20,11 @@
                 <option value="">批量操作</option>
                 <option value="start">批量启动</option>
                 <option value="stop">批量停止</option>
-                <option value="delete">批量删除</option>
+                <option value="suspend">批量暂停（不计费）</option>
+                <option value="unsuspend">批量取消暂停</option>
+                <option value="settle">结算当前（保留机器）</option>
+                <option value="delete_settle">删除并结算</option>
+                <option value="delete">批量删除（退款）</option>
             </select>
             <button class="btn btn-sm btn-primary" onclick="executeBatch('machines')">执行</button>
             <span class="text-muted small" id="machines-selected-count">已选 0 项</span>
@@ -69,6 +73,8 @@
                                     <span class="badge bg-info">创建中</span>
                                     {% elif m.status == "failed" %}
                                     <span class="badge bg-danger">创建失败</span>
+                                    {% elif m.status == "suspended" %}
+                                    <span class="badge bg-warning text-dark">已暂停</span>
                                     {% else %}
                                     <span class="badge bg-secondary">已停止</span>
                                     {% endif %}
@@ -76,12 +82,26 @@
                                 <td>{{ m.core_hours_per_hour }}</td>
                                 <td>{{ m.expires_at }}</td>
                                 <td>
+                                    {% if m.status == "running" %}
                                     <form method="post" action="/machines/{{ m.id }}/stop" style="display:inline">
                                         <button type="submit" class="btn btn-sm btn-warning">停止</button>
                                     </form>
+                                    {% endif %}
+                                    {% if m.status == "suspended" %}
+                                    <form method="post" action="/machines/{{ m.id }}/unsuspend" style="display:inline">
+                                        <button type="submit" class="btn btn-sm btn-info">取消暂停</button>
+                                    </form>
+                                    {% endif %}
+                                    {% if m.status == "stopped" or m.status == "suspended" %}
+                                    <form method="post" action="/machines/{{ m.id }}/suspend" style="display:inline">
+                                        <button type="submit" class="btn btn-sm btn-outline-warning" onclick="return confirm('确定要暂停此机器吗？暂停后不计费且不可开机。')">暂停</button>
+                                    </form>
+                                    {% endif %}
+                                    {% if m.status != "deleted" and m.status != "pending" and m.status != "failed" %}
                                     <form method="post" action="/machines/{{ m.id }}/delete" style="display:inline" onsubmit="return confirm('确定要删除这台机器吗？')">
                                         <button type="submit" class="btn btn-sm btn-danger">删除</button>
                                     </form>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -127,8 +147,12 @@ async function executeBatch(type) {
         'enable': '启用',
         'disable': '禁用',
         'delete': '删除',
+        'delete_settle': '删除并结算',
         'stop': '停止',
-        'start': '启动'
+        'start': '启动',
+        'suspend': '暂停',
+        'unsuspend': '取消暂停',
+        'settle': '结算当前'
     }[action] || action;
     
     if (!confirm('确定要批量' + actionText + '选中的 ' + ids.length + ' 项吗？')) return;

@@ -1398,6 +1398,98 @@ async fn api_admin_machines_batch(
                 }
             }
         }
+        "suspend" => {
+            // 暂停：机器保留但不计费，不允许开机
+            let query = format!("UPDATE machines SET status = 'suspended' WHERE id IN ({}) AND status IN ('running', 'stopped')", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success_count = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "unsuspend" => {
+            // 取消暂停：恢复为 stopped 状态（不计费，用户可手动开机）
+            let query = format!("UPDATE machines SET status = 'stopped' WHERE id IN ({}) AND status = 'suspended'", placeholders);
+            let mut q = sqlx::query(&query);
+            for id in &ids { q = q.bind(id); }
+            match q.execute(pool).await {
+                Ok(res) => success_count = res.rows_affected() as usize,
+                Err(_) => failed = ids.clone(),
+            }
+        }
+        "settle" => {
+            // 结算当前：停止机器并标记已结算（保留机器，只扣费用）
+            for id in &ids {
+                let machine: Option<(String, i64, f64, f64)> = sqlx::query_as(
+                    "SELECT status, server_id, core_hours_per_hour, used_hours FROM machines WHERE id = ?"
+                )
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((status, server_id, ch_per_hour, used_hours)) = machine {
+                    if status == "suspended" || status == "stopped" || status == "running" {
+                        let total_cost = ch_per_hour * used_hours;
+                        if total_cost > 0.0 {
+                            let _ = sqlx::query(
+                                "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
+                            )
+                            .bind(total_cost)
+                            .bind(server_id)
+                            .execute(pool)
+                            .await;
+                        }
+                        let _ = sqlx::query(
+                            "UPDATE machines SET used_hours = 0, regular_core_hours_used = 0, bonus_core_hours_used = 0, settled = 1, status = 'stopped' WHERE id = ?"
+                        )
+                        .bind(id)
+                        .execute(pool)
+                        .await;
+                        tracing::info!(machine_id = id, amount = total_cost, "machine settled by admin");
+                        success_count += 1;
+                    } else {
+                        failed.push(*id);
+                    }
+                } else {
+                    failed.push(*id);
+                }
+            }
+        }
+        "delete_settle" => {
+            // 删除并结算：先结算当前使用量，再删除
+            for id in &ids {
+                let machine: Option<(String, i64, f64, f64)> = sqlx::query_as(
+                    "SELECT status, server_id, core_hours_per_hour, used_hours FROM machines WHERE id = ?"
+                )
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+
+                if let Some((status, server_id, ch_per_hour, used_hours)) = machine {
+                    let total_cost = ch_per_hour * used_hours;
+                    if total_cost > 0.0 {
+                        let _ = sqlx::query(
+                            "UPDATE users SET core_hours = core_hours + ? WHERE id = (SELECT owner_id FROM servers WHERE id = ?)"
+                        )
+                        .bind(total_cost)
+                        .bind(server_id)
+                        .execute(pool)
+                        .await;
+                    }
+                    let _ = sqlx::query("UPDATE machines SET status = 'deleted' WHERE id = ?")
+                        .bind(id)
+                        .execute(pool)
+                        .await;
+                    tracing::info!(machine_id = id, amount = total_cost, "machine deleted and settled by admin");
+                    success_count += 1;
+                } else {
+                    failed.push(*id);
+                }
+            }
+        }
         _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_action"}))).into_response(),
     }
 

@@ -1157,6 +1157,62 @@ pub async fn stop_machine(
     Redirect::to("/machines").into_response()
 }
 
+pub async fn suspend_machine(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let (user_id, _username, _is_admin) = match require_auth(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+    let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM machines WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    if owner != Some(user_id) {
+        return Redirect::to("/machines").into_response();
+    }
+
+    let _ = sqlx::query("UPDATE machines SET status = 'suspended' WHERE id = ? AND status IN ('running', 'stopped')")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    Redirect::to("/machines").into_response()
+}
+
+pub async fn unsuspend_machine(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let (user_id, _username, _is_admin) = match require_auth(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+    let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM machines WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+    if owner != Some(user_id) {
+        return Redirect::to("/machines").into_response();
+    }
+
+    let _ = sqlx::query("UPDATE machines SET status = 'stopped' WHERE id = ? AND status = 'suspended'")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    Redirect::to("/machines").into_response()
+}
+
 pub async fn delete_machine(
     cookies: Cookies,
     Path(id): Path<i64>,
