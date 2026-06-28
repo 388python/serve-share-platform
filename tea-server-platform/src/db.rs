@@ -730,6 +730,18 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("opengfw_block_vless", "true"),
         ("opengfw_block_xray", "true"),
         ("opengfw_block_clash", "true"),
+        ("mail_enabled", "0"),
+        ("mail_smtp_host", ""),
+        ("mail_smtp_port", "465"),
+        ("mail_username", ""),
+        ("mail_password", ""),
+        ("mail_from_name", "通知"),
+        ("mail_from_email", ""),
+        ("mail_plain_domains", ""),
+        ("mail_notify_warning_letter", "1"),
+        ("mail_notify_ban", "1"),
+        ("mail_notify_machine_status", "1"),
+        ("mail_notify_dispute", "1"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")

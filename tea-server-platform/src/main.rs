@@ -332,10 +332,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin-login", post(handlers::admin_login))
         .route("/admin-login/ui", get(handlers::admin_login_ui))
         .route("/logout", get(handlers::logout))
+        // User center
+        .route("/user", get(handlers::user_center_page))
         // User dashboard
         .route("/dashboard", get(handlers::user_dashboard))
         .route("/dashboard/api-key", post(handlers::regenerate_api_key))
         // Server contribution
+        .route("/servers", get(handlers::servers_page))
         .route("/servers/contribute", get(handlers::contribute_server_page))
         .route("/servers/contribute", post(handlers::contribute_server_submit))
         .route("/servers/:id/delete", post(handlers::delete_server))
@@ -347,12 +350,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/machines", get(handlers::my_machines))
         .route("/machines/:id", get(handlers::machine_detail))
         .route("/machines/:id/stop", post(handlers::stop_machine))
+        .route("/machines/:id/suspend", post(handlers::suspend_machine))
+        .route("/machines/:id/unsuspend", post(handlers::unsuspend_machine))
         .route("/machines/:id/delete", post(handlers::delete_machine))
         .route("/machines/:id/connect", get(handlers::machine_connect))
         // WebSocket SSH
         .nest("/ws", handlers::websocket::router(app_state.clone()))
-        // Disputes - 预留，未实现
+        // Disputes
+        .route("/disputes/new", get(handlers::dispute_page))
+        .route("/disputes/create", post(handlers::dispute_create))
         // Recharge
+        .route("/recharge", get(handlers::recharge_page))
         .route("/recharge/callback", get(handlers::recharge_callback))
         // Withdraw
         .route("/withdraw", get(handlers::withdraw_page))
@@ -362,10 +370,18 @@ async fn main() -> anyhow::Result<()> {
         // Free plan
         .route("/free-plan", post(handlers::free_plan))
         // Balance to code
+        .route("/balance-to-code", get(handlers::balance_to_code_page))
         .route("/balance-to-code", post(handlers::balance_to_code))
+        // Packages
+        .route("/packages", get(handlers::packages_page))
         // Redeem code
         .route("/redeem", get(handlers::redeem_page))
         .route("/redeem", post(handlers::redeem_submit))
+        // Warning letters
+        .route("/warnings", get(handlers::warning_letters_page))
+        .route("/warnings/:id", get(handlers::warning_letter_detail))
+        // User profile / email
+        .route("/user/email", post(handlers::user_email_update))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
@@ -376,6 +392,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/users/:id", post(handlers::admin_user_edit))
         .route("/admin/servers", get(handlers::admin_servers))
         .route("/admin/servers/:id/toggle", post(handlers::admin_servers_toggle))
+        .route("/admin/packages", get(handlers::admin_packages_page))
+        .route("/admin/codes", get(handlers::admin_codes_page))
+        .route("/admin/invites", get(handlers::admin_invites_page))
+        .route("/admin/orders", get(handlers::admin_orders_page))
+        .route("/admin/machines", get(handlers::admin_machines_page))
+        .route("/admin/machines-stats", get(handlers::admin_machines_stats_page))
+        .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts_page))
+        .route("/admin/opengfw", get(handlers::admin_opengfw_page))
+        .route("/admin/disputes", get(handlers::admin_disputes_page))
+        .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
+        .route("/admin/disputes/:id/intervene", post(handlers::admin_dispute_intervene))
+        .route("/admin/warning-letters", get(handlers::admin_warning_letters_page))
+        .route("/admin/warning-letters/send", post(handlers::admin_warning_letter_send))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
         .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
         // API routes (RESTful JSON) - mounted under /api prefix

@@ -248,6 +248,87 @@
                         <input type="number" class="form-control" id="balance_to_code_daily_limit" name="balance_to_code_daily_limit" value="{% for c in configs %}{% if c.key == 'balance_to_code_daily_limit' %}{{ c.value }}{% endif %}{% endfor %}" step="1" min="1">
                     </div>
 
+                    <h5 class="mb-3 mt-4">邮件服务器设置</h5>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="mail_enabled" value="0">
+                                <input type="checkbox" class="form-check-input" id="mail_enabled" name="mail_enabled" value="1" {% for c in configs %}{% if c.key == 'mail_enabled' and c.value == '1' %}checked{% endif %}{% endfor %}>
+                                <label class="form-check-label" for="mail_enabled">启用邮件通知</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label for="mail_smtp_host" class="form-label">SMTP 服务器地址</label>
+                            <input type="text" class="form-control" id="mail_smtp_host" name="mail_smtp_host" placeholder="smtp.example.com" value="{% for c in configs %}{% if c.key == 'mail_smtp_host' %}{{ c.value }}{% endif %}{% endfor %}">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="mail_smtp_port" class="form-label">SMTP 端口</label>
+                            <input type="number" class="form-control" id="mail_smtp_port" name="mail_smtp_port" value="{% for c in configs %}{% if c.key == 'mail_smtp_port' %}{{ c.value }}{% endif %}{% endfor %}" min="1" max="65535">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="mail_username" class="form-label">SMTP 用户名</label>
+                            <input type="text" class="form-control" id="mail_username" name="mail_username" placeholder="user@example.com" value="{% for c in configs %}{% if c.key == 'mail_username' %}{{ c.value }}{% endif %}{% endfor %}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="mail_password" class="form-label">SMTP 密码</label>
+                            <input type="password" class="form-control" id="mail_password" name="mail_password" placeholder="授权码或密码" value="{% for c in configs %}{% if c.key == 'mail_password' %}{{ c.value }}{% endif %}{% endfor %}">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="mail_from_name" class="form-label">发件人名称</label>
+                            <input type="text" class="form-control" id="mail_from_name" name="mail_from_name" placeholder="系统通知" value="{% for c in configs %}{% if c.key == 'mail_from_name' %}{{ c.value }}{% endif %}{% endfor %}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="mail_from_email" class="form-label">发件人邮箱（可选）</label>
+                            <input type="email" class="form-control" id="mail_from_email" name="mail_from_email" placeholder="noreply@example.com" value="{% for c in configs %}{% if c.key == 'mail_from_email' %}{{ c.value }}{% endif %}{% endfor %}">
+                            <small class="text-muted">留空则使用 SMTP 用户名作为发件人</small>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="mail_plain_domains" class="form-label">纯文本邮箱域名（逗号分隔）</label>
+                        <input type="text" class="form-control" id="mail_plain_domains" name="mail_plain_domains" placeholder="example.com,company.org" value="{% for c in configs %}{% if c.key == 'mail_plain_domains' %}{{ c.value }}{% endif %}{% endfor %}">
+                        <small class="text-muted">这些域名的邮箱将收到纯文本邮件，其他域名收到 HTML 格式邮件</small>
+                    </div>
+
+                    <h5 class="mb-3 mt-4">邮件通知设置</h5>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="mail_notify_warning_letter" value="0">
+                                <input type="checkbox" class="form-check-input" id="mail_notify_warning_letter" name="mail_notify_warning_letter" value="1" {% for c in configs %}{% if c.key == 'mail_notify_warning_letter' and c.value == '1' %}checked{% endif %}{% endfor %}>
+                                <label class="form-check-label" for="mail_notify_warning_letter">警告信通知</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="mail_notify_ban" value="0">
+                                <input type="checkbox" class="form-check-input" id="mail_notify_ban" name="mail_notify_ban" value="1" {% for c in configs %}{% if c.key == 'mail_notify_ban' and c.value == '1' %}checked{% endif %}{% endfor %}>
+                                <label class="form-check-label" for="mail_notify_ban">封号/解封通知</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="mail_notify_machine_status" value="0">
+                                <input type="checkbox" class="form-check-input" id="mail_notify_machine_status" name="mail_notify_machine_status" value="1" {% for c in configs %}{% if c.key == 'mail_notify_machine_status' and c.value == '1' %}checked{% endif %}{% endfor %}>
+                                <label class="form-check-label" for="mail_notify_machine_status">机器状态变更通知</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input type="hidden" name="mail_notify_dispute" value="0">
+                                <input type="checkbox" class="form-check-input" id="mail_notify_dispute" name="mail_notify_dispute" value="1" {% for c in configs %}{% if c.key == 'mail_notify_dispute' and c.value == '1' %}checked{% endif %}{% endfor %}>
+                                <label class="form-check-label" for="mail_notify_dispute">争议处理通知</label>
+                            </div>
+                        </div>
+                    </div>
+
                     <button type="submit" class="btn btn-primary w-100">保存配置</button>
                 </form>
             </div>

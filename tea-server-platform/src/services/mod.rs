@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod core_hours;
 pub mod ldc_payment;
+pub mod mail;
+pub mod mail_templates;
 pub mod machine_lifecycle;
 pub mod opengfw;
 pub mod session;
