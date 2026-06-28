@@ -23,35 +23,63 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("[DEBUG] tea-server-platform starting...");
-    println!("[DEBUG] Initializing tracing subscriber...");
-    tracing_subscriber::fmt::init();
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+    let _ = writeln!(stdout, "[tea-server-platform] starting...");
+    let _ = stdout.flush();
+
+    // 初始化 tracing（带 ansicolor 关闭，避免 Docker 日志乱码）
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_target(true)
+        .with_level(true)
+        .init();
+
     tracing::info!("tracing subscriber initialized");
 
-    println!("[DEBUG] Loading config from environment...");
     // Load config
-    config::AppConfig::from_env()?;
+    match config::AppConfig::from_env() {
+        Ok(_) => tracing::info!("config loaded successfully"),
+        Err(e) => {
+            tracing::error!("failed to load config: {}", e);
+            let _ = writeln!(stdout, "[FATAL] failed to load config: {}", e);
+            let _ = stdout.flush();
+            return Err(e);
+        }
+    }
     let cfg = config::AppConfig::get();
-    tracing::info!("config loaded, database_url: {}", cfg.database_url);
-    tracing::info!("config loaded, bind_addr: {}", cfg.bind_addr);
+    tracing::info!("database_url: {}", cfg.database_url);
+    tracing::info!("bind_addr: {}", cfg.bind_addr);
 
-    println!("[DEBUG] Recording startup time...");
     // Record startup time for health endpoint
     handlers::api::set_startup_time(chrono::Utc::now());
 
-    println!("[DEBUG] Initializing database...");
     // Init database
-    db::init_db(&cfg.database_url).await?;
-    tracing::info!("database initialized");
+    tracing::info!("initializing database...");
+    match db::init_db(&cfg.database_url).await {
+        Ok(_) => tracing::info!("database initialized"),
+        Err(e) => {
+            tracing::error!("failed to initialize database: {}", e);
+            return Err(e);
+        }
+    }
 
-    println!("[DEBUG] Initializing Tera templates...");
     // Init Tera templates
-    let mut tera = Tera::new("templates/**/*")?;
+    tracing::info!("initializing templates...");
+    let mut tera = match Tera::new("templates/**/*") {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("failed to load templates: {}", e);
+            let _ = writeln!(stdout, "[FATAL] failed to load templates: {}", e);
+            let _ = stdout.flush();
+            return Err(e.into());
+        }
+    };
     tera.autoescape_on(vec!["html", ".tera"]);
     let app_state = AppState {
         templates: Arc::new(tera),
     };
-    tracing::info!("Tera templates initialized");
+    tracing::info!("templates initialized");
 
     // Background task: stop expired machines every 60 seconds
     tokio::spawn(async {
