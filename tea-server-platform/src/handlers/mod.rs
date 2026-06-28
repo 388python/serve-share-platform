@@ -1787,6 +1787,32 @@ pub async fn user_center_page(
     Ok(Html(rendered))
 }
 
+pub async fn user_email_update(
+    cookies: Cookies,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (user_id, _username) = match require_auth(&cookies) {
+        Ok(v) => (v.0, v.1),
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let email = form.get("email").cloned().unwrap_or_default();
+
+    // 简单验证邮箱格式
+    if !email.is_empty() && (!email.contains('@') || !email.contains('.')) {
+        return Redirect::to("/user?error=invalid_email").into_response();
+    }
+
+    let pool = db::get_db();
+    let _ = sqlx::query("UPDATE users SET email = ? WHERE id = ?")
+        .bind(&email)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+
+    Redirect::to("/user").into_response()
+}
+
 // ---- Packages Page ----
 
 pub async fn packages_page(
@@ -2019,6 +2045,94 @@ pub async fn dispute_page(
     Ok(Html(rendered))
 }
 
+pub async fn dispute_create(
+    cookies: Cookies,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (user_id, username) = match require_auth(&cookies) {
+        Ok(v) => (v.0, v.1),
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+    let machine_id: i64 = form
+        .get("machine_id")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let reason = form.get("reason").cloned().unwrap_or_default();
+
+    if machine_id == 0 || reason.is_empty() {
+        return Redirect::to("/machines").into_response();
+    }
+
+    // 检查机器是否属于用户
+    let machine: Option<(i64, f64)> = sqlx::query_as(
+        "SELECT server_id, core_hours_per_hour FROM machines WHERE id = ? AND user_id = ?"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (server_id, ch_per_hour) = match machine {
+        Some(v) => v,
+        None => return Redirect::to("/machines").into_response(),
+    };
+
+    // 冻结24小时费用
+    let freeze_amount = ch_per_hour * 24.0;
+    let auto_resolve_hours = db::get_config("dispute_auto_resolve_hours")
+        .await
+        .unwrap_or_else(|| "72".to_string())
+        .parse::<i64>()
+        .unwrap_or(72);
+
+    let result = sqlx::query(
+        "INSERT INTO disputes (machine_id, user_id, server_id, reason, amount_frozen, regular_amount_frozen, bonus_amount_frozen, status, auto_resolve_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now', '+' || ? || ' hours'), CURRENT_TIMESTAMP)"
+    )
+    .bind(machine_id)
+    .bind(user_id)
+    .bind(server_id)
+    .bind(&reason)
+    .bind(freeze_amount)
+    .bind(freeze_amount)
+    .bind(0.0)
+    .bind(auto_resolve_hours)
+    .execute(pool)
+    .await;
+
+    if result.is_ok() {
+        // 通知管理员
+        let notify = db::get_config("mail_notify_dispute")
+            .await
+            .unwrap_or_else(|| "1".to_string())
+            == "1";
+        if notify {
+            let site_name = db::get_config("site_name").await.unwrap_or_default();
+            // 找到管理员邮箱
+            let admins: Vec<(String, String)> = sqlx::query_as(
+                "SELECT username, email FROM users WHERE is_admin = 1 AND email != ''"
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+            for (admin_name, admin_email) in admins {
+                let notification = crate::services::mail_templates::dispute_created_notice(
+                    &site_name, &admin_name, machine_id, &username, &reason,
+                );
+                crate::services::mail::send_mail_async(
+                    admin_email,
+                    notification.subject,
+                    notification.html_body,
+                    notification.text_body,
+                );
+            }
+        }
+    }
+
+    Redirect::to(&format!("/machines/{}", machine_id)).into_response()
+}
+
 // ---- Stats Page ----
 
 pub async fn stats_page(
@@ -2151,6 +2265,9 @@ pub async fn admin_config_save(
             "global_disk_multiplier", "recharge_multiplier", "recharge_fee", "withdraw_fee",
             "settlement_threshold_pct", "balance_to_code_fee", "balance_to_code_daily_limit",
             "balance_to_code_enabled", "ldc_ed25519_private_key", "ldc_ed25519_public_key",
+            "mail_enabled", "mail_smtp_host", "mail_smtp_port", "mail_username", "mail_password",
+            "mail_from_name", "mail_from_email", "mail_plain_domains",
+            "mail_notify_warning_letter", "mail_notify_ban", "mail_notify_machine_status", "mail_notify_dispute",
         ];
         if allowed.iter().any(|k| k == key) {
             let _ = sqlx::query("INSERT OR REPLACE INTO site_config (key, value) VALUES (?, ?)")
@@ -2215,8 +2332,58 @@ pub async fn admin_user_edit(
     }
     if let Some(ban) = form.get("is_banned") {
         let banned = if ban == "1" { 1 } else { 0 };
+        let was_banned: Option<i64> = sqlx::query_scalar("SELECT is_banned FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+        let was_banned = was_banned.unwrap_or(0) != 0;
+        let now_banned = banned != 0;
+
         let _ = sqlx::query("UPDATE users SET is_banned = ? WHERE id = ?")
             .bind(banned)
+            .bind(id)
+            .execute(pool)
+            .await;
+
+        if was_banned != now_banned {
+            let user: Option<(String, String)> = sqlx::query_as(
+                "SELECT username, email FROM users WHERE id = ?"
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+            if let Some((username, email)) = user {
+                if !email.is_empty() {
+                    let site_name = db::get_config("site_name").await.unwrap_or_default();
+                    let notify_ban = db::get_config("mail_notify_ban")
+                        .await
+                        .unwrap_or_else(|| "1".to_string())
+                        == "1";
+                    if notify_ban {
+                        let notification = if now_banned {
+                            crate::services::mail_templates::account_banned_notice(
+                                &site_name, &username, "违反平台规则",
+                            )
+                        } else {
+                            crate::services::mail_templates::account_unbanned_notice(&site_name, &username)
+                        };
+                        crate::services::mail::send_mail_async(
+                            email,
+                            notification.subject,
+                            notification.html_body,
+                            notification.text_body,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(email_new) = form.get("email") {
+        let _ = sqlx::query("UPDATE users SET email = ? WHERE id = ?")
+            .bind(email_new)
             .bind(id)
             .execute(pool)
             .await;
@@ -2585,6 +2752,150 @@ pub async fn admin_disputes_page(
     Ok(Html(rendered))
 }
 
+pub async fn admin_dispute_resolve(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let _ = match require_admin(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+    let resolution = form.get("resolution").cloned().unwrap_or_default();
+    let reply = form.get("reply").cloned().unwrap_or_default();
+
+    let dispute: Option<(i64, i64, f64, f64, f64)> = sqlx::query_as(
+        "SELECT user_id, machine_id, amount_frozen, regular_amount_frozen, bonus_amount_frozen FROM disputes WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (user_id, machine_id, _amount, regular_frozen, bonus_frozen) = match dispute {
+        Some(d) => (d.0, d.1, d.2, d.3, d.4),
+        None => return Redirect::to("/admin/disputes").into_response(),
+    };
+
+    let result = resolution.clone();
+    let is_upheld = resolution == "refund";
+    let reply_text = if is_upheld { "争议成立，已退款" } else { "争议不成立，驳回申诉" };
+
+    if is_upheld {
+        // 退款给用户
+        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ?, bonus_core_hours = bonus_core_hours + ? WHERE id = ?")
+            .bind(regular_frozen)
+            .bind(bonus_frozen)
+            .bind(user_id)
+            .execute(pool)
+            .await;
+    }
+
+    let _ = sqlx::query(
+        "UPDATE disputes SET status = 'resolved', resolution = ?, reply = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?"
+    )
+    .bind(&result)
+    .bind(&reply)
+    .bind(id)
+    .execute(pool)
+    .await;
+
+    // 发送通知邮件
+    let notify = db::get_config("mail_notify_dispute")
+        .await
+        .unwrap_or_else(|| "1".to_string())
+        == "1";
+    if notify {
+        let user: Option<(String, String)> = sqlx::query_as(
+            "SELECT username, email FROM users WHERE id = ?"
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some((username, email)) = user {
+            if !email.is_empty() {
+                let site_name = db::get_config("site_name").await.unwrap_or_default();
+                let resolution_str = if is_upheld { "upheld" } else { "rejected" };
+                let notification = crate::services::mail_templates::dispute_resolved_notice(
+                    &site_name, &username, machine_id, resolution_str, reply_text,
+                );
+                crate::services::mail::send_mail_async(
+                    email,
+                    notification.subject,
+                    notification.html_body,
+                    notification.text_body,
+                );
+            }
+        }
+    }
+
+    Redirect::to("/admin/disputes").into_response()
+}
+
+pub async fn admin_dispute_intervene(
+    cookies: Cookies,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let _ = match require_admin(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+
+    let dispute: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT user_id, machine_id FROM disputes WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    let (user_id, machine_id) = match dispute {
+        Some(d) => d,
+        None => return Redirect::to("/admin/disputes").into_response(),
+    };
+
+    let _ = sqlx::query("UPDATE disputes SET status = 'platform' WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    // 发送通知邮件
+    let notify = db::get_config("mail_notify_dispute")
+        .await
+        .unwrap_or_else(|| "1".to_string())
+        == "1";
+    if notify {
+        let user: Option<(String, String)> = sqlx::query_as(
+            "SELECT username, email FROM users WHERE id = ?"
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some((username, email)) = user {
+            if !email.is_empty() {
+                let site_name = db::get_config("site_name").await.unwrap_or_default();
+                let notification = crate::services::mail_templates::dispute_intervened_notice(
+                    &site_name, &username, machine_id,
+                );
+                crate::services::mail::send_mail_async(
+                    email,
+                    notification.subject,
+                    notification.html_body,
+                    notification.text_body,
+                );
+            }
+        }
+    }
+
+    Redirect::to("/admin/disputes").into_response()
+}
+
 // ---- Admin Warning Letters Page ----
 
 pub async fn admin_warning_letters_page(
@@ -2618,6 +2929,95 @@ pub async fn admin_warning_letters_page(
         .render("admin/warning_letters.html", &ctx)
         .unwrap_or_default();
     Ok(Html(rendered))
+}
+
+pub async fn admin_warning_letter_send(
+    cookies: Cookies,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (admin_id, _admin_name) = match require_admin(&cookies) {
+        Ok(v) => v,
+        Err(redirect) => return redirect.into_response(),
+    };
+
+    let pool = db::get_db();
+    let user_id: i64 = form
+        .get("user_id")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let subject = form.get("subject").cloned().unwrap_or_default();
+    let content = form.get("content").cloned().unwrap_or_default();
+    let warning_type = form.get("warning_type").cloned().unwrap_or_else(|| "general".to_string());
+    let severity = form.get("severity").cloned().unwrap_or_else(|| "warning".to_string());
+    let expiry_days: i64 = form
+        .get("expiry_days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let requires_action = if form.get("requires_action").is_some() { 1 } else { 0 };
+
+    if user_id == 0 || subject.is_empty() || content.is_empty() {
+        return Redirect::to("/admin/warning-letters?error=invalid_input").into_response();
+    }
+
+    let expires_at = if expiry_days > 0 {
+        Some(format!("datetime('now', '+{} days')", expiry_days))
+    } else {
+        None
+    };
+
+    let query = if let Some(exp) = expires_at {
+        format!(
+            "INSERT INTO warning_letters (user_id, subject, content, warning_type, severity, requires_action, sent_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, {})",
+            exp
+        )
+    } else {
+        "INSERT INTO warning_letters (user_id, subject, content, warning_type, severity, requires_action, sent_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)".to_string()
+    };
+
+    let result = sqlx::query(&query)
+        .bind(user_id)
+        .bind(&subject)
+        .bind(&content)
+        .bind(&warning_type)
+        .bind(&severity)
+        .bind(requires_action)
+        .bind(admin_id)
+        .execute(pool)
+        .await;
+
+    if let Ok(res) = result {
+        let letter_id = res.last_insert_rowid();
+        // 发送邮件通知
+        let user: Option<(String, String)> = sqlx::query_as(
+            "SELECT username, email FROM users WHERE id = ?"
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some((username, email)) = user {
+            if !email.is_empty() {
+                let site_name = db::get_config("site_name").await.unwrap_or_default();
+                let notify = db::get_config("mail_notify_warning_letter")
+                    .await
+                    .unwrap_or_else(|| "1".to_string())
+                    == "1";
+                if notify {
+                    let notification = crate::services::mail_templates::warning_letter_notice(
+                        &site_name, &username, &subject, &content, letter_id,
+                    );
+                    crate::services::mail::send_mail_async(
+                        email,
+                        notification.subject,
+                        notification.html_body,
+                        notification.text_body,
+                    );
+                }
+            }
+        }
+    }
+
+    Redirect::to("/admin/warning-letters").into_response()
 }
 
 // ---- Balance to Code ----

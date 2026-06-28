@@ -73,6 +73,10 @@
                                         <form method="post" action="/admin/users/{{ u.id }}">
                                             <div class="modal-body">
                                                 <div class="mb-3">
+                                                    <label class="form-label">邮箱</label>
+                                                    <input type="email" class="form-control" name="email" value="{{ u.email }}">
+                                                </div>
+                                                <div class="mb-3">
                                                     <label class="form-label">核时</label>
                                                     <input type="number" class="form-control" name="core_hours" value="{{ u.core_hours }}" step="0.1">
                                                 </div>

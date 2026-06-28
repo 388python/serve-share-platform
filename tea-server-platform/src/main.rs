@@ -358,6 +358,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/ws", handlers::websocket::router(app_state.clone()))
         // Disputes
         .route("/disputes/new", get(handlers::dispute_page))
+        .route("/disputes/create", post(handlers::dispute_create))
         // Recharge
         .route("/recharge", get(handlers::recharge_page))
         .route("/recharge/callback", get(handlers::recharge_callback))
@@ -379,6 +380,8 @@ async fn main() -> anyhow::Result<()> {
         // Warning letters
         .route("/warnings", get(handlers::warning_letters_page))
         .route("/warnings/:id", get(handlers::warning_letter_detail))
+        // User profile / email
+        .route("/user/email", post(handlers::user_email_update))
         // OAuth authorize
         .route("/oauth/authorize", get(services::auth::oauth_authorize))
         // Admin routes
@@ -398,7 +401,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/traffic-alerts", get(handlers::admin_traffic_alerts_page))
         .route("/admin/opengfw", get(handlers::admin_opengfw_page))
         .route("/admin/disputes", get(handlers::admin_disputes_page))
+        .route("/admin/disputes/:id/resolve", post(handlers::admin_dispute_resolve))
+        .route("/admin/disputes/:id/intervene", post(handlers::admin_dispute_intervene))
         .route("/admin/warning-letters", get(handlers::admin_warning_letters_page))
+        .route("/admin/warning-letters/send", post(handlers::admin_warning_letter_send))
         .route("/admin/oauth-apps", get(handlers::admin_oauth_apps))
         .route("/admin/oauth-apps", post(handlers::admin_oauth_apps_create))
         // API routes (RESTful JSON) - mounted under /api prefix

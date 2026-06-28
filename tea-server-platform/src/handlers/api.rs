@@ -1468,7 +1468,7 @@ async fn api_admin_machines_batch(
                 .await
                 .unwrap_or(None);
 
-                if let Some((status, server_id, ch_per_hour, used_hours)) = machine {
+                if let Some((_status, server_id, ch_per_hour, used_hours)) = machine {
                     let total_cost = ch_per_hour * used_hours;
                     if total_cost > 0.0 {
                         let _ = sqlx::query(
@@ -1491,6 +1491,112 @@ async fn api_admin_machines_batch(
             }
         }
         _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_action"}))).into_response(),
+    }
+
+    // 发送邮件通知给机器所有者
+    if success_count > 0 {
+        let notify = crate::db::get_config("mail_notify_machine_status")
+            .await
+            .unwrap_or_else(|| "1".to_string())
+            == "1";
+        if notify {
+            let site_name = crate::db::get_config("site_name").await.unwrap_or_default();
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let affected_query = format!(
+                "SELECT DISTINCT m.user_id, u.username, u.email FROM machines m JOIN users u ON m.user_id = u.id WHERE m.id IN ({}) AND u.email != ''",
+                placeholders
+            );
+            let mut q = sqlx::query_as::<_, (i64, String, String)>(&affected_query);
+            for id in &ids { q = q.bind(id); }
+            if let Ok(users) = q.fetch_all(pool).await {
+                let new_status = match action {
+                    "stop" => "stopped",
+                    "start" => "running",
+                    "suspend" => "suspended",
+                    "unsuspend" => "stopped",
+                    "delete" | "delete_settle" => "deleted",
+                    "settle" => "stopped",
+                    _ => "",
+                };
+                let reason = match action {
+                    "stop" => "管理员已停止您的机器",
+                    "start" => "管理员已启动您的机器",
+                    "suspend" => "管理员已暂停您的机器，暂停期间不计费",
+                    "unsuspend" => "管理员已取消暂停您的机器",
+                    "delete" | "delete_settle" => "管理员已删除您的机器",
+                    "settle" => "管理员已结算您的机器使用费用",
+                    _ => "机器状态变更",
+                };
+                let old_status_desc = match action {
+                    "stop" => "运行中",
+                    "start" => "已停止",
+                    "suspend" => "运行中/已停止",
+                    "unsuspend" => "已暂停",
+                    "delete" | "delete_settle" => "原有状态",
+                    "settle" => "原有状态",
+                    _ => "",
+                };
+                let new_status_cn = match new_status {
+                    "running" => "运行中",
+                    "stopped" => "已停止",
+                    "pending" => "创建中",
+                    "failed" => "创建失败",
+                    "suspended" => "已暂停",
+                    "deleted" => "已删除",
+                    _ => new_status,
+                };
+                if !new_status.is_empty() {
+                    for (_uid, username, email) in users {
+                        let ids_str = ids.iter().map(|i| format!("#{}", i)).collect::<Vec<_>>().join(", ");
+                        let subject = format!("[{}] 机器状态变更：{}", site_name, ids_str);
+                        let text_body = format!(
+                            "亲爱的 {username}：\n\n\
+                            管理员已对您的机器进行了操作：\n\n\
+                            机器：{ids_str}\n\
+                            原状态：{old_status_desc}\n\
+                            新状态：{new_status_cn}\n\
+                            说明：{reason}\n\n\
+                            请登录 {site_name} 查看详情。\n\n\
+                            —— {site_name} 系统",
+                            username = username,
+                            ids_str = ids_str,
+                            old_status_desc = old_status_desc,
+                            new_status_cn = new_status_cn,
+                            reason = reason,
+                            site_name = site_name
+                        );
+                        let html_body = crate::services::mail::build_html_template(
+                            &subject,
+                            &format!(
+                                r#"            <p>亲爱的 <strong>{username}</strong>：</p>
+            <p>管理员已对您的机器进行了操作：</p>
+            <div class="alert-info">
+                <table>
+                    <tr><td>机器：</td><td>{ids_str}</td></tr>
+                    <tr><td>原状态：</td><td>{old_status_desc}</td></tr>
+                    <tr><td>新状态：</td><td><strong>{new_status_cn}</strong></td></tr>
+                    <tr><td>说明：</td><td>{reason}</td></tr>
+                </table>
+            </div>
+            <p><a href="/machines" class="btn">查看我的机器</a></p>"#,
+                                username = username,
+                                ids_str = ids_str,
+                                old_status_desc = old_status_desc,
+                                new_status_cn = new_status_cn,
+                                reason = reason
+                            ),
+                            &site_name
+                        );
+                        crate::services::mail::send_mail_async(
+                            email,
+                            subject,
+                            html_body,
+                            text_body,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     ok_response(json!({
