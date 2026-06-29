@@ -510,6 +510,28 @@ pub async fn contribute_server_page(
         ctx.insert("servers", &servers);
     }
 
+    let global_cpu_mult: f64 = db::get_config("global_cpu_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_mem_mult: f64 = db::get_config("global_memory_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_bw_mult: f64 = db::get_config("global_bandwidth_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_disk_mult: f64 = db::get_config("global_disk_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+
+    ctx.insert("global_cpu_multiplier", &global_cpu_mult);
+    ctx.insert("global_memory_multiplier", &global_mem_mult);
+    ctx.insert("global_bandwidth_multiplier", &global_bw_mult);
+    ctx.insert("global_disk_multiplier", &global_disk_mult);
+
     let rendered = state
         .templates
         .render("user/contribute.html", &ctx)
@@ -796,6 +818,28 @@ pub async fn machine_market(
     .await
     .unwrap_or_default();
     ctx.insert("machines", &machines);
+
+    let global_cpu_mult: f64 = db::get_config("global_cpu_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_mem_mult: f64 = db::get_config("global_memory_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_bw_mult: f64 = db::get_config("global_bandwidth_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+    let global_disk_mult: f64 = db::get_config("global_disk_multiplier")
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+
+    ctx.insert("global_cpu_multiplier", &global_cpu_mult);
+    ctx.insert("global_memory_multiplier", &global_mem_mult);
+    ctx.insert("global_bandwidth_multiplier", &global_bw_mult);
+    ctx.insert("global_disk_multiplier", &global_disk_mult);
 
     let rendered = state
         .templates

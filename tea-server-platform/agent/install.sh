@@ -89,7 +89,11 @@ class AgentHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path == "/status":
-            self._send_json({"status": "ok", "virt_type": VIRT_TYPE})
+            virt_info = self._detect_virtualization()
+            self._send_json({"status": "ok", "virt_type": VIRT_TYPE, "virtualization": virt_info})
+        elif path == "/virtualization":
+            virt_info = self._detect_virtualization()
+            self._send_json(virt_info)
         elif path == "/ports":
             self._handle_get_ports()
         elif path == "/processes":
@@ -560,6 +564,66 @@ table ip opengfw {
             "output": result.stdout,
             "error": result.stderr
         })
+
+    def _detect_virtualization(self):
+        result = {
+            "supported": False,
+            "virt_types": [],
+            "details": {},
+        }
+        try:
+            kvm_supported = False
+            vt_x_supported = False
+            vt_d_supported = False
+
+            result_cpuinfo = subprocess.run(
+                ["grep", "-E", "(vmx|svm)", "/proc/cpuinfo"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result_cpuinfo.returncode == 0:
+                if "vmx" in result_cpuinfo.stdout:
+                    vt_x_supported = True
+                if "svm" in result_cpuinfo.stdout:
+                    vt_d_supported = True
+
+            try:
+                result_kvm = subprocess.run(
+                    ["lsmod"], capture_output=True, text=True, timeout=10
+                )
+                if "kvm_intel" in result_kvm.stdout or "kvm_amd" in result_kvm.stdout:
+                    kvm_supported = True
+            except Exception:
+                pass
+
+            if vt_x_supported or vt_d_supported:
+                result["virt_types"].append("kvm")
+                if kvm_supported:
+                    result["details"]["kvm"] = "enabled"
+                else:
+                    result["details"]["kvm"] = "supported but not loaded"
+
+            lxd_supported = False
+            try:
+                result_lxc = subprocess.run(["which", "lxc"], capture_output=True, text=True, timeout=5)
+                if result_lxc.returncode == 0:
+                    lxd_supported = True
+                    result["virt_types"].append("lxd")
+                    result["details"]["lxd"] = "installed"
+            except Exception:
+                pass
+
+            if result["virt_types"]:
+                result["supported"] = True
+
+            result["details"]["vt_x_supported"] = vt_x_supported
+            result["details"]["vt_d_supported"] = vt_d_supported
+            result["details"]["kvm_loaded"] = kvm_supported
+            result["details"]["lxd_installed"] = lxd_supported
+
+        except Exception as e:
+            pass
+
+        return result
 
 def report_stats_loop():
     while True:

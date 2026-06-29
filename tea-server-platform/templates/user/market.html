@@ -218,14 +218,24 @@
                             </div>
                         </div>
                         
-                        <div class="alert alert-info d-flex align-items-center mb-0">
-                            <i class="bi bi-lightbulb-fill me-2 fs-5"></i>
-                            <div>
-                                <small class="fw-medium">核时消耗计算方式</small>
-                                <br>
-                                <small>CPU核数 × CPU倍率({{ s.cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }})</small>
-                            </div>
-                        </div>
+                        <div class="alert alert-info d-flex align-items-center mb-3">
+            <i class="bi bi-lightbulb-fill me-2 fs-5"></i>
+            <div>
+                <small class="fw-medium">核时消耗计算方式</small>
+                <br>
+                <small>CPU核数 × CPU倍率({{ s.cpu_multiplier }}) × 全局倍率({{ global_cpu_multiplier }}) + 内存GB × 内存倍率({{ s.memory_multiplier }}) × 全局倍率({{ global_memory_multiplier }}) + 磁盘GB × 磁盘倍率({{ s.disk_multiplier }}) × 全局倍率({{ global_disk_multiplier }})</small>
+            </div>
+        </div>
+        <div class="card border-0 bg-light p-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <span class="text-muted small">预计每小时消耗</span>
+                <span id="costPerHour{{ s.id }}" class="fw-bold text-primary">0.00</span>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span class="text-muted small">预计 24 小时消耗</span>
+                <span id="costPerDay{{ s.id }}" class="fw-bold text-warning">0.00</span>
+            </div>
+        </div>
                     </div>
                     <div class="modal-footer border-top-0 pt-0">
                         <button type="button" class="btn btn-outline-secondary px-4" data-bs-dismiss="modal">
@@ -293,5 +303,50 @@ function onImageChange(serverId) {
         passwordInput.setAttribute('required', 'required');
     }
 }
+
+function calculateCoreHours(serverId, cpuMult, memMult, diskMult, globalCpuMult, globalMemMult, globalDiskMult) {
+    const cpuInput = document.querySelector(`#selectModal${serverId} input[name="cpu_cores"]`);
+    const memInput = document.querySelector(`#selectModal${serverId} input[name="memory_gb"]`);
+    const diskInput = document.querySelector(`#selectModal${serverId} input[name="disk_gb"]`);
+    
+    if (!cpuInput || !memInput || !diskInput) return;
+    
+    const cpu = parseFloat(cpuInput.value) || 1;
+    const mem = parseFloat(memInput.value) || 1;
+    const disk = parseFloat(diskInput.value) || 10;
+    
+    const cpuCost = cpu * cpuMult * globalCpuMult;
+    const memCost = mem * memMult * globalMemMult;
+    const diskCost = disk * diskMult * globalDiskMult;
+    
+    const perHour = cpuCost + memCost + diskCost;
+    const perDay = perHour * 24;
+    
+    const hourEl = document.getElementById('costPerHour' + serverId);
+    const dayEl = document.getElementById('costPerDay' + serverId);
+    
+    if (hourEl) hourEl.textContent = perHour.toFixed(2);
+    if (dayEl) dayEl.textContent = perDay.toFixed(2);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    {% for s in servers %}
+    const cpuInput = document.querySelector(`#selectModal{{ s.id }} input[name="cpu_cores"]`);
+    const memInput = document.querySelector(`#selectModal{{ s.id }} input[name="memory_gb"]`);
+    const diskInput = document.querySelector(`#selectModal{{ s.id }} input[name="disk_gb"]`);
+    
+    if (cpuInput) cpuInput.addEventListener('input', function() {
+        calculateCoreHours({{ s.id }}, {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }}, {{ global_cpu_multiplier }}, {{ global_memory_multiplier }}, {{ global_disk_multiplier }});
+    });
+    if (memInput) memInput.addEventListener('input', function() {
+        calculateCoreHours({{ s.id }}, {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }}, {{ global_cpu_multiplier }}, {{ global_memory_multiplier }}, {{ global_disk_multiplier }});
+    });
+    if (diskInput) diskInput.addEventListener('input', function() {
+        calculateCoreHours({{ s.id }}, {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }}, {{ global_cpu_multiplier }}, {{ global_memory_multiplier }}, {{ global_disk_multiplier }});
+    });
+    
+    calculateCoreHours({{ s.id }}, {{ s.cpu_multiplier }}, {{ s.memory_multiplier }}, {{ s.disk_multiplier }}, {{ global_cpu_multiplier }}, {{ global_memory_multiplier }}, {{ global_disk_multiplier }});
+    {% endfor %}
+});
 </script>
 {% endblock scripts %}
