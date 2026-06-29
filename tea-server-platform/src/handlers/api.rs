@@ -283,8 +283,11 @@ async fn api_servers_contribute(
             let ip = form.ip.clone();
             let ssh_port_copy = ssh_port;
             let ssh_key = form.ssh_key.clone();
+            let virt_type_copy = virt_type.clone();
+            let agent_key_copy = agent_key.clone();
+            let platform_url = db::get_config("platform_url").await.unwrap_or_else(|| "http://localhost:3000".to_string());
             tokio::spawn(async move {
-                install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key).await;
+                install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key, &virt_type_copy, &agent_key_copy, &platform_url).await;
             });
 
             let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
@@ -303,44 +306,73 @@ async fn api_servers_contribute(
     }
 }
 
-async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+async fn install_agent_ssh_api(
+    _server_id: i64,
+    _ip: &str,
+    _port: i32,
+    _ssh_key: &str,
+    _virt_type: &str,
+    _agent_key: &str,
+    _platform_url: &str,
+) {
     let _ = tokio::task::spawn_blocking({
         let ip = _ip.to_string();
         let ssh_key = _ssh_key.to_string();
         let server_id = _server_id;
+        let virt_type = _virt_type.to_string();
+        let agent_key = _agent_key.to_string();
+        let platform_url = _platform_url.to_string();
         move || {
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
-                Err(_) => return,
+                Err(e) => {
+                    tracing::error!(server_id = server_id, ip = ip, port = _port, "Failed to connect to server: {}", e);
+                    return;
+                }
             };
             let mut session = match ssh2::Session::new() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(e) => {
+                    tracing::error!(server_id = server_id, "Failed to create SSH session: {}", e);
+                    return;
+                }
             };
             session.set_tcp_stream(tcp);
             if session.handshake().is_err() {
+                tracing::error!(server_id = server_id, "SSH handshake failed");
                 return;
             }
             if session
                 .userauth_pubkey_memory("root", None, &ssh_key, None)
                 .is_err()
             {
+                tracing::error!(server_id = server_id, "SSH authentication failed");
                 return;
             }
             if let Ok(mut channel) = session.channel_session() {
-                if channel
-                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
-                    .is_ok()
-                {
+                // Build install command with proper parameters
+                let install_url = format!("{}/api/v1/agent/install", platform_url);
+                let install_cmd = format!(
+                    "curl -sSL '{}' | bash -s -- '{}' '{}' '{}'",
+                    install_url, virt_type, agent_key, platform_url
+                );
+                tracing::info!(server_id = server_id, cmd = install_cmd.as_str(), "Running agent install script");
+                if channel.exec(&install_cmd).is_ok() {
                     let _ = channel.wait_close();
-                    if channel.exit_status().unwrap_or(1) == 0 {
+                    let exit_status = channel.exit_status().unwrap_or(1);
+                    if exit_status == 0 {
+                        tracing::info!(server_id = server_id, "Agent installation completed successfully");
                         let pool = db::get_db();
                         let _ = sqlx::query(
                             "UPDATE servers SET agent_installed = 1 WHERE id = ?",
                         )
                         .bind(server_id)
                         .execute(pool);
+                    } else {
+                        tracing::error!(server_id = server_id, exit_status = exit_status, "Agent installation script failed");
                     }
+                } else {
+                    tracing::error!(server_id = server_id, "Failed to execute install script");
                 }
             }
         }
@@ -2948,8 +2980,8 @@ pub struct AnnouncementRequest {
 // GET /api/v1/announcements - List active announcements for users
 async fn api_announcements_list() -> impl IntoResponse {
     let pool = db::get_db();
-    let announcements: Vec<serde_json::Value> = sqlx::query_as(
-        "SELECT id, title, content, is_pinned, created_at FROM announcements WHERE is_active = 1 ORDER BY is_pinned DESC, created_at DESC LIMIT 20"
+    let announcements: Vec<Announcement> = sqlx::query_as(
+        "SELECT id, title, content, is_active, is_pinned, created_at, updated_at FROM announcements WHERE is_active = 1 ORDER BY is_pinned DESC, created_at DESC LIMIT 20"
     )
     .fetch_all(pool)
     .await
@@ -2966,8 +2998,8 @@ async fn api_admin_announcements_list(headers: HeaderMap) -> impl IntoResponse {
     };
 
     let pool = db::get_db();
-    let announcements: Vec<serde_json::Value> = sqlx::query_as(
-        "SELECT * FROM announcements ORDER BY is_pinned DESC, created_at DESC"
+    let announcements: Vec<Announcement> = sqlx::query_as(
+        "SELECT id, title, content, is_active, is_pinned, created_at, updated_at FROM announcements ORDER BY is_pinned DESC, created_at DESC"
     )
     .fetch_all(pool)
     .await
