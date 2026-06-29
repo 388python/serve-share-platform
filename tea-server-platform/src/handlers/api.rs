@@ -285,7 +285,8 @@ async fn api_servers_contribute(
             let ssh_key = form.ssh_key.clone();
             let virt_type_copy = virt_type.clone();
             let agent_key_copy = agent_key.clone();
-            let platform_url = db::get_config("platform_url").await.unwrap_or_else(|| "http://localhost:3000".to_string());
+            let cfg = crate::config::AppConfig::get();
+            let platform_url = cfg.platform_domain.clone();
             tokio::spawn(async move {
                 install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key, &virt_type_copy, &agent_key_copy, &platform_url).await;
             });

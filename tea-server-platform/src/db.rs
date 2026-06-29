@@ -756,7 +756,6 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("mail_notify_ban", "1"),
         ("mail_notify_machine_status", "1"),
         ("mail_notify_dispute", "1"),
-        ("platform_url", "http://localhost:3000"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")
