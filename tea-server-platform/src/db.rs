@@ -756,6 +756,7 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         ("mail_notify_ban", "1"),
         ("mail_notify_machine_status", "1"),
         ("mail_notify_dispute", "1"),
+        ("platform_url", "http://localhost:3000"),
     ];
     for (key, value) in defaults {
         sqlx::query("INSERT OR IGNORE INTO site_config (key, value) VALUES (?, ?)")
@@ -780,6 +781,23 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             vm_ip TEXT DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Create announcements table
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            is_pinned INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         "#,
     )

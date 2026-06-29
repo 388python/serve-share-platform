@@ -283,8 +283,11 @@ async fn api_servers_contribute(
             let ip = form.ip.clone();
             let ssh_port_copy = ssh_port;
             let ssh_key = form.ssh_key.clone();
+            let virt_type_copy = virt_type.clone();
+            let agent_key_copy = agent_key.clone();
+            let platform_url = db::get_config("platform_url").await.unwrap_or_else(|| "http://localhost:3000".to_string());
             tokio::spawn(async move {
-                install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key).await;
+                install_agent_ssh_api(server_id, &ip, ssh_port_copy, &ssh_key, &virt_type_copy, &agent_key_copy, &platform_url).await;
             });
 
             let server: Option<Server> = sqlx::query_as("SELECT * FROM servers WHERE id = ?")
@@ -303,44 +306,73 @@ async fn api_servers_contribute(
     }
 }
 
-async fn install_agent_ssh_api(_server_id: i64, _ip: &str, _port: i32, _ssh_key: &str) {
+async fn install_agent_ssh_api(
+    _server_id: i64,
+    _ip: &str,
+    _port: i32,
+    _ssh_key: &str,
+    _virt_type: &str,
+    _agent_key: &str,
+    _platform_url: &str,
+) {
     let _ = tokio::task::spawn_blocking({
         let ip = _ip.to_string();
         let ssh_key = _ssh_key.to_string();
         let server_id = _server_id;
+        let virt_type = _virt_type.to_string();
+        let agent_key = _agent_key.to_string();
+        let platform_url = _platform_url.to_string();
         move || {
             let tcp = match std::net::TcpStream::connect(format!("{}:{}", ip, _port)) {
                 Ok(tcp) => tcp,
-                Err(_) => return,
+                Err(e) => {
+                    tracing::error!(server_id = server_id, ip = ip, port = _port, "Failed to connect to server: {}", e);
+                    return;
+                }
             };
             let mut session = match ssh2::Session::new() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(e) => {
+                    tracing::error!(server_id = server_id, "Failed to create SSH session: {}", e);
+                    return;
+                }
             };
             session.set_tcp_stream(tcp);
             if session.handshake().is_err() {
+                tracing::error!(server_id = server_id, "SSH handshake failed");
                 return;
             }
             if session
                 .userauth_pubkey_memory("root", None, &ssh_key, None)
                 .is_err()
             {
+                tracing::error!(server_id = server_id, "SSH authentication failed");
                 return;
             }
             if let Ok(mut channel) = session.channel_session() {
-                if channel
-                    .exec("curl -sSL https://example.com/agent-install.sh | bash")
-                    .is_ok()
-                {
+                // Build install command with proper parameters
+                let install_url = format!("{}/api/v1/agent/install", platform_url);
+                let install_cmd = format!(
+                    "curl -sSL '{}' | bash -s -- '{}' '{}' '{}'",
+                    install_url, virt_type, agent_key, platform_url
+                );
+                tracing::info!(server_id = server_id, cmd = install_cmd.as_str(), "Running agent install script");
+                if channel.exec(&install_cmd).is_ok() {
                     let _ = channel.wait_close();
-                    if channel.exit_status().unwrap_or(1) == 0 {
+                    let exit_status = channel.exit_status().unwrap_or(1);
+                    if exit_status == 0 {
+                        tracing::info!(server_id = server_id, "Agent installation completed successfully");
                         let pool = db::get_db();
                         let _ = sqlx::query(
                             "UPDATE servers SET agent_installed = 1 WHERE id = ?",
                         )
                         .bind(server_id)
                         .execute(pool);
+                    } else {
+                        tracing::error!(server_id = server_id, exit_status = exit_status, "Agent installation script failed");
                     }
+                } else {
+                    tracing::error!(server_id = server_id, "Failed to execute install script");
                 }
             }
         }
@@ -2913,6 +2945,182 @@ async fn api_machine_port_forward_delete(
 // Router builder
 // ==============================
 
+async fn api_agent_install() -> impl IntoResponse {
+    let install_script = match std::fs::read_to_string("agent/install.sh") {
+        Ok(s) => s,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read install script: {}", e)).into_response();
+        }
+    };
+    ([("Content-Type", "text/x-shellscript")], install_script).into_response()
+}
+
+async fn api_agent_script() -> impl IntoResponse {
+    let agent_script = match std::fs::read_to_string("agent/agent.py") {
+        Ok(s) => s,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read agent script: {}", e)).into_response();
+        }
+    };
+    ([("Content-Type", "text/x-python")], agent_script).into_response()
+}
+
+// ==============================
+// Announcements API
+// ==============================
+
+#[derive(Deserialize)]
+pub struct AnnouncementRequest {
+    pub title: String,
+    pub content: String,
+    pub is_active: Option<bool>,
+    pub is_pinned: Option<bool>,
+}
+
+// GET /api/v1/announcements - List active announcements for users
+async fn api_announcements_list() -> impl IntoResponse {
+    let pool = db::get_db();
+    let announcements: Vec<Announcement> = sqlx::query_as(
+        "SELECT id, title, content, is_active, is_pinned, created_at, updated_at FROM announcements WHERE is_active = 1 ORDER BY is_pinned DESC, created_at DESC LIMIT 20"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    ok_response(announcements).into_response()
+}
+
+// GET /api/v1/admin/announcements - List all announcements for admin
+async fn api_admin_announcements_list(headers: HeaderMap) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let announcements: Vec<Announcement> = sqlx::query_as(
+        "SELECT id, title, content, is_active, is_pinned, created_at, updated_at FROM announcements ORDER BY is_pinned DESC, created_at DESC"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    ok_response(announcements).into_response()
+}
+
+// POST /api/v1/admin/announcements - Create new announcement
+async fn api_admin_announcements_create(
+    headers: HeaderMap,
+    Json(form): Json<AnnouncementRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+    let is_active = form.is_active.unwrap_or(true);
+    let is_pinned = form.is_pinned.unwrap_or(false);
+
+    let result = sqlx::query(
+        "INSERT INTO announcements (title, content, is_active, is_pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&form.title)
+    .bind(&form.content)
+    .bind(is_active)
+    .bind(is_pinned)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(res) => {
+            let id = res.last_insert_rowid();
+            ok_response(json!({ "id": id, "title": form.title })).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "insert_failed", "message": format!("{}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+// PUT /api/v1/admin/announcements/:id - Update announcement
+async fn api_admin_announcements_update(
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(form): Json<AnnouncementRequest>,
+) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let now = chrono::Utc::now();
+
+    let result = sqlx::query(
+        "UPDATE announcements SET title = ?, content = ?, is_active = ?, is_pinned = ?, updated_at = ? WHERE id = ?"
+    )
+    .bind(&form.title)
+    .bind(&form.content)
+    .bind(form.is_active.unwrap_or(true))
+    .bind(form.is_pinned.unwrap_or(false))
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(res) if res.rows_affected() > 0 => {
+            ok_response(json!({ "id": id, "title": form.title })).into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not_found", "message": "Announcement not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "update_failed", "message": format!("{}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+// DELETE /api/v1/admin/announcements/:id - Delete announcement
+async fn api_admin_announcements_delete(headers: HeaderMap, Path(id): Path<i64>) -> impl IntoResponse {
+    match authenticate_admin(&headers).await {
+        Ok(_) => {}
+        Err(err) => return err.into_response(),
+    };
+
+    let pool = db::get_db();
+    let result = sqlx::query("DELETE FROM announcements WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    match result {
+        Ok(res) if res.rows_affected() > 0 => {
+            ok_response(json!({ "id": id, "deleted": true })).into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not_found", "message": "Announcement not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "delete_failed", "message": format!("{}", e) })),
+        )
+            .into_response(),
+    }
+}
+
 pub fn router(_state: AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/health", get(api_health))
@@ -2974,4 +3182,13 @@ pub fn router(_state: AppState) -> Router<AppState> {
         .route("/v1/machines/:id/port-forwards", get(api_machine_port_forwards_list))
         .route("/v1/machines/:id/port-forwards", post(api_machine_port_forward_add))
         .route("/v1/machines/:id/port-forwards/:host_port", delete(api_machine_port_forward_delete))
+        // Agent download routes
+        .route("/v1/agent/install", get(api_agent_install))
+        .route("/v1/agent/script", get(api_agent_script))
+        // Announcements routes
+        .route("/v1/announcements", get(api_announcements_list))
+        .route("/v1/admin/announcements", get(api_admin_announcements_list))
+        .route("/v1/admin/announcements", post(api_admin_announcements_create))
+        .route("/v1/admin/announcements/:id", put(api_admin_announcements_update))
+        .route("/v1/admin/announcements/:id", delete(api_admin_announcements_delete))
 }

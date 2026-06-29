@@ -442,3 +442,15 @@ pub struct OpenGFWRuleRequest {
     pub action: String,
     pub is_active: bool,
 }
+
+// Table: announcements
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Announcement {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub is_active: bool,
+    pub is_pinned: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
