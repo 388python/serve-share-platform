@@ -2379,21 +2379,24 @@ pub async fn admin_config_page(
     let mut ctx = Context::new();
     build_base_context(&cookies, &mut ctx);
 
-    // 收集所有站点配置
-    for key in [
-        "site_name", "checkin_enabled", "free_plan_enabled", "registration_enabled",
-        "require_invite", "checkin_reward", "payment_mode", "ldc_client_id", "ldc_client_secret",
-        "admin_api_key", "traffic_monitor_enabled", "traffic_bandwidth_threshold_mbps",
-        "premium_enabled", "premium_ldc_cost",
-    ] {
-        let value: Option<String> = sqlx::query_scalar::<_, String>(
-            "SELECT value FROM site_config WHERE key = ?",
-        )
-        .bind(key)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-        ctx.insert(key, &value.unwrap_or_default());
+    // 查询所有站点配置
+    let configs: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
+        "SELECT key, value FROM site_config ORDER BY key",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    // 转换为 JSON 数组供模板使用（带 key 和 value 属性）
+    let configs_json: Vec<serde_json::Value> = configs
+        .iter()
+        .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+        .collect();
+    ctx.insert("configs", &configs_json);
+
+    // 同时设置常用配置为单独变量，兼容旧模板
+    for (key, value) in &configs {
+        ctx.insert(key.as_str(), value);
     }
 
     let rendered = state
