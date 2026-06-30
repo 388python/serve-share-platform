@@ -1,5 +1,6 @@
 use axum::{
-    extract::State,
+    extract::{Form, Path, Query, State},
+    http::{header::HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect},
     routing::{get, post},
     Router,
@@ -440,6 +441,18 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api", handlers::api::router(app_state.clone()))
         // Static files
         .nest_service("/static", ServeDir::new("static"))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
         .layer(CookieManagerLayer::new())
         .with_state(app_state);
 

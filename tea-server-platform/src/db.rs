@@ -4,9 +4,14 @@ use std::sync::OnceLock;
 static DB_POOL: OnceLock<SqlitePool> = OnceLock::new();
 
 pub async fn init_db(database_url: &str) -> anyhow::Result<()> {
+    let db_url = if database_url.contains('?') {
+        format!("{}&_journal_mode=WAL&_busy_timeout=5000", database_url)
+    } else {
+        format!("{}?_journal_mode=WAL&_busy_timeout=5000", database_url)
+    };
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(database_url)
+        .connect(&db_url)
         .await?;
 
     run_migrations(&pool).await?;
@@ -803,6 +808,22 @@ async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+
+    // Create indexes for commonly queried columns
+    let indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_machines_user_id ON machines(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_machines_status ON machines(status)",
+        "CREATE INDEX IF NOT EXISTS idx_machines_server_id ON machines(server_id)",
+        "CREATE INDEX IF NOT EXISTS idx_servers_is_active ON servers(is_active)",
+        "CREATE INDEX IF NOT EXISTS idx_servers_owner_id ON servers(owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_out_trade_no ON orders(out_trade_no)",
+        "CREATE INDEX IF NOT EXISTS idx_checkins_user_created ON checkins(user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_redeem_codes_code ON redeem_codes(code)",
+    ];
+    for idx in &indexes {
+        let _ = sqlx::query(idx).execute(pool).await;
+    }
 
     Ok(())
 }
