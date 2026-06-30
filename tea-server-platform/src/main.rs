@@ -25,7 +25,22 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     use std::io::Write;
     let mut stdout = std::io::stdout();
+
+    // Set panic hook to ensure panics are visible in Docker logs
+    std::panic::set_hook(Box::new(|info| {
+        let mut stderr = std::io::stderr();
+        let _ = writeln!(stderr, "[PANIC] {}", info);
+        let _ = stderr.flush();
+        eprintln!("[PANIC] {}", info);
+    }));
+
     let _ = writeln!(stdout, "[tea-server-platform] starting...");
+    let _ = stdout.flush();
+
+    // Print environment info for debugging
+    let _ = writeln!(stdout, "[DEBUG] Current directory: {:?}", std::env::current_dir());
+    let _ = writeln!(stdout, "[DEBUG] templates dir exists: {}", std::path::Path::new("templates").exists());
+    let _ = writeln!(stdout, "[DEBUG] static dir exists: {}", std::path::Path::new("static").exists());
     let _ = stdout.flush();
 
     // 初始化 tracing（带 ansicolor 关闭，避免 Docker 日志乱码）
@@ -447,10 +462,14 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
     tracing::info!("Server listening on {}", cfg.bind_addr);
     println!("[DEBUG] Server started, listening on {}", cfg.bind_addr);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
     axum::serve(listener, app).await?;
 
     tracing::info!("Server shut down normally");
     println!("[DEBUG] Server shut down normally");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
     Ok(())
 }
 
