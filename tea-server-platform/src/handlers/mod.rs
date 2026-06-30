@@ -1488,6 +1488,26 @@ pub async fn checkin(
     let pool = db::get_db();
     let reward = 10.0;
 
+    // Check if user already checked in today
+    let today_start = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Utc)
+        .unwrap();
+    let already_checked: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM checkins WHERE user_id = ? AND created_at >= ?",
+    )
+    .bind(user_id)
+    .bind(today_start)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    if already_checked.is_some() {
+        return Redirect::to("/dashboard?error=already_checked_in").into_response();
+    }
+
     let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
         .bind(reward)
         .bind(user_id)
