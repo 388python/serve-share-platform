@@ -28,6 +28,7 @@ pub struct Server {
     pub name: String,
     pub ip: String,
     pub ssh_port: i32,
+    #[serde(skip_serializing)]
     pub ssh_key: String,
     pub cpu_cores: i32,
     pub memory_gb: f64,
@@ -43,6 +44,7 @@ pub struct Server {
     pub is_active: bool,
     pub proxy_port: Option<i32>,
     pub agent_installed: bool,
+    #[serde(skip_serializing)]
     pub agent_key: String,
     pub created_at: DateTime<Utc>,
     pub expose_ip: bool,
