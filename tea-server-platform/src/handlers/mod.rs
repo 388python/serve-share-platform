@@ -1463,7 +1463,7 @@ pub async fn free_plan(
     .unwrap_or(None);
 
     if existing_checkin.is_none() {
-        let _ = sqlx::query("UPDATE users SET core_hours = core_hours + 10 WHERE id = ?")
+        let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + 10 WHERE id = ?")
             .bind(user_id)
             .execute(pool)
             .await;
@@ -1488,7 +1488,7 @@ pub async fn checkin(
     let pool = db::get_db();
     let reward = 10.0;
 
-    let _ = sqlx::query("UPDATE users SET core_hours = core_hours + ? WHERE id = ?")
+    let _ = sqlx::query("UPDATE users SET bonus_core_hours = bonus_core_hours + ? WHERE id = ?")
         .bind(reward)
         .bind(user_id)
         .execute(pool)
