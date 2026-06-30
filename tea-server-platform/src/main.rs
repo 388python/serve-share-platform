@@ -48,7 +48,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let cfg = config::AppConfig::get();
-    tracing::info!("database_url: {}", cfg.database_url);
     tracing::info!("bind_addr: {}", cfg.bind_addr);
 
     // Record startup time for health endpoint
@@ -134,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
                     let client = reqwest::Client::new();
                     let _ = client
                         .post(&format!("{}/stop/{}", agent_url, machine_name))
-                        .header("X-API-Key", "tea-platform-agent-key")
+                        .header("X-API-Key", services::session::agent_api_key())
                         .timeout(std::time::Duration::from_secs(15))
                         .send()
                         .await;

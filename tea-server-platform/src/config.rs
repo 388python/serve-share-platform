@@ -103,6 +103,20 @@ impl AppConfig {
                 .unwrap_or(100),
         };
 
+        // Security: reject default credentials in production
+        if cfg.admin_username == "admin" && cfg.admin_password == "admin" {
+            anyhow::bail!(
+                "FATAL: Default admin credentials detected (admin/admin). \
+                 Please set ADMIN_USERNAME and ADMIN_PASSWORD environment variables."
+            );
+        }
+        if cfg.session_secret == "change-me-in-production-super-secret-key" {
+            anyhow::bail!(
+                "FATAL: Default session secret detected. \
+                 Please set SESSION_SECRET environment variable to a random string."
+            );
+        }
+
         CONFIG
             .set(cfg)
             .map_err(|_| anyhow::anyhow!("CONFIG already initialized"))?;
