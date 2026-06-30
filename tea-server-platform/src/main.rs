@@ -19,6 +19,8 @@ mod services;
 #[derive(Clone)]
 pub struct AppState {
     pub templates: Arc<Tera>,
+    pub checkin_limiter: Arc<services::rate_limiter::RateLimiter>,
+    pub api_limiter: Arc<services::rate_limiter::RateLimiter>,
 }
 
 #[tokio::main]
@@ -78,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
     tera.autoescape_on(vec!["html", ".tera"]);
     let app_state = AppState {
         templates: Arc::new(tera),
+        checkin_limiter: Arc::new(services::rate_limiter::RateLimiter::new(1, 3600)), // 1 checkin per hour
+        api_limiter: Arc::new(services::rate_limiter::RateLimiter::new(30, 60)),     // 30 API calls per minute
     };
     tracing::info!("templates initialized");
 

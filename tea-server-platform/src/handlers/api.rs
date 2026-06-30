@@ -715,6 +715,7 @@ async fn api_machines_create(
     let image = form.image.clone().unwrap_or_else(|| "ubuntu:22.04".to_string());
     let app_image = form.app_image.clone().unwrap_or_default();
     let root_password = form.root_password.clone().unwrap_or_default();
+    let encrypted_root_password = crate::services::crypto::Crypto::encrypt(&root_password);
     let app_secrets = form.app_secrets.clone().unwrap_or_else(|| "{}".to_string());
 
     let result = sqlx::query(
@@ -730,7 +731,7 @@ async fn api_machines_create(
     .bind(expires_at)
     .bind(proxy_port)
     .bind(used_hours)
-    .bind(&root_password)
+    .bind(&encrypted_root_password)
     .bind(&image)
     .bind(&app_image)
     .bind(&app_secrets)
@@ -840,6 +841,7 @@ pub struct RedeemRequest {
 
 // POST /api/v1/redeem
 async fn api_redeem(
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(form): Json<RedeemRequest>,
 ) -> impl IntoResponse {
@@ -847,6 +849,16 @@ async fn api_redeem(
         Ok(id) => id,
         Err(err) => return err.into_response(),
     };
+
+    // Rate limit: 10 redeem attempts per hour per user
+    let limiter_key = format!("redeem:{}", user_id);
+    if !state.api_limiter.check(&limiter_key).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": "rate_limited", "message": "兑换请求过于频繁，请稍后再试"})),
+        )
+            .into_response();
+    }
 
     let pool = db::get_db();
     let code: Option<RedeemCode> = sqlx::query_as(

@@ -226,10 +226,20 @@ pub struct AdminLoginForm {
 }
 
 pub async fn admin_login(
+    State(state): State<AppState>,
     cookies: Cookies,
     Form(params): Form<AdminLoginForm>,
 ) -> impl IntoResponse {
     let cfg = AppConfig::get();
+
+    // Rate limit: 5 admin login attempts per 15 minutes per session
+    let limiter_key = format!("admin_login:{}", cookies.get("session").map(|c| c.value().to_string()).unwrap_or_default());
+    if !state.api_limiter.check(&limiter_key).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Html(r#"<p>登录尝试过于频繁，请15分钟后再试。</p><a href="/admin-login/ui">返回</a>"#),
+        ).into_response();
+    }
 
     // Constant-time 用户名与密码比较，抗时序攻击
     let username_ok = ct_eq(&params.username, &cfg.admin_username);
@@ -1123,7 +1133,7 @@ pub async fn create_machine(
     let image = form.image.unwrap_or_else(|| "ubuntu:22.04".to_string());
     let app_image = form.app_image.unwrap_or_default();
     let root_password_val = form.root_password.as_deref().unwrap_or("");
-
+    let encrypted_root_password = crate::services::crypto::Crypto::encrypt(root_password_val);
     let insert = sqlx::query(
         "INSERT INTO machines (user_id, server_id, cpu_cores, memory_gb, disk_gb, virt_type, status, core_hours_per_hour, expires_at, used_hours, root_password, image, app_image, free_nat_hours, regular_core_hours_used, bonus_core_hours_used, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, DATETIME('now', format('+{} days', ?)), ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
     )
@@ -1136,7 +1146,7 @@ pub async fn create_machine(
     .bind(ch_per_hour)
     .bind(duration_days)
     .bind(hours)
-    .bind(root_password_val)
+    .bind(&encrypted_root_password)
     .bind(&image)
     .bind(&app_image)
     .bind(free_nat_hours_server)
@@ -1179,7 +1189,7 @@ pub async fn create_machine(
 
     // 调用 Agent 创建 VM（使用 machine_lifecycle 服务，含重试和退款）
     let machine_name = format!("machine-{}", machine_id);
-    let root_password = form.root_password.unwrap_or_default();
+    let root_password = crate::services::crypto::Crypto::encrypt(&form.root_password.unwrap_or_default());
     let app_secrets = form.app_secrets.unwrap_or_else(|| "{}".to_string());
     
     services::machine_lifecycle::spawn_agent_create_job(
@@ -1382,6 +1392,9 @@ pub async fn machine_detail(
 
     let m = machine.unwrap();
     
+    // Decrypt root_password for display
+    let mut m = m;
+    m.root_password = m.root_password.and_then(|rp| crate::services::crypto::Crypto::decrypt(&rp));
     // Get server info
     let server: Option<Server> = sqlx::query_as(
         "SELECT * FROM servers WHERE id = ?"
@@ -1477,6 +1490,7 @@ pub async fn free_plan(
 }
 
 pub async fn checkin(
+    State(state): State<AppState>,
     cookies: Cookies,
     Form(_form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
@@ -1484,6 +1498,12 @@ pub async fn checkin(
         Ok(v) => v,
         Err(redirect) => return redirect.into_response(),
     };
+
+    // Rate limit: 1 checkin per hour per user_id
+    let limiter_key = format!("checkin:{}", user_id);
+    if !state.checkin_limiter.check(&limiter_key).await {
+        return Redirect::to("/dashboard?error=rate_limited").into_response();
+    }
 
     let pool = db::get_db();
     let reward = 10.0;

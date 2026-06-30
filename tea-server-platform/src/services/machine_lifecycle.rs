@@ -174,6 +174,8 @@ async fn mark_machine_running(
         .get("root_password")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // Encrypt root_password before storing
+    let encrypted_root_password = crate::services::crypto::Crypto::encrypt(root_password);
     let ip = create_data.get("ip").and_then(Value::as_str).unwrap_or_default();
     let app_secrets = create_data
         .get("app_secrets")
@@ -188,7 +190,7 @@ async fn mark_machine_running(
     let updated = sqlx::query(
         "UPDATE machines SET status = 'running', root_password = ?, ip_address = ?, app_secrets = ?, ssh_port = ?, vnc_port = ?, web_port = ? WHERE id = ? AND status = 'pending'",
     )
-    .bind(root_password)
+    .bind(&encrypted_root_password)
     .bind(ip)
     .bind(app_secrets)
     .bind(ssh_port)
