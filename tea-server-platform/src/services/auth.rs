@@ -266,10 +266,24 @@ pub struct OAuthAuthorizeQuery {
     pub response_type: Option<String>,
 }
 
-/// 平台作为 OAuth 提供商的静默授权端点
+/// 平台作为 OAuth 提供商的授权端点（需用户登录确认）
 pub async fn oauth_authorize(
+    cookies: tower_cookies::Cookies,
     Query(q): Query<OAuthAuthorizeQuery>,
 ) -> impl IntoResponse {
+    // Verify user is logged in before issuing authorization code
+    let (_, username, _) = match crate::handlers::require_auth(&cookies) {
+        Ok(v) => v,
+        Err(_) => {
+            // User not logged in, redirect with error
+            let encoded = q.state.as_deref().unwrap_or("");
+            return Redirect::to(&format!(
+                "{}?error=unauthorized&state={}",
+                q.redirect_uri, encoded
+            )).into_response();
+        }
+    };
+
     let pool = crate::db::get_db();
 
     let app: Option<(String, String)> = sqlx::query_as(
@@ -285,11 +299,16 @@ pub async fn oauth_authorize(
         return Redirect::to(&format!(
             "{}?error=invalid_client&state={}",
             q.redirect_uri, encoded
-        ));
+        )).into_response();
     }
+
+    tracing::info!(
+        "OAuth authorization granted by user '{}' to client '{}'",
+        username, q.client_id
+    );
 
     let code = format!("auth_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
     let encoded_state = q.state.as_deref().unwrap_or("");
     let redirect_url = format!("{}?code={}&state={}", q.redirect_uri, code, encoded_state);
-    Redirect::to(&redirect_url)
+    Redirect::to(&redirect_url).into_response()
 }
