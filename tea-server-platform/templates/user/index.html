@@ -64,7 +64,7 @@
     </div>
 </div>
 
-{% if unread_warnings | default(value=0) > 0 %}
+{% if unread_warnings > 0 %}
 <div class="row mb-4 animate-fade-in-up">
     <div class="col-12">
         <div class="alert alert-danger d-flex align-items-center" role="alert">
@@ -178,13 +178,13 @@
     </div>
     <div class="col-md-3 mb-3">
         <a href="/warnings" class="quick-card">
-            <div class="card h-100 {% if unread_warnings | default(value=0) > 0 %}border-danger{% endif %}">
+            <div class="card h-100 {% if unread_warnings > 0 %}border-danger{% endif %}">
                 <div class="card-body text-center">
-                    <div class="quick-card-icon {% if unread_warnings | default(value=0) > 0 %}danger{% else %}warning{% endif %}">
+                    <div class="quick-card-icon {% if unread_warnings > 0 %}danger{% else %}warning{% endif %}">
                         <i class="bi bi-envelope-exclamation-fill"></i>
                     </div>
                     <h6 class="fw-bold mb-1">警告信</h6>
-                    <small class="text-muted">{% if unread_warnings | default(value=0) > 0 %}{{ unread_warnings }} 封未读{% else %}{{ total_warnings | default(value="0") }} 封记录{% endif %}</small>
+                    <small class="text-muted">{% if unread_warnings > 0 %}{{ unread_warnings }} 封未读{% else %}{{ total_warnings }} 封记录{% endif %}</small>
                 </div>
             </div>
         </a>
