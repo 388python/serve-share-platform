@@ -3225,23 +3225,23 @@ pub async fn balance_to_code(
     let fee = amount * fee_rate;
     let total_deduct = amount + fee;
 
-    // 4. 检查每日限额
-    let daily_limit: f64 = db::get_config("balance_to_code_daily_limit")
+    // 4. 检查每日限额（按次数统计，与页面显示一致）
+    let daily_limit: i64 = db::get_config("balance_to_code_daily_limit")
         .await
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5.0);
+        .unwrap_or_else(|| "5".to_string())
+        .parse()
+        .unwrap_or(5);
 
-    let used_today: Option<f64> = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM balance_to_code_logs WHERE user_id = ? AND DATE(created_at) = DATE('now')",
+    let used_today: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM balance_to_code_logs WHERE user_id = ? AND DATE(created_at) = DATE('now')",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await
-    .unwrap_or(None);
-    let used_today = used_today.unwrap_or(0.0);
+    .unwrap_or(0);
 
-    if used_today + amount > daily_limit {
-        return Redirect::to("/dashboard?error=daily_limit").into_response();
+    if used_today >= daily_limit {
+        return Redirect::to("/balance-to-code?error=daily_limit").into_response();
     }
 
     // 5. 检查14天冻结期（机主收入到账后14天才能提现）
